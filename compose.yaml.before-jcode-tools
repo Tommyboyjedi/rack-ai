@@ -1,0 +1,90 @@
+services:
+
+  vllm-primary:
+    image: vllm/vllm-openai@sha256:8bd082c274fae025b7079498fe1da65182ba1d4c2188c0f5a68c1042c38c3695
+    container_name: vllm-primary
+    restart: unless-stopped
+    ipc: host
+
+    ports:
+      - "8017:8017"
+
+    volumes:
+      - /srv/fast/huggingface:/root/.cache/huggingface
+
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - "GPU-042e18f2-bf9f-c8f6-6975-6f25b15ac71c"
+              capabilities:
+                - gpu
+
+    command:
+      - cyankiwi/gemma-4-12B-it-AWQ-INT4
+      - --served-model-name
+      - local-primary
+      - --port
+      - "8017"
+      - --max-model-len
+      - "131072"
+      - --kv-cache-dtype
+      - fp8_e4m3
+      - --kv-cache-memory-bytes
+      - "3221225472"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8017/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 240s
+
+
+  vllm-coder:
+    image: vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967
+    container_name: vllm-coder
+    restart: unless-stopped
+    ipc: host
+
+    ports:
+      - "8018:8018"
+
+    volumes:
+      - /srv/fast/huggingface:/root/.cache/huggingface
+
+    environment:
+      HF_TOKEN: ${HF_TOKEN}
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids:
+                - "GPU-357ef569-8fac-7c7d-ee1c-51677efb174f"
+              capabilities:
+                - gpu
+
+    command:
+      - Qwen/Qwen2.5-Coder-3B-Instruct-AWQ
+      - --served-model-name
+      - local-coder
+      - --port
+      - "8018"
+      - --gpu-memory-utilization
+      - "0.82"
+      - --max-model-len
+      - "8192"
+
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8018/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 180s
