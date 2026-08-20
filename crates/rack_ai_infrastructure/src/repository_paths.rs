@@ -21,6 +21,10 @@ impl RepositoryPaths {
     pub fn runs_dir(&self) -> PathBuf {
         self.root.join("state/runs")
     }
+
+    pub fn history_dir(&self) -> PathBuf {
+        self.root.join("state/queue/history")
+    }
 }
 
 #[cfg(test)]
@@ -35,5 +39,6 @@ mod tests {
         assert!(paths.queued_dir().ends_with("state/queue/queued"));
         assert!(paths.running_dir().ends_with("state/queue/running"));
         assert!(paths.runs_dir().ends_with("state/runs"));
+        assert!(paths.history_dir().ends_with("state/queue/history"));
     }
 }

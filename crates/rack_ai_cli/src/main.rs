@@ -4,6 +4,9 @@ use std::path::PathBuf;
 
 use rack_ai_application::InspectStatus;
 use rack_ai_application::InspectStatusDependencies;
+use rack_ai_application::RunNextOutcome;
+use rack_ai_application::RunNextTask;
+use rack_ai_application::RunNextTaskDependencies;
 use rack_ai_application::SubmitTask;
 use rack_ai_application::SubmitTaskDependencies;
 use rack_ai_application::SubmitTaskRequest;
@@ -12,9 +15,11 @@ use rack_ai_domain::Placement;
 use rack_ai_domain::RunStateDraft;
 use rack_ai_domain::TaskId;
 use rack_ai_domain::TimeoutSeconds;
+use rack_ai_infrastructure::FileSystemExecutionQueueRepository;
 use rack_ai_infrastructure::FileSystemQueueStateRepository;
 use rack_ai_infrastructure::FileSystemRunStateRepository;
 use rack_ai_infrastructure::FileSystemTaskSpecRepository;
+use rack_ai_infrastructure::PythonRackTaskExecutor;
 use rack_ai_infrastructure::RepositoryPaths;
 use serde::Deserialize;
 
@@ -29,12 +34,14 @@ fn execute() -> Result<(), String> {
     let arguments = env::args().collect::<Vec<_>>();
     let command = arguments.get(1).ok_or("expected command")?;
     let root = current_root(&arguments)?;
-    let paths = RepositoryPaths::new(root);
+    let paths = RepositoryPaths::new(root.clone());
     if command == "submit" {
         let spec_path = arguments.get(2).ok_or("expected spec path")?;
         submit(paths, PathBuf::from(spec_path))
     } else if command == "status" {
         status(paths)
+    } else if command == "run-next" {
+        run_next(paths, root)
     } else {
         Err("unsupported command".to_string())
     }
@@ -81,6 +88,24 @@ fn status(paths: RepositoryPaths) -> Result<(), String> {
     let snapshot = service.execute()?;
     let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
     println!("{json}");
+    Ok(())
+}
+
+fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
+    let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
+    let run_state_repository = FileSystemRunStateRepository::new(paths);
+    let task_executor = PythonRackTaskExecutor::new(root);
+    let service = RunNextTask::new(RunNextTaskDependencies {
+        execution_queue_repository: &execution_queue_repository,
+        run_state_repository: &run_state_repository,
+        task_executor: &task_executor,
+    });
+    match service.execute()? {
+        RunNextOutcome::NoQueuedTasks => println!("No queued tasks."),
+        RunNextOutcome::Succeeded(task_id) => println!("{task_id}"),
+        RunNextOutcome::Requeued(task_id) => println!("Requeued {task_id}"),
+        RunNextOutcome::Failed(task_id) => println!("Failed {task_id}"),
+    }
     Ok(())
 }
 

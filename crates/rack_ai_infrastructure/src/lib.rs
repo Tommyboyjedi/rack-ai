@@ -1,9 +1,13 @@
+pub mod file_system_execution_queue_repository;
 pub mod file_system_queue_state_repository;
 pub mod file_system_run_state_repository;
 pub mod file_system_task_spec_repository;
+pub mod python_rack_task_executor;
 pub mod repository_paths;
 
+pub use file_system_execution_queue_repository::FileSystemExecutionQueueRepository;
 pub use file_system_queue_state_repository::FileSystemQueueStateRepository;
 pub use file_system_run_state_repository::FileSystemRunStateRepository;
 pub use file_system_task_spec_repository::FileSystemTaskSpecRepository;
+pub use python_rack_task_executor::PythonRackTaskExecutor;
 pub use repository_paths::RepositoryPaths;

@@ -346,3 +346,31 @@ What remains for the next Rust slice:
 - port worker/resource/model registry loading into typed Rust adapters
 - expand the Rust CLI beyond submit/status into runner and healthcheck commands
 - begin retiring equivalent Python entrypoints only after behavior parity is proven
+
+### 2026-08-20: Rust linear runner slice
+
+Completed in this slice:
+- added a Rust application service for `run-next` with tested outcomes for empty queue, success, and retry
+- added a filesystem execution-queue adapter that moves queued specs through running and history directories
+- added a Python-backed Rust task executor that delegates execution to the existing `bin/rack-task` command
+- extended the Rust CLI with a working `run-next` command
+- proved the Rust runner path end to end against an isolated temporary root with a fake `bin/rack-task`
+
+What is now true:
+- Rust can now own the first durable execution transition from queued task to terminal run state for simple linear jobs
+- queue movement and run-state transitions are no longer limited to Rust submit/status only
+- the live Python executor still performs the task body, but Rust now controls the orchestration edge around it
+- this is the first real step toward replacing the Python runner rather than only persisting Python-compatible files
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+- `cargo run -p rack_ai_cli -- submit ... --root <tempdir>`
+- `cargo run -p rack_ai_cli -- run-next --root <tempdir>`
+- `cargo run -p rack_ai_cli -- status --root <tempdir>`
+
+What remains for the next Rust slice:
+- port worker, resource, and model registry loading into typed Rust adapters
+- port healthcheck behavior into Rust
+- extend the Rust runner from linear jobs to DAG-aware node progression
+- add lease-aware admission control to the Rust runner before retiring the Python queue runner
