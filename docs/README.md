@@ -10,3 +10,6 @@ The first non-swarm orchestration path is the JSON task contract executed by `bi
 
 `bin/rack-coordinator` builds those specs from named templates in `config/task_templates.json`.
 It can also auto-select a template from the request text and preview the generated spec without running it.
+
+External-repository work is specified by `docs/external-repository-change-workflow.md` and executed by `bin/rack-change`.
+The target repository is the workload; Rack AI remains the control plane and does not self-modify as part of a normal change job.

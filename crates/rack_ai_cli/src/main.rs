@@ -38,6 +38,8 @@ use rack_ai_infrastructure::HealthcheckServiceDependencies;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
+
+mod change_command;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -171,9 +173,11 @@ fn execute() -> Result<i32, String> {
     } else if command == "coordinator" {
         run_coordinator_command(roots.repo_root, &arguments[2..])
     } else if command == "coder-worker" {
-        run_coder_worker(&arguments[2..])
+        run_coder_worker(roots.repo_root, &arguments[2..])
     } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
+    } else if command == "change" {
+        change_command::run(roots.repo_root, roots.state_root, &arguments[2..])
     } else {
         Err("unsupported command".to_string())
     }
@@ -400,16 +404,36 @@ fn run_task_from_arguments(repo_root: PathBuf, arguments: &[String]) -> Result<i
     run_task_command(repo_root, spec_path, emit_json)
 }
 
-fn run_coder_worker(arguments: &[String]) -> Result<i32, String> {
+fn run_coder_worker(repo_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
     let mut cwd = ".".to_string();
     let mut prompt_file: Option<String> = None;
     let mut max_turns = 6_usize;
     let mut prompt: Option<String> = None;
+    let mut executor_name: Option<String> = None;
+    let mut allowed_paths = Vec::new();
     let mut index = 0;
     while index < arguments.len() {
         match arguments[index].as_str() {
             "--cwd" => {
                 cwd = arguments.get(index + 1).ok_or("missing cwd value")?.clone();
+                index += 2;
+            }
+            "--executor" => {
+                executor_name = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing executor value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--allowed-path" => {
+                allowed_paths.push(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing allowed-path value")?
+                        .clone(),
+                );
                 index += 2;
             }
             "--prompt-file" => {
@@ -458,7 +482,23 @@ fn run_coder_worker(arguments: &[String]) -> Result<i32, String> {
     let workdir = PathBuf::from(cwd);
     fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
     let worker = DirectCoderWorker::local_default();
-    let final_text = worker.execute(&prompt_text, &workdir, max_turns)?;
+    let final_text = if let Some(name) = executor_name {
+        if name != "podman" {
+            return Err(format!("unsupported executor: {name}"));
+        }
+        if allowed_paths.is_empty() {
+            return Err("podman executor requires --allowed-path".to_string());
+        }
+        change_command::run_coder_in_podman(
+            repo_root,
+            workdir,
+            &prompt_text,
+            max_turns,
+            allowed_paths,
+        )?
+    } else {
+        worker.execute(&prompt_text, &workdir, max_turns)?
+    };
     println!("{final_text}");
     Ok(if final_text.trim() == "COMPLETE" {
         0

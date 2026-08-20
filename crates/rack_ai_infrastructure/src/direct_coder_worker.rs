@@ -1,9 +1,11 @@
-use std::fs;
-use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::path::Path;
 
+use rack_ai_application::CoderRunRequest;
+use rack_ai_application::CoderToolRunner;
 use serde_json::Value;
 use serde_json::json;
+
+use crate::HostCoderToolRunner;
 
 pub struct DirectCoderWorker {
     endpoint: String,
@@ -20,11 +22,20 @@ impl DirectCoderWorker {
     }
 
     pub fn execute(&self, task: &str, cwd: &Path, max_turns: usize) -> Result<String, String> {
+        let runner = HostCoderToolRunner::new(cwd.to_path_buf());
+        self.execute_with_runner(&CoderRunRequest::new(task.to_string(), max_turns)?, &runner)
+    }
+
+    pub fn execute_with_runner(
+        &self,
+        request: &CoderRunRequest,
+        runner: &dyn CoderToolRunner,
+    ) -> Result<String, String> {
         let mut messages = vec![
             json!({"role": "system", "content": self.system_prompt}),
-            json!({"role": "user", "content": self.build_prompt(task)}),
+            json!({"role": "user", "content": self.build_prompt(request.task())}),
         ];
-        for _ in 0..max_turns {
+        for _ in 0..request.max_turns() {
             let response = self.call_api(&messages)?;
             let choice = response
                 .get("choices")
@@ -74,7 +85,7 @@ impl DirectCoderWorker {
                     .ok_or("tool call function missing arguments".to_string())?;
                 let parsed_arguments =
                     serde_json::from_str::<Value>(arguments).map_err(|error| error.to_string())?;
-                let result = self.run_tool(name, &parsed_arguments, cwd)?;
+                let result = runner.run(name, &parsed_arguments)?;
                 messages.push(json!({
                     "role": "tool",
                     "tool_call_id": tool_call_id,
@@ -162,79 +173,10 @@ impl DirectCoderWorker {
         ])
     }
 
+    #[cfg(test)]
     fn run_tool(&self, name: &str, arguments: &Value, cwd: &Path) -> Result<String, String> {
-        if name == "write" {
-            return self.run_write(arguments, cwd);
-        }
-        if name == "read" {
-            return self.run_read(arguments, cwd);
-        }
-        if name == "bash" {
-            return self.run_bash(arguments, cwd);
-        }
-        Err(format!("Unsupported tool {name}"))
+        HostCoderToolRunner::new(cwd.to_path_buf()).run(name, arguments)
     }
-
-    fn run_write(&self, arguments: &Value, cwd: &Path) -> Result<String, String> {
-        let path = self.resolve_path(read_required_string(arguments, "file_path")?, cwd);
-        let content = read_required_string(arguments, "content")?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        fs::write(&path, content).map_err(|error| error.to_string())?;
-        Ok(format!("Created {}", path.display()))
-    }
-
-    fn run_read(&self, arguments: &Value, cwd: &Path) -> Result<String, String> {
-        let path = self.resolve_path(read_required_string(arguments, "file_path")?, cwd);
-        let text = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        let start_line = read_optional_u64(arguments, "start_line")
-            .unwrap_or(1)
-            .max(1) as usize;
-        let limit = read_optional_u64(arguments, "limit").unwrap_or(400).max(1) as usize;
-        let lines = text.lines().collect::<Vec<_>>();
-        let selected = lines
-            .iter()
-            .enumerate()
-            .skip(start_line.saturating_sub(1))
-            .take(limit)
-            .map(|(index, line)| format!("{}\t{}", index + 1, line))
-            .collect::<Vec<_>>();
-        Ok(selected.join("\n"))
-    }
-
-    fn run_bash(&self, arguments: &Value, cwd: &Path) -> Result<String, String> {
-        let command = read_required_string(arguments, "command")?;
-        let output = Command::new("sh")
-            .arg("-lc")
-            .arg(command)
-            .current_dir(cwd)
-            .output()
-            .map_err(|error| error.to_string())?;
-        let mut text = String::from_utf8_lossy(&output.stdout).to_string();
-        text.push_str(String::from_utf8_lossy(&output.stderr).as_ref());
-        Ok(text.trim().to_string())
-    }
-
-    fn resolve_path(&self, raw_path: &str, cwd: &Path) -> PathBuf {
-        let path = PathBuf::from(raw_path);
-        if path.is_absolute() {
-            path
-        } else {
-            cwd.join(path)
-        }
-    }
-}
-
-fn read_required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .ok_or(format!("missing string field: {key}"))
-}
-
-fn read_optional_u64(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(Value::as_u64)
 }
 
 #[cfg(test)]

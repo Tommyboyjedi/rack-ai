@@ -21,6 +21,10 @@ impl RegistryPaths {
     pub fn models_path(&self) -> PathBuf {
         self.root.join("config/models.json")
     }
+
+    pub fn repositories_path(&self) -> PathBuf {
+        self.root.join("config/repositories.json")
+    }
 }
 
 #[cfg(test)]
@@ -35,5 +39,10 @@ mod tests {
         assert!(paths.workers_path().ends_with("config/workers.json"));
         assert!(paths.resources_path().ends_with("config/resources.json"));
         assert!(paths.models_path().ends_with("config/models.json"));
+        assert!(
+            paths
+                .repositories_path()
+                .ends_with("config/repositories.json")
+        );
     }
 }

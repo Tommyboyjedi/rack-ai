@@ -11,5 +11,7 @@ End-to-end and boundary tests for the rack integration live here.
 - `rack_dag_smoke.sh`: durable DAG submission and multi-invocation runner test
 - `rack_resource_admission_smoke.sh`: lease-based resource admission behavior test
 - `rack_healthcheck_smoke.sh`: registry-backed endpoint health test
+- `rack_change_smoke.sh`: external-repository change prepare/evidence test against a disposable Git fixture
+- `rack_change_executor_smoke.sh`: live Podman isolation check; exits 2 when rootless Podman is not installed
 
 Python-only ad hoc harnesses were removed once the Rust-owned live path became the authoritative verification surface.

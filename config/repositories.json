@@ -1,0 +1,22 @@
+{
+  "workspace_root": "/srv/rack-workspaces",
+  "approved_programs": [
+    "cargo",
+    "rustc",
+    "rustfmt",
+    "python3",
+    "pytest",
+    "npm",
+    "node",
+    "go",
+    "make"
+  ],
+  "executor": {
+    "backend": "podman",
+    "image": "docker.io/library/rust:bookworm",
+    "workspace_path": "/workspace",
+    "memory": "2g",
+    "pids_limit": 256
+  },
+  "repositories": []
+}

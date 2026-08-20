@@ -33,6 +33,10 @@ impl RepositoryPaths {
     pub fn leases_dir(&self) -> PathBuf {
         self.root.join("state/resources/leases")
     }
+
+    pub fn changes_dir(&self) -> PathBuf {
+        self.root.join("state/changes")
+    }
 }
 
 #[cfg(test)]
@@ -49,5 +53,6 @@ mod tests {
         assert!(paths.runs_dir().ends_with("state/runs"));
         assert!(paths.history_dir().ends_with("state/queue/history"));
         assert!(paths.leases_dir().ends_with("state/resources/leases"));
+        assert!(paths.changes_dir().ends_with("state/changes"));
     }
 }
