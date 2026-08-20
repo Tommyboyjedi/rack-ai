@@ -21,11 +21,19 @@ from vllm.tool_parsers.hermes_tool_parser import Hermes2ProToolParser
 _FENCED_JSON_RE = re.compile(
     r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE
 )
+_FUNCTION_BLOCK_RE = re.compile(
+    r"<tool_call>\s*<function=([^>]+)>\s*(.*?)\s*</function>\s*</tool_call>",
+    re.DOTALL | re.IGNORECASE,
+)
+_PARAMETER_RE = re.compile(
+    r"<parameter=([^>]+)>\s*(.*?)\s*</parameter>",
+    re.DOTALL | re.IGNORECASE,
+)
 
 
 @ToolParserManager.register_module(["qwen25_coder_temp", "qwen25_coder_json_temp"])
 class Qwen25CoderTempToolParser(Hermes2ProToolParser):
-    """Temporary fallback parser for fenced JSON tool calls."""
+    """Temporary fallback parser for multiple Qwen-style tool-call formats."""
 
     @staticmethod
     def _is_tool_call_payload(payload: object) -> bool:
@@ -100,9 +108,83 @@ class Qwen25CoderTempToolParser(Hermes2ProToolParser):
         )
 
     @classmethod
+    def _normalize_function_blocks(cls, text: str) -> str | None:
+        parts: list[str] = []
+        found = False
+        last_end = 0
+
+        for match in _FUNCTION_BLOCK_RE.finditer(text):
+            prefix = text[last_end:match.start()]
+            if prefix.strip():
+                parts.append(prefix)
+
+            name = match.group(1).strip()
+            params_block = match.group(2)
+            arguments: dict[str, str] = {}
+            for param_match in _PARAMETER_RE.finditer(params_block):
+                arguments[param_match.group(1).strip()] = param_match.group(2).strip()
+
+            if name and arguments is not None:
+                payload = {"name": name, "arguments": arguments}
+                parts.append(f"<tool_call>{json.dumps(payload, ensure_ascii=False)}</tool_call>")
+                found = True
+            else:
+                parts.append(match.group(0))
+
+            last_end = match.end()
+
+        suffix = text[last_end:]
+        if suffix.strip():
+            parts.append(suffix)
+
+        return "\n".join(parts) if found else None
+
+    @classmethod
+    def _normalize_batch_payload(cls, text: str) -> str | None:
+        stripped = text.strip()
+        if not stripped.startswith("{"):
+            return None
+
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return None
+
+        if payload.get("name") != "batch":
+            return None
+        arguments = payload.get("arguments")
+        if not isinstance(arguments, dict):
+            return None
+        tool_calls = arguments.get("tool_calls")
+        if not isinstance(tool_calls, list):
+            return None
+
+        normalized_calls: list[str] = []
+        for tool_call in tool_calls:
+            if not isinstance(tool_call, dict):
+                return None
+            tool_name = tool_call.get("tool") or tool_call.get("name")
+            if not isinstance(tool_name, str):
+                return None
+            call_arguments = {k: v for k, v in tool_call.items() if k not in {"tool", "name"}}
+            normalized_calls.append(
+                f"<tool_call>{json.dumps({'name': tool_name, 'arguments': call_arguments}, ensure_ascii=False)}</tool_call>"
+            )
+
+        return "\n".join(normalized_calls) if normalized_calls else None
+
+    @classmethod
     def _normalize_model_output(cls, text: str) -> str:
+        normalized = cls._normalize_function_blocks(text)
+        if normalized is not None:
+            return normalized
+
         if "<tool_call>" in text:
             return text
+
+        normalized = cls._normalize_batch_payload(text)
+        if normalized is not None:
+            return normalized
 
         normalized = cls._normalize_fenced_json_blocks(text)
         if normalized is not None:
