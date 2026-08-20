@@ -1,0 +1,13 @@
+use serde::Deserialize;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
+pub struct ModelRecord {
+    pub id: String,
+    pub label: String,
+    pub role: String,
+    pub backend: String,
+    pub worker_id: String,
+    pub endpoint: String,
+    pub port: u32,
+    pub status: String,
+}

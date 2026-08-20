@@ -15,11 +15,16 @@ use rack_ai_domain::Placement;
 use rack_ai_domain::RunStateDraft;
 use rack_ai_domain::TaskId;
 use rack_ai_domain::TimeoutSeconds;
+use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemExecutionQueueRepository;
 use rack_ai_infrastructure::FileSystemQueueStateRepository;
+use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRunStateRepository;
 use rack_ai_infrastructure::FileSystemTaskSpecRepository;
+use rack_ai_infrastructure::HealthcheckService;
+use rack_ai_infrastructure::HealthcheckServiceDependencies;
 use rack_ai_infrastructure::PythonRackTaskExecutor;
+use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use serde::Deserialize;
 
@@ -42,6 +47,8 @@ fn execute() -> Result<(), String> {
         status(paths)
     } else if command == "run-next" {
         run_next(paths, root)
+    } else if command == "healthcheck" {
+        healthcheck(root)
     } else {
         Err("unsupported command".to_string())
     }
@@ -106,6 +113,19 @@ fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
         RunNextOutcome::Requeued(task_id) => println!("Requeued {task_id}"),
         RunNextOutcome::Failed(task_id) => println!("Failed {task_id}"),
     }
+    Ok(())
+}
+
+fn healthcheck(root: PathBuf) -> Result<(), String> {
+    let registry_repository = FileSystemRegistryRepository::new(RegistryPaths::new(root));
+    let probe = EndpointProbe;
+    let service = HealthcheckService::new(HealthcheckServiceDependencies {
+        endpoint_probe: &probe,
+        registry_repository: &registry_repository,
+    });
+    let snapshot = service.execute()?;
+    let json = serde_json::to_string_pretty(&snapshot).map_err(|error| error.to_string())?;
+    println!("{json}");
     Ok(())
 }
 

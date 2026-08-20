@@ -374,3 +374,34 @@ What remains for the next Rust slice:
 - port healthcheck behavior into Rust
 - extend the Rust runner from linear jobs to DAG-aware node progression
 - add lease-aware admission control to the Rust runner before retiring the Python queue runner
+
+### 2026-08-20: Rust registry and healthcheck slice
+
+Completed in this slice:
+- added typed Rust registry records and document loaders for workers, resources, and models
+- added a filesystem-backed Rust registry repository over `config/workers.json`, `config/resources.json`, and `config/models.json`
+- added a Rust endpoint probe and healthcheck service that mirrors the existing Python healthcheck behavior
+- extended the Rust CLI with a working `healthcheck` command
+- validated the Rust healthcheck against the live rack configuration and local model endpoints
+
+What is now true:
+- Rust can now load the rack capability registry as typed data instead of treating configuration as untyped JSON blobs
+- Rust health inspection now covers worker/resource/model relationships plus live endpoint checks
+- the control plane migration now includes execution, persistence, status, registry loading, and health inspection in Rust
+- this gives the Rust runner the typed registry foundation it needs before DAG and lease-aware scheduling are ported
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+- `cargo run -p rack_ai_cli -- healthcheck --root /srv/rack-ai`
+
+Live healthcheck result on August 20, 2026:
+- `local-primary` endpoint check passed
+- `local-coder` endpoint check passed
+- overall Rust healthcheck returned `ok: true`
+
+What remains for the next Rust slice:
+- extend the Rust runner from linear jobs to DAG-aware node progression
+- port lease-aware admission control into the Rust runner
+- add typed lease and queue history handling in Rust where still delegated to Python
+- retire the equivalent Python healthcheck once we are confident the Rust command is the stable operator surface
