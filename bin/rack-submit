@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+QUEUE_DIR = REPO_ROOT / "state" / "queue" / "queued"
+RUNS_DIR = REPO_ROOT / "state" / "runs"
+
+
+def utc_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_spec(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Submit a Rack AI task spec into the persistent queue")
+    parser.add_argument("spec")
+    parser.add_argument("--max-attempts", type=int)
+    parser.add_argument("--timeout-seconds", type=int)
+    args = parser.parse_args()
+
+    source = Path(args.spec).resolve()
+    spec = load_spec(source)
+    task_id = spec.get("task_id")
+    if not task_id:
+        print("Spec is missing task_id.", file=sys.stderr)
+        return 2
+
+    max_attempts = args.max_attempts or spec.get("max_attempts", 1)
+    timeout_seconds = args.timeout_seconds or spec.get("timeout_seconds", 900)
+
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+    queued_path = QUEUE_DIR / f"{task_id}.json"
+    if queued_path.exists():
+        print(f"Queued task already exists: {queued_path}", file=sys.stderr)
+        return 2
+
+    spec["max_attempts"] = max_attempts
+    spec["timeout_seconds"] = timeout_seconds
+    queued_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+
+    run_state = {
+        "task_id": task_id,
+        "status": "queued",
+        "attempt": 0,
+        "max_attempts": max_attempts,
+        "timeout_seconds": timeout_seconds,
+        "queue_path": str(queued_path),
+        "result_path": None,
+        "last_error": None,
+        "submitted_at": utc_now(),
+        "source_spec": str(source),
+    }
+    (RUNS_DIR / f"{task_id}.json").write_text(json.dumps(run_state, indent=2) + "\n", encoding="utf-8")
+    print(str(queued_path))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

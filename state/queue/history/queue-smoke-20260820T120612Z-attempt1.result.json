@@ -1,0 +1,46 @@
+{
+  "task_id": "queue-smoke-20260820T120612Z",
+  "template": "patch",
+  "request": "Create /tmp/jcode-rack-test/RACK_QUEUE_SMOKE.txt containing exactly RACK_QUEUE_OK. Then read the file and reply with exactly COMPLETE.",
+  "spec": "/srv/rack-ai/state/queue/running/queue-smoke-20260820T120612Z.json",
+  "step_count": 1,
+  "started_at": "2026-08-20T12:06:13Z",
+  "finished_at": "2026-08-20T12:06:13Z",
+  "duration_seconds": 0.795,
+  "steps": [
+    {
+      "index": 1,
+      "name": "implement",
+      "worker": "local-coder",
+      "cwd": "/tmp/jcode-rack-test",
+      "command": [
+        "/srv/rack-ai/bin/rack-coder",
+        "--cwd",
+        "/tmp/jcode-rack-test",
+        "--",
+        "Create /tmp/jcode-rack-test/RACK_QUEUE_SMOKE.txt containing exactly RACK_QUEUE_OK. Then read the file and reply with exactly COMPLETE."
+      ],
+      "returncode": 0,
+      "stdout": "COMPLETE\n",
+      "stderr": "",
+      "artifacts": [
+        {
+          "path": "/tmp/jcode-rack-test/RACK_QUEUE_SMOKE.txt",
+          "exists": true,
+          "size": 13,
+          "exact_match": true
+        }
+      ],
+      "started_at": "2026-08-20T12:06:13Z",
+      "finished_at": "2026-08-20T12:06:13Z",
+      "duration_seconds": 0.795,
+      "ok": true,
+      "summary": "implement passed with 1 artifact checks"
+    }
+  ],
+  "ok": true,
+  "summary": [
+    "implement passed with 1 artifact checks"
+  ],
+  "log_path": "/srv/rack-ai/logs/runs/queue-smoke-20260820T120612Z.json"
+}

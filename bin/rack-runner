@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+QUEUED_DIR = REPO_ROOT / "state" / "queue" / "queued"
+RUNNING_DIR = REPO_ROOT / "state" / "queue" / "running"
+HISTORY_DIR = REPO_ROOT / "state" / "queue" / "history"
+RUNS_DIR = REPO_ROOT / "state" / "runs"
+RACK_TASK = REPO_ROOT / "bin" / "rack-task"
+
+
+def iso_now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def update_run(task_id: str, **changes: object) -> dict:
+    run_path = RUNS_DIR / f"{task_id}.json"
+    run_state = load_json(run_path)
+    run_state.update(changes)
+    write_json(run_path, run_state)
+    return run_state
+
+
+def pick_next() -> Path | None:
+    candidates = sorted(QUEUED_DIR.glob("*.json"))
+    return candidates[0] if candidates else None
+
+
+def execute_once() -> int:
+    QUEUED_DIR.mkdir(parents=True, exist_ok=True)
+    RUNNING_DIR.mkdir(parents=True, exist_ok=True)
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+
+    queued_path = pick_next()
+    if queued_path is None:
+        print("No queued tasks.")
+        return 0
+
+    spec = load_json(queued_path)
+    task_id = spec["task_id"]
+    max_attempts = int(spec.get("max_attempts", 1))
+    timeout_seconds = int(spec.get("timeout_seconds", 900))
+
+    run_state = load_json(RUNS_DIR / f"{task_id}.json")
+    attempt = int(run_state.get("attempt", 0)) + 1
+
+    running_path = RUNNING_DIR / queued_path.name
+    queued_path.rename(running_path)
+    update_run(
+        task_id,
+        status="running",
+        attempt=attempt,
+        started_at=iso_now(),
+        queue_path=str(running_path),
+        last_error=None,
+    )
+
+    try:
+        cp = subprocess.run(
+            [str(RACK_TASK), "--emit-json", str(running_path)],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            check=False,
+        )
+        result_path = HISTORY_DIR / f"{task_id}-attempt{attempt}.result.json"
+        result_path.write_text(cp.stdout, encoding="utf-8")
+        if cp.returncode == 0:
+            running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+            update_run(
+                task_id,
+                status="succeeded",
+                finished_at=iso_now(),
+                queue_path=None,
+                result_path=str(result_path),
+                last_error=None,
+            )
+            print(task_id)
+            return 0
+
+        last_error = cp.stderr.strip() or f"rack-task exited with code {cp.returncode}"
+        if attempt < max_attempts:
+            requeue_path = QUEUED_DIR / queued_path.name
+            running_path.rename(requeue_path)
+            update_run(
+                task_id,
+                status="queued",
+                finished_at=iso_now(),
+                queue_path=str(requeue_path),
+                result_path=str(result_path),
+                last_error=last_error,
+            )
+            print(f"Requeued {task_id}")
+            return 1
+
+        running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+        update_run(
+            task_id,
+            status="failed",
+            finished_at=iso_now(),
+            queue_path=None,
+            result_path=str(result_path),
+            last_error=last_error,
+        )
+        print(f"Failed {task_id}", file=sys.stderr)
+        return 1
+    except subprocess.TimeoutExpired:
+        if attempt < max_attempts:
+            requeue_path = QUEUED_DIR / queued_path.name
+            running_path.rename(requeue_path)
+            update_run(
+                task_id,
+                status="queued",
+                finished_at=iso_now(),
+                queue_path=str(requeue_path),
+                result_path=None,
+                last_error=f"timed out after {timeout_seconds}s",
+            )
+            print(f"Timed out and requeued {task_id}")
+            return 1
+
+        running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+        update_run(
+            task_id,
+            status="timed_out",
+            finished_at=iso_now(),
+            queue_path=None,
+            result_path=None,
+            last_error=f"timed out after {timeout_seconds}s",
+        )
+        print(f"Timed out {task_id}", file=sys.stderr)
+        return 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Rack AI durable queue runner")
+    parser.add_argument("--once", action="store_true", help="Process at most one queued task")
+    args = parser.parse_args()
+
+    if args.once:
+        return execute_once()
+
+    while True:
+        rc = execute_once()
+        if rc == 0 and pick_next() is None:
+            return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

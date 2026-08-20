@@ -165,3 +165,29 @@ Specifically, the next implementation target is:
 Once that works, the rack has the backbone needed for the larger goal:
 
 One intelligent local appliance composed of heterogeneous GPUs, models, and services.
+
+
+## Progress log
+
+### 2026-08-20: durable execution core slice 1
+
+Completed in this slice:
+- added schema documents for task spec, run state, and task DAG under `config/schemas/`
+- added durable state directories under `state/queue/` and `state/runs/`
+- added `bin/rack-submit` for persistent queue submission
+- added `bin/rack-runner` for one-shot durable queue execution with retries/timeouts state handling
+- added `bin/rack-status` for queue and run inspection
+- added `tests/rack_queue_smoke.sh` to prove submit -> run -> succeed -> inspect flow
+
+What is now true:
+- tasks can be submitted into an on-disk queue
+- authoritative run state is written to disk independently of conversational context
+- the runner can transition tasks through `queued`, `running`, `succeeded`, `failed`, and `timed_out`
+- queue inspection is available through a stable command surface
+- `rack-task` remains the execution unit below the queue layer
+
+What remains for the next slice of Phase 1:
+- extend the queue model from simple serialized jobs to explicit DAG-aware dependency scheduling
+- add stronger retry policy controls and blocked-state handling
+- improve run history summarization and operator inspection
+- connect worker and resource registry data into scheduling decisions

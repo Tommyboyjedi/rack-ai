@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rack-ai/run-state.json",
+  "title": "Rack AI Run State",
+  "type": "object",
+  "required": ["task_id", "status", "attempt", "max_attempts"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "status": {
+      "type": "string",
+      "enum": ["queued", "running", "succeeded", "failed", "timed_out", "blocked"]
+    },
+    "attempt": {"type": "integer", "minimum": 0},
+    "max_attempts": {"type": "integer", "minimum": 1},
+    "timeout_seconds": {"type": "integer", "minimum": 1},
+    "queue_path": {"type": ["string", "null"]},
+    "result_path": {"type": ["string", "null"]},
+    "last_error": {"type": ["string", "null"]}
+  }
+}

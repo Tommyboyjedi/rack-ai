@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rack-ai/task-spec.json",
+  "title": "Rack AI Task Spec",
+  "type": "object",
+  "required": ["task_id"],
+  "properties": {
+    "task_id": {"type": "string"},
+    "template": {"type": "string"},
+    "request": {"type": ["string", "null"]},
+    "steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "worker", "cwd", "prompt"],
+        "properties": {
+          "name": {"type": "string"},
+          "worker": {"type": "string"},
+          "cwd": {"type": "string"},
+          "prompt": {"type": "string"},
+          "artifacts": {"type": "array"}
+        }
+      }
+    },
+    "max_attempts": {"type": "integer", "minimum": 1},
+    "timeout_seconds": {"type": "integer", "minimum": 1}
+  }
+}
