@@ -125,9 +125,25 @@ mod tests {
         assert!(evidence.changed_paths().is_empty());
         fs::write(worktree.join("src/lib.rs"), "changed\n").unwrap();
         let dirty = git
-            .inspect(&InspectChangeWorktreeRequest::new(worktree, sha))
+            .inspect(&InspectChangeWorktreeRequest::new(
+                worktree.clone(),
+                sha.clone(),
+            ))
             .unwrap();
         assert_eq!(dirty.changed_paths(), ["src/lib.rs"]);
+        fs::write(worktree.join("README.md"), "pwned\n").unwrap();
+        let escaped = git
+            .inspect(&InspectChangeWorktreeRequest::new(
+                worktree.clone(),
+                sha.clone(),
+            ))
+            .unwrap();
+        let allowed = rack_ai_domain::AllowedPaths::new(vec![
+            rack_ai_domain::AllowedPath::new("src".to_string()).unwrap(),
+        ])
+        .unwrap();
+        let rejected = allowed.reject_disallowed(escaped.changed_paths());
+        assert!(rejected.iter().any(|path| path.as_str() == "README.md"));
         let main_file = fs::read_to_string(fixture.join("src/lib.rs")).unwrap();
         assert_eq!(main_file, "original\n");
         assert_eq!(workspace.branch_name(), "rack/change-job-1");

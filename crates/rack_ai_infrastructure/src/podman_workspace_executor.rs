@@ -14,6 +14,8 @@ use rack_ai_application::WriteFileRequest;
 use crate::PodmanAvailability;
 use crate::PodmanInvocation;
 use crate::PodmanRunPlan;
+use crate::WaitOutcome;
+use crate::WallClockWait;
 
 pub struct PodmanWorkspaceExecutor {
     config: ExecutorConfig,
@@ -91,6 +93,7 @@ impl PodmanWorkspaceExecutor {
             ));
         }
         PodmanAvailability::ensure_command(self.command.as_str())?;
+        PodmanAvailability::ensure_image(self.command.as_str(), self.config.image())?;
         let invocation =
             PodmanInvocation::new(self.config.image().to_string(), worktree_path.to_path_buf())?
                 .with_workspace_mount(self.config.workspace_mount().to_string())
@@ -115,18 +118,24 @@ impl PodmanWorkspaceExecutor {
                     .map_err(|error| error.to_string())?;
             }
         }
-        let output = child
-            .wait_with_output()
-            .map_err(|error| error.to_string())?;
-        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        let timed_out = stderr.to_lowercase().contains("timed out")
-            || stderr.to_lowercase().contains("timeout");
-        let evidence = CommandEvidence::new(argv, output.status.code().unwrap_or(1))
-            .with_stdout(stdout)
-            .with_stderr(stderr)
-            .with_timed_out(timed_out);
-        Ok(WorkspaceExecutionResult::new(evidence))
+        match WallClockWait::child_output(child, timeout_seconds)? {
+            WaitOutcome::Completed(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                let evidence = CommandEvidence::new(argv, output.status.code().unwrap_or(1))
+                    .with_stdout(stdout)
+                    .with_stderr(stderr);
+                Ok(WorkspaceExecutionResult::new(evidence))
+            }
+            WaitOutcome::TimedOut => {
+                let evidence = CommandEvidence::new(argv, 124)
+                    .with_stderr(format!(
+                        "workspace command exceeded wall-clock timeout of {timeout_seconds}s"
+                    ))
+                    .with_timed_out(true);
+                Ok(WorkspaceExecutionResult::new(evidence))
+            }
+        }
     }
 }
 

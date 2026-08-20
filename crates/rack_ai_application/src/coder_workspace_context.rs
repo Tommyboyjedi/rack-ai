@@ -7,6 +7,7 @@ use rack_ai_domain::AllowedPaths;
 pub struct CoderWorkspaceContext {
     worktree_path: PathBuf,
     allowed_paths: AllowedPaths,
+    timeout_seconds: u32,
 }
 
 impl CoderWorkspaceContext {
@@ -14,7 +15,13 @@ impl CoderWorkspaceContext {
         Self {
             worktree_path,
             allowed_paths,
+            timeout_seconds: 30,
         }
+    }
+
+    pub fn with_timeout_seconds(mut self, timeout_seconds: u32) -> Self {
+        self.timeout_seconds = timeout_seconds.max(1);
+        self
     }
 
     pub fn worktree_path(&self) -> &Path {
@@ -23,6 +30,10 @@ impl CoderWorkspaceContext {
 
     pub fn allowed_paths(&self) -> &AllowedPaths {
         &self.allowed_paths
+    }
+
+    pub fn timeout_seconds(&self) -> u32 {
+        self.timeout_seconds
     }
 }
 

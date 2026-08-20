@@ -23,6 +23,7 @@ pub mod run_state;
 pub mod run_status;
 pub mod task_id;
 pub mod timeout_seconds;
+pub mod verifier_verdict;
 
 pub use acceptance_command::AcceptanceCommand;
 pub use active_node_id::ActiveNodeId;
@@ -50,3 +51,4 @@ pub use run_state::RunStateDraft;
 pub use run_status::RunStatus;
 pub use task_id::TaskId;
 pub use timeout_seconds::TimeoutSeconds;
+pub use verifier_verdict::VerifierVerdict;

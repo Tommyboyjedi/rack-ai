@@ -39,9 +39,16 @@ impl PodmanRunPlan {
             "--workdir".to_string(),
             invocation.workspace_mount().to_string(),
             "--env".to_string(),
-            "PATH=/usr/local/cargo/bin:/usr/bin:/bin".to_string(),
+            "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
+                .to_string(),
             "--env".to_string(),
             format!("HOME={}", invocation.workspace_mount()),
+            "--env".to_string(),
+            format!("CARGO_HOME={}/.rack-cargo", invocation.workspace_mount()),
+            "--env".to_string(),
+            format!("CARGO_TARGET_DIR={}/target", invocation.workspace_mount()),
+            "--env".to_string(),
+            "RUSTUP_HOME=/usr/local/rustup".to_string(),
             "--env".to_string(),
             "LANG=C.UTF-8".to_string(),
         ];
@@ -89,6 +96,7 @@ mod tests {
         assert!(!plan.contains("/home"));
         assert!(!plan.contains("--privileged"));
         assert!(!plan.contains("SSH"));
+        assert!(plan.contains("CARGO_HOME=/workspace/.rack-cargo"));
         assert_eq!(plan.arguments().last(), Some(&"test".to_string()));
     }
 

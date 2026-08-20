@@ -3,6 +3,7 @@ use serde::Serialize;
 
 use rack_ai_domain::ChangeStatus;
 use rack_ai_domain::RetentionStatus;
+use rack_ai_domain::VerifierVerdict;
 
 use crate::ChangeRequest;
 use crate::ChangeWorkspace;
@@ -27,7 +28,8 @@ pub struct ReviewPacket {
     head_sha: String,
     commands: Vec<CommandEvidence>,
     required_artifacts: Vec<String>,
-    verifier_verdict: Option<String>,
+    implementer_output: Option<String>,
+    verifier_verdict: Option<VerifierVerdict>,
     status: ChangeStatus,
     retention: RetentionStatus,
     last_error: Option<String>,
@@ -52,6 +54,7 @@ impl ReviewPacket {
             head_sha: String::new(),
             commands: Vec::new(),
             required_artifacts: Vec::new(),
+            implementer_output: None,
             verifier_verdict: None,
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
@@ -87,6 +90,7 @@ impl ReviewPacket {
                 .iter()
                 .map(|item| item.value().to_string())
                 .collect(),
+            implementer_output: None,
             verifier_verdict: None,
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
@@ -124,6 +128,16 @@ impl ReviewPacket {
         self
     }
 
+    pub fn with_implementer_output(mut self, implementer_output: String) -> Self {
+        self.implementer_output = Some(implementer_output);
+        self
+    }
+
+    pub fn with_verdict(mut self, verdict: VerifierVerdict) -> Self {
+        self.verifier_verdict = Some(verdict);
+        self
+    }
+
     pub fn change_id(&self) -> &str {
         self.change_id.as_str()
     }
@@ -154,5 +168,13 @@ impl ReviewPacket {
 
     pub fn commands(&self) -> &[CommandEvidence] {
         self.commands.as_slice()
+    }
+
+    pub fn implementer_output(&self) -> Option<&String> {
+        self.implementer_output.as_ref()
+    }
+
+    pub fn verdict(&self) -> Option<&VerifierVerdict> {
+        self.verifier_verdict.as_ref()
     }
 }

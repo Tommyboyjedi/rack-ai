@@ -18,6 +18,17 @@ impl ChangeLayout {
     pub fn workspace_mount_path() -> &'static str {
         "/workspace"
     }
+
+    pub fn coder_max_turns() -> usize {
+        8
+    }
+
+    pub fn is_ephemeral_path(path: &str) -> bool {
+        path == "target"
+            || path.starts_with("target/")
+            || path == ".rack-cargo"
+            || path.starts_with(".rack-cargo/")
+    }
 }
 
 #[cfg(test)]
@@ -39,5 +50,7 @@ mod tests {
             ChangeLayout::worktree_path(&root, &change_id),
             PathBuf::from("/srv/rack-workspaces/adaptos-001/repo")
         );
+        assert!(ChangeLayout::is_ephemeral_path("target/debug/fixture"));
+        assert!(!ChangeLayout::is_ephemeral_path("src/lib.rs"));
     }
 }

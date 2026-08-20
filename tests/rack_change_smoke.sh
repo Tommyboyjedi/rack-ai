@@ -42,7 +42,7 @@ cat > "$tmp/change.json" <<EOF
 }
 EOF
 
-output="$(cargo run -q -p rack_ai_cli --manifest-path "$repo_root/Cargo.toml" -- change "$tmp/change.json" --repo-root "$rack" --state-root "$rack")"
+output="$(cargo run -q -p rack_ai_cli --manifest-path "$repo_root/Cargo.toml" -- change "$tmp/change.json" --prepare-only --repo-root "$rack" --state-root "$rack")"
 echo "$output"
 
 worktree="$tmp/workspaces/fixture-001/repo"

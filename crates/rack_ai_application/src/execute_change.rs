@@ -1,11 +1,17 @@
 use rack_ai_domain::ChangeStatus;
+use rack_ai_domain::VerifierVerdict;
 
+use crate::ChangeExecutionMode;
+use crate::ChangeImplementer;
+use crate::ChangeLayout;
 use crate::ChangeManifestRepository;
 use crate::ChangeRequest;
 use crate::ChangeRequestDocument;
 use crate::ChangeRequestResolution;
+use crate::ChangeWorkspace;
 use crate::CommandPolicy;
 use crate::GitWorktree;
+use crate::ImplementChangeRequest;
 use crate::InspectChangeWorktreeRequest;
 use crate::PrepareChange;
 use crate::PrepareChangeDependencies;
@@ -22,6 +28,7 @@ pub struct ExecuteChange<'a> {
     git: &'a dyn GitWorktree,
     manifests: &'a dyn ChangeManifestRepository,
     executor: Option<&'a dyn WorkspaceExecutor>,
+    implementer: Option<&'a dyn ChangeImplementer>,
 }
 
 pub struct ExecuteChangeDependencies<'a> {
@@ -30,11 +37,12 @@ pub struct ExecuteChangeDependencies<'a> {
     pub git: &'a dyn GitWorktree,
     pub manifests: &'a dyn ChangeManifestRepository,
     pub executor: Option<&'a dyn WorkspaceExecutor>,
+    pub implementer: Option<&'a dyn ChangeImplementer>,
 }
 
 pub struct ExecuteChangeRequest {
     pub document: ChangeRequestDocument,
-    pub run_checks: bool,
+    pub mode: ChangeExecutionMode,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -51,6 +59,7 @@ impl<'a> ExecuteChange<'a> {
             git: dependencies.git,
             manifests: dependencies.manifests,
             executor: dependencies.executor,
+            implementer: dependencies.implementer,
         }
     }
 
@@ -68,48 +77,104 @@ impl<'a> ExecuteChange<'a> {
             git: self.git,
         })
         .execute(&change_request)?;
-        let evidence = self.git.inspect(&InspectChangeWorktreeRequest::new(
-            workspace.worktree_path().to_path_buf(),
-            change_request.repository().base_sha().clone(),
-        ))?;
-        let mut packet = ReviewPacket::from_request(&change_request)
-            .with_workspace(&workspace)
-            .with_git_evidence(&evidence);
-        let disallowed = change_request
-            .allowed_paths()
-            .reject_disallowed(evidence.changed_paths());
-        if !disallowed.is_empty() {
-            packet = packet
-                .with_status(ChangeStatus::PathPolicyFailed)
-                .with_last_error(Some(format!(
-                    "changed paths outside allowed_paths: {}",
-                    disallowed
-                        .into_iter()
-                        .map(|path| path.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                )));
-            return self.persist(packet);
+        let mut packet = ReviewPacket::from_request(&change_request).with_workspace(&workspace);
+        packet = match self.inspect_into(&change_request, &workspace, packet) {
+            Ok(value) => value,
+            Err((packet, error)) => {
+                return self.persist(fail(packet, ChangeStatus::Failed, error));
+            }
+        };
+        if let Some(rejected) = reject_disallowed(&change_request, &packet) {
+            return self.persist(rejected);
         }
-        if request.run_checks {
+        if request.mode.runs_implementer() {
+            packet = self.implement(&change_request, &workspace, packet)?;
+            if packet.status() == &ChangeStatus::ExecutorUnavailable {
+                return self.persist(packet);
+            }
+            packet = match self.inspect_into(&change_request, &workspace, packet) {
+                Ok(value) => value,
+                Err((packet, error)) => {
+                    return self.persist(fail(packet, ChangeStatus::Failed, error));
+                }
+            };
+            if let Some(rejected) = reject_disallowed(&change_request, &packet) {
+                return self.persist(rejected);
+            }
+            if packet.status() == &ChangeStatus::Failed {
+                return self.persist(packet);
+            }
+        }
+        if request.mode.runs_checks() {
             packet = self.run_checks(&change_request, &workspace, packet)?;
         }
         self.persist(packet)
     }
 
+    fn inspect_into(
+        &self,
+        request: &ChangeRequest,
+        workspace: &ChangeWorkspace,
+        packet: ReviewPacket,
+    ) -> Result<ReviewPacket, (ReviewPacket, String)> {
+        match self.git.inspect(&InspectChangeWorktreeRequest::new(
+            workspace.worktree_path().to_path_buf(),
+            request.repository().base_sha().clone(),
+        )) {
+            Ok(evidence) => Ok(packet.with_git_evidence(&evidence)),
+            Err(error) => Err((packet, error)),
+        }
+    }
+
+    fn implement(
+        &self,
+        request: &ChangeRequest,
+        workspace: &ChangeWorkspace,
+        packet: ReviewPacket,
+    ) -> Result<ReviewPacket, String> {
+        let Some(implementer) = self.implementer else {
+            return Ok(fail(
+                packet,
+                ChangeStatus::ExecutorUnavailable,
+                "podman-backed coder is required for external-repository implementation"
+                    .to_string(),
+            ));
+        };
+        match implementer.implement(
+            &ImplementChangeRequest::new(
+                workspace.worktree_path().to_path_buf(),
+                request.task().value().to_string(),
+            )
+            .with_policy(
+                request.allowed_paths().clone(),
+                request.limits().timeout_seconds().value(),
+            )
+            .with_max_turns(ChangeLayout::coder_max_turns()),
+        ) {
+            Ok(result) => Ok(packet.with_implementer_output(result.output().to_string())),
+            Err(error) => Ok(fail(packet, ChangeStatus::Failed, error)),
+        }
+    }
+
     fn run_checks(
         &self,
         request: &ChangeRequest,
-        workspace: &crate::ChangeWorkspace,
+        workspace: &ChangeWorkspace,
         packet: ReviewPacket,
     ) -> Result<ReviewPacket, String> {
+        if packet.status() == &ChangeStatus::Failed
+            || packet.status() == &ChangeStatus::PathPolicyFailed
+            || packet.status() == &ChangeStatus::ExecutorUnavailable
+        {
+            return Ok(packet);
+        }
         let Some(executor) = self.executor else {
-            return Ok(packet
-                .with_status(ChangeStatus::ExecutorUnavailable)
-                .with_last_error(Some(
-                    "podman is not available; rootless Podman is required for external-repository command execution"
-                        .to_string(),
-                )));
+            return Ok(fail(
+                packet,
+                ChangeStatus::ExecutorUnavailable,
+                "podman is not available; rootless Podman is required for external-repository command execution"
+                    .to_string(),
+            ));
         };
         let timeout = request.limits().timeout_seconds().value();
         let mut commands = Vec::new();
@@ -124,38 +189,47 @@ impl<'a> ExecuteChange<'a> {
             match result {
                 Ok(execution) => commands.push(execution.evidence().clone()),
                 Err(error) => {
-                    return Ok(packet
-                        .with_commands(commands)
-                        .with_status(check_status(&error))
-                        .with_last_error(Some(error)));
+                    return Ok(fail(
+                        packet.with_commands(commands),
+                        check_status(&error),
+                        error,
+                    ));
                 }
             }
         }
         if let Some(failed) = commands.iter().find(|item| !item.succeeded()) {
-            return Ok(packet
-                .with_commands(commands.clone())
-                .with_status(ChangeStatus::ChecksFailed)
-                .with_last_error(Some(format!(
-                    "acceptance command failed: {}",
+            let message = if failed.timed_out() {
+                format!(
+                    "acceptance command exceeded wall-clock timeout: {}",
                     failed.argv().join(" ")
-                ))));
+                )
+            } else {
+                format!("acceptance command failed: {}", failed.argv().join(" "))
+            };
+            return Ok(fail(
+                packet.with_commands(commands.clone()),
+                ChangeStatus::ChecksFailed,
+                message,
+            ));
         }
         if let Err(error) = self.assert_artifacts(executor, request, workspace) {
-            return Ok(packet
-                .with_commands(commands)
-                .with_status(ChangeStatus::ChecksFailed)
-                .with_last_error(Some(error)));
+            return Ok(fail(
+                packet.with_commands(commands),
+                ChangeStatus::ChecksFailed,
+                error,
+            ));
         }
         Ok(packet
             .with_commands(commands)
-            .with_status(ChangeStatus::ChecksPassed))
+            .with_status(ChangeStatus::ChecksPassed)
+            .with_verdict(VerifierVerdict::Approved))
     }
 
     fn assert_artifacts(
         &self,
         executor: &dyn WorkspaceExecutor,
         request: &ChangeRequest,
-        workspace: &crate::ChangeWorkspace,
+        workspace: &ChangeWorkspace,
     ) -> Result<(), String> {
         for artifact in request.acceptance().required_artifacts() {
             executor.read_file(&ReadFileRequest::new(
@@ -175,8 +249,40 @@ impl<'a> ExecuteChange<'a> {
     }
 }
 
+fn reject_disallowed(request: &ChangeRequest, packet: &ReviewPacket) -> Option<ReviewPacket> {
+    let source_paths = packet
+        .changed_paths()
+        .iter()
+        .filter(|path| !ChangeLayout::is_ephemeral_path(path))
+        .cloned()
+        .collect::<Vec<_>>();
+    let disallowed = request.allowed_paths().reject_disallowed(&source_paths);
+    if disallowed.is_empty() {
+        return None;
+    }
+    Some(fail(
+        packet.clone(),
+        ChangeStatus::PathPolicyFailed,
+        format!(
+            "changed paths outside allowed_paths: {}",
+            disallowed
+                .into_iter()
+                .map(|path| path.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    ))
+}
+
+fn fail(packet: ReviewPacket, status: ChangeStatus, error: String) -> ReviewPacket {
+    packet
+        .with_status(status)
+        .with_verdict(VerifierVerdict::Rejected)
+        .with_last_error(Some(error))
+}
+
 fn check_status(error: &str) -> ChangeStatus {
-    if error.contains("podman is not available") {
+    if error.contains("podman is not available") || error.contains("not running rootless") {
         ChangeStatus::ExecutorUnavailable
     } else {
         ChangeStatus::Failed
@@ -191,17 +297,21 @@ impl ExecuteChangeResult {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::cell::RefCell;
     use std::path::PathBuf;
 
     use rack_ai_domain::ChangeStatus;
     use rack_ai_domain::GitSha;
     use rack_ai_domain::RepositoryId;
+    use rack_ai_domain::VerifierVerdict;
 
     use super::ExecuteChange;
     use super::ExecuteChangeDependencies;
     use super::ExecuteChangeRequest;
     use crate::ApprovedCommandPolicy;
+    use crate::ChangeExecutionMode;
+    use crate::ChangeImplementer;
     use crate::ChangeManifestRepository;
     use crate::ChangeRequestDocument;
     use crate::ChangeWorkspace;
@@ -210,6 +320,8 @@ mod tests {
     use crate::ExecutorConfig;
     use crate::GitEvidence;
     use crate::GitWorktree;
+    use crate::ImplementChangeRequest;
+    use crate::ImplementChangeResult;
     use crate::InspectChangeWorktreeRequest;
     use crate::ReadFileRequest;
     use crate::RegisteredRepository;
@@ -226,7 +338,14 @@ mod tests {
     fn prepares_workspace_and_records_evidence() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let result = execute(&git, &manifests, false, None).unwrap();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::PrepareOnly,
+            None,
+            None,
+        )
+        .unwrap();
         assert!(result.succeeded());
         assert_eq!(result.packet.status(), &ChangeStatus::Prepared);
         assert_eq!(result.packet.base_sha(), "a".repeat(40));
@@ -245,11 +364,12 @@ mod tests {
             git: &git,
             manifests: &manifests,
             executor: None,
+            implementer: None,
         });
         let error = service
             .execute(ExecuteChangeRequest {
                 document: sample_document(None),
-                run_checks: false,
+                mode: ChangeExecutionMode::PrepareOnly,
             })
             .unwrap_err();
         assert!(error.contains("not registered"));
@@ -259,17 +379,32 @@ mod tests {
     fn rejects_sha_mismatch() {
         let git = FakeGit::matching("b".repeat(40));
         let manifests = FakeManifests::default();
-        let error = execute(&git, &manifests, false, None).unwrap_err();
+        let error = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::PrepareOnly,
+            None,
+            None,
+        )
+        .unwrap_err();
         assert!(error.contains("base sha does not match"));
     }
 
     #[test]
     fn rejects_disallowed_changed_paths() {
         let git =
-            FakeGit::matching("a".repeat(40)).with_changed_paths(vec!["README.md".to_string()]);
+            FakeGit::matching("a".repeat(40)).with_baseline_paths(vec!["README.md".to_string()]);
         let manifests = FakeManifests::default();
-        let result = execute(&git, &manifests, false, None).unwrap();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::PrepareOnly,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
         assert!(!result.succeeded());
     }
 
@@ -287,11 +422,12 @@ mod tests {
             git: &git,
             manifests: &manifests,
             executor: None,
+            implementer: None,
         });
         let error = service
             .execute(ExecuteChangeRequest {
                 document,
-                run_checks: false,
+                mode: ChangeExecutionMode::PrepareOnly,
             })
             .unwrap_err();
         assert!(error.contains("allowed paths cannot be empty"));
@@ -315,11 +451,12 @@ mod tests {
             git: &git,
             manifests: &manifests,
             executor: None,
+            implementer: None,
         });
         let error = service
             .execute(ExecuteChangeRequest {
                 document,
-                run_checks: false,
+                mode: ChangeExecutionMode::PrepareOnly,
             })
             .unwrap_err();
         assert!(error.contains("not approved") || error.contains("approved program"));
@@ -329,7 +466,14 @@ mod tests {
     fn fails_closed_when_checks_require_missing_executor() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let result = execute(&git, &manifests, true, None).unwrap();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ExecutorUnavailable);
     }
 
@@ -338,8 +482,16 @@ mod tests {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
         let executor = FakeExecutor { fail: false };
-        let result = execute(&git, &manifests, true, Some(&executor)).unwrap();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Approved));
         assert_eq!(result.packet.commands().len(), 1);
     }
 
@@ -348,16 +500,91 @@ mod tests {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
         let executor = FakeExecutor { fail: true };
-        let result = execute(&git, &manifests, true, Some(&executor)).unwrap();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksFailed);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
         assert!(!result.succeeded());
+    }
+
+    #[test]
+    fn implements_then_approves_allowed_change() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Approved));
+        assert_eq!(result.packet.changed_paths(), ["src/lib.rs"]);
+        assert_eq!(
+            result.packet.implementer_output(),
+            Some(&"COMPLETE".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_out_of_policy_paths_after_implement() {
+        let git = FakeGit::matching("a".repeat(40))
+            .with_after_paths(vec!["README.md".to_string(), "src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+        assert!(result.packet.last_error().unwrap().contains("README.md"));
+        assert!(result.packet.commands().is_empty());
+    }
+
+    #[test]
+    fn fails_closed_when_implementer_missing() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ExecutorUnavailable);
+        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
     }
 
     fn execute(
         git: &FakeGit,
         manifests: &FakeManifests,
-        run_checks: bool,
+        mode: ChangeExecutionMode,
         executor: Option<&FakeExecutor>,
+        implementer: Option<&FakeImplementer>,
     ) -> Result<super::ExecuteChangeResult, String> {
         let registry = SampleRegistry;
         let policy = ApprovedCommandPolicy::default();
@@ -367,10 +594,11 @@ mod tests {
             git,
             manifests,
             executor: executor.map(|item| item as &dyn WorkspaceExecutor),
+            implementer: implementer.map(|item| item as &dyn ChangeImplementer),
         });
         service.execute(ExecuteChangeRequest {
             document: sample_document(Some("a".repeat(40))),
-            run_checks,
+            mode,
         })
     }
 
@@ -428,19 +656,28 @@ mod tests {
 
     struct FakeGit {
         sha: GitSha,
-        changed_paths: Vec<String>,
+        inspect_count: Cell<usize>,
+        baseline_paths: Vec<String>,
+        after_paths: Vec<String>,
     }
 
     impl FakeGit {
         fn matching(sha: String) -> Self {
             Self {
                 sha: GitSha::new(sha).unwrap(),
-                changed_paths: Vec::new(),
+                inspect_count: Cell::new(0),
+                baseline_paths: Vec::new(),
+                after_paths: Vec::new(),
             }
         }
 
-        fn with_changed_paths(mut self, changed_paths: Vec<String>) -> Self {
-            self.changed_paths = changed_paths;
+        fn with_baseline_paths(mut self, baseline_paths: Vec<String>) -> Self {
+            self.baseline_paths = baseline_paths;
+            self
+        }
+
+        fn with_after_paths(mut self, after_paths: Vec<String>) -> Self {
+            self.after_paths = after_paths;
             self
         }
     }
@@ -463,8 +700,14 @@ mod tests {
             if request.expected_base_sha() != &self.sha {
                 return Err("worktree is not at the recorded base sha".to_string());
             }
-            Ok(GitEvidence::new(self.sha.clone(), String::new())
-                .with_changed_paths(self.changed_paths.clone()))
+            let count = self.inspect_count.get() + 1;
+            self.inspect_count.set(count);
+            let paths = if count == 1 {
+                self.baseline_paths.clone()
+            } else {
+                self.after_paths.clone()
+            };
+            Ok(GitEvidence::new(self.sha.clone(), String::new()).with_changed_paths(paths))
         }
     }
 
@@ -511,6 +754,19 @@ mod tests {
                 request.argv().to_vec(),
                 code,
             )))
+        }
+    }
+
+    struct FakeImplementer {
+        output: String,
+    }
+
+    impl ChangeImplementer for FakeImplementer {
+        fn implement(
+            &self,
+            _request: &ImplementChangeRequest,
+        ) -> Result<ImplementChangeResult, String> {
+            Ok(ImplementChangeResult::new(self.output.clone()))
         }
     }
 }

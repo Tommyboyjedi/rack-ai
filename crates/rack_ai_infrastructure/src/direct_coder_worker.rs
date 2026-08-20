@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::time::Duration;
+use std::time::Instant;
 
 use rack_ai_application::CoderRunRequest;
 use rack_ai_application::CoderToolRunner;
@@ -35,7 +37,15 @@ impl DirectCoderWorker {
             json!({"role": "system", "content": self.system_prompt}),
             json!({"role": "user", "content": self.build_prompt(request.task())}),
         ];
+        let deadline = request
+            .timeout_seconds()
+            .map(|seconds| Instant::now() + Duration::from_secs(u64::from(seconds.max(1))));
         for _ in 0..request.max_turns() {
+            if let Some(deadline) = deadline {
+                if Instant::now() >= deadline {
+                    return Err("coder wall-clock timeout exceeded".to_string());
+                }
+            }
             let response = self.call_api(&messages)?;
             let choice = response
                 .get("choices")

@@ -45,7 +45,8 @@ impl WorkspaceCoderToolRunner<'_> {
         let content = read_required_string(arguments, "content")?.to_string();
         let result = self.executor.write_file(
             &WriteFileRequest::new(self.context.worktree_path().to_path_buf(), path)
-                .with_content(content),
+                .with_content(content)
+                .with_timeout_seconds(self.context.timeout_seconds()),
         )?;
         Ok(result.evidence().stdout().to_string())
     }
@@ -62,17 +63,21 @@ impl WorkspaceCoderToolRunner<'_> {
             .unwrap_or(400);
         let result = self.executor.read_file(
             &ReadFileRequest::new(self.context.worktree_path().to_path_buf(), path)
-                .with_range(start_line, limit),
+                .with_range(start_line, limit)
+                .with_timeout_seconds(self.context.timeout_seconds()),
         )?;
         Ok(result.content().to_string())
     }
 
     fn run_bash(&self, arguments: &Value) -> Result<String, String> {
         let command = read_required_string(arguments, "command")?.to_string();
-        let result = self.executor.run_command(&RunCommandRequest::new(
-            self.context.worktree_path().to_path_buf(),
-            vec!["/bin/sh".to_string(), "-lc".to_string(), command],
-        )?)?;
+        let result = self.executor.run_command(
+            &RunCommandRequest::new(
+                self.context.worktree_path().to_path_buf(),
+                vec!["/bin/sh".to_string(), "-lc".to_string(), command],
+            )?
+            .with_timeout_seconds(self.context.timeout_seconds()),
+        )?;
         let mut text = result.evidence().stdout().to_string();
         text.push_str(result.evidence().stderr());
         Ok(text.trim().to_string())
