@@ -5,18 +5,17 @@ This repository is the source-controlled integration root for the GPU rack at `g
 Current scope:
 - capture the live rack architecture and configuration
 - pin and document service versions and model roles
-- hold the temporary Python control-plane prototype
-- define and build the long-term Rust control-plane application
+- hold the stable Rust control-plane application and its operational wrappers
 - provide repeatable tests and operational notes
+- eliminate remaining Python utilities as migration cleanup
 
 Current engineering stance:
-- the existing Python queue/orchestration code is now the reference prototype
-- the long-term Rack AI control plane should be a structured Rust application
+- the live control-plane path is now Rust-owned
 - JCode remains an execution backend, not the control plane itself
+- remaining Python files are temporary utilities, plugins, or tests pending migration or deletion
 
 Immediate priorities:
-1. freeze Python feature expansion except where needed for migration or live stability
-2. install the Rust toolchain on `gpurack`
-3. create the Cargo workspace and crate boundaries
-4. port the durable execution backbone into Rust
-5. reach parity for queue, leases, DAG execution, and status inspection
+1. remove the remaining Python utilities, tests, and temporary plugin code
+2. harden the Rust crate boundaries and naming so the application architecture is explicit
+3. keep queue, DAG, lease, and worker behavior stable while deleting old compatibility code
+4. continue proving the rack through repeatable smoke coverage on the live hardware

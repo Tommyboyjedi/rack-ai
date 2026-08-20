@@ -6,12 +6,12 @@ use rack_ai_application::TaskExecution;
 use rack_ai_application::TaskExecutionRequest;
 use rack_ai_application::TaskExecutor;
 
-pub struct PythonRackTaskExecutor {
+pub struct CliRackTaskExecutor {
     repo_root: PathBuf,
     state_root: PathBuf,
 }
 
-impl PythonRackTaskExecutor {
+impl CliRackTaskExecutor {
     pub fn new(repo_root: PathBuf, state_root: PathBuf) -> Self {
         Self {
             repo_root,
@@ -20,7 +20,7 @@ impl PythonRackTaskExecutor {
     }
 }
 
-impl TaskExecutor for PythonRackTaskExecutor {
+impl TaskExecutor for CliRackTaskExecutor {
     fn execute(&self, request: &TaskExecutionRequest) -> Result<TaskExecution, String> {
         let execution_path = self.prepare_execution_path(request)?;
         let output = Command::new(self.repo_root.join("bin/rack-task"))
@@ -43,7 +43,7 @@ impl TaskExecutor for PythonRackTaskExecutor {
     }
 }
 
-impl PythonRackTaskExecutor {
+impl CliRackTaskExecutor {
     fn prepare_execution_path(&self, request: &TaskExecutionRequest) -> Result<PathBuf, String> {
         if let Some(execution_spec_json) = request.execution_spec_json() {
             let path = self

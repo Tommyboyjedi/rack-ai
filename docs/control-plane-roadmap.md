@@ -564,3 +564,31 @@ Verification completed in this slice:
 - `./tests/rack_queue_smoke.sh`
 - `./tests/rack_dag_smoke.sh`
 - `./tests/rack_resource_admission_smoke.sh`
+
+### 2026-08-20: Rust control-plane parity and direct coder migration slice
+
+Completed in this slice:
+- moved `rack-task` and `rack-coordinator` command ownership into the Rust CLI while preserving their shell entrypoints
+- fixed wrapper and argument parsing so repository root metadata no longer leaks into task requests or spec paths
+- replaced the live `bin/rack-coder` Python worker with a Rust direct coder worker backed by the same vLLM endpoint and tool contract
+- renamed the queue executor adapter from `PythonRackTaskExecutor` to `CliRackTaskExecutor` to match the actual architecture
+- removed the dead `bin/racklib.py` helper after confirming the registry and placement path already lived in Rust
+
+What is now true:
+- the live control-plane execution path for submit, status, runner, task, coordinator, and direct coder execution is Rust-owned
+- the 2060 coding worker still uses the same model and endpoint contract, but no longer relies on Python glue code
+- wrapper/root argument handling is now deterministic across direct invocations, task runs, and coordinator-generated runs
+- dead prototype code can now be deleted aggressively without losing core rack behavior
+
+Verification completed in this slice:
+- `cargo test -q`
+- `./tests/rack_coder_smoke.sh`
+- `./tests/rack_task_smoke.sh`
+- `./tests/rack_pipeline_smoke.sh`
+- `./tests/rack_coordinator_smoke.sh`
+- `./tests/rack_coordinator_auto_smoke.sh`
+
+What remains for the next slice:
+- remove or port the remaining Python-only utilities and test helpers under `plugins/` and `tests/`
+- decide whether the temporary vLLM parser plugin stays as Rust, moves into core infrastructure, or is deleted with the model workaround
+- continue tightening crate/module boundaries so the Rust application reflects the intended long-term architecture

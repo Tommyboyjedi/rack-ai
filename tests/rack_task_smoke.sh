@@ -22,7 +22,7 @@ cat > "$spec" <<EOF
 }
 EOF
 
-python3 "$repo_root/bin/rack-task" --emit-json "$spec"
+"$repo_root/bin/rack-task" --emit-json "$spec"
 
 test -f "$target"
 grep -qx 'RACK_TASK_SMOKE_OK' "$target"
