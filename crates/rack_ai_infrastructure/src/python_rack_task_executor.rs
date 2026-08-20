@@ -1,8 +1,9 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
-use rack_ai_application::QueuedTask;
 use rack_ai_application::TaskExecution;
+use rack_ai_application::TaskExecutionRequest;
 use rack_ai_application::TaskExecutor;
 
 pub struct PythonRackTaskExecutor {
@@ -16,16 +17,39 @@ impl PythonRackTaskExecutor {
 }
 
 impl TaskExecutor for PythonRackTaskExecutor {
-    fn execute(&self, task: &QueuedTask) -> Result<TaskExecution, String> {
+    fn execute(&self, request: &TaskExecutionRequest) -> Result<TaskExecution, String> {
+        let execution_path = self.prepare_execution_path(request)?;
         let output = Command::new(self.root.join("bin/rack-task"))
             .arg("--emit-json")
-            .arg(task.spec_path())
+            .arg(&execution_path)
             .output()
             .map_err(|error| error.to_string())?;
+        self.cleanup_execution_path(request, &execution_path);
         if output.status.success() {
             return Ok(TaskExecution::success());
         }
         Ok(TaskExecution::failure())
+    }
+}
+
+impl PythonRackTaskExecutor {
+    fn prepare_execution_path(&self, request: &TaskExecutionRequest) -> Result<PathBuf, String> {
+        if let Some(execution_spec_json) = request.execution_spec_json() {
+            let path = self
+                .root
+                .join("state/queue/running")
+                .join(format!("{}--exec.json", request.task_id()));
+            fs::write(&path, format!("{execution_spec_json}\n"))
+                .map_err(|error| error.to_string())?;
+            return Ok(path);
+        }
+        Ok(PathBuf::from(request.source_spec_path()))
+    }
+
+    fn cleanup_execution_path(&self, request: &TaskExecutionRequest, execution_path: &PathBuf) {
+        if request.execution_spec_json().is_some() {
+            let _ = fs::remove_file(execution_path);
+        }
     }
 }
 
@@ -35,7 +59,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rack_ai_application::QueuedTask;
+    use rack_ai_application::TaskExecutionRequest;
     use rack_ai_application::TaskExecutor;
 
     use super::PythonRackTaskExecutor;
@@ -45,6 +69,7 @@ mod tests {
         let root = temp_root();
         let bin_dir = root.join("bin");
         fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(root.join("state/queue/running")).unwrap();
         let script = bin_dir.join("rack-task");
         fs::write(&script, "#!/usr/bin/env bash\nexit 0\n").unwrap();
         let _ = std::process::Command::new("chmod")
@@ -55,12 +80,34 @@ mod tests {
         fs::write(&spec, "{}").unwrap();
         let executor = PythonRackTaskExecutor::new(root);
         let outcome = executor
-            .execute(&QueuedTask::new(
+            .execute(&TaskExecutionRequest::new(
                 "task".to_string(),
                 spec.to_str().unwrap().to_string(),
             ))
             .unwrap();
         assert!(outcome.was_successful());
+    }
+
+    #[test]
+    fn writes_temporary_execution_spec_for_dag_nodes() {
+        let root = temp_root();
+        let bin_dir = root.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        fs::create_dir_all(root.join("state/queue/running")).unwrap();
+        let script = bin_dir.join("rack-task");
+        fs::write(&script, "#!/usr/bin/env bash\ntest -f \"$1\"\nexit 0\n").unwrap();
+        let _ = std::process::Command::new("chmod")
+            .arg("+x")
+            .arg(&script)
+            .status();
+        let executor = PythonRackTaskExecutor::new(root.clone());
+        executor
+            .execute(
+                &TaskExecutionRequest::new("task".to_string(), "/tmp/spec.json".to_string())
+                    .with_execution_spec_json("{}".to_string()),
+            )
+            .unwrap();
+        assert!(!root.join("state/queue/running/task--exec.json").exists());
     }
 
     fn temp_root() -> PathBuf {

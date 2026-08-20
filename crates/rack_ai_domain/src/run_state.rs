@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::ActiveNodeId;
 use crate::AttemptCount;
 use crate::AttemptLimit;
+use crate::DagRunState;
 use crate::Placement;
 use crate::RunStatus;
 use crate::TaskId;
@@ -20,6 +21,8 @@ pub struct RunState {
     timeout_seconds: TimeoutSeconds,
     placement: Placement,
     active_node_id: Option<ActiveNodeId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dag_run_state: Option<DagRunState>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -40,6 +43,7 @@ impl RunState {
             timeout_seconds: draft.timeout_seconds,
             placement: draft.placement,
             active_node_id: None,
+            dag_run_state: None,
         }
     }
 
@@ -68,6 +72,11 @@ impl RunState {
         self
     }
 
+    pub fn with_dag_run_state(mut self, dag_run_state: DagRunState) -> Self {
+        self.dag_run_state = Some(dag_run_state);
+        self
+    }
+
     pub fn can_retry(&self) -> bool {
         self.attempt_count.value() < self.attempt_limit.value()
     }
@@ -93,6 +102,9 @@ impl RunState {
     pub fn active_node_id(&self) -> Option<&ActiveNodeId> {
         self.active_node_id.as_ref()
     }
+    pub fn dag_run_state(&self) -> Option<&DagRunState> {
+        self.dag_run_state.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -101,6 +113,8 @@ mod tests {
     use super::RunStateDraft;
     use crate::ActiveNodeId;
     use crate::AttemptLimit;
+    use crate::DagNodeState;
+    use crate::DagRunState;
     use crate::Placement;
     use crate::RunStatus;
     use crate::TaskId;
@@ -134,6 +148,12 @@ mod tests {
         assert_eq!(succeeded.status(), &RunStatus::Succeeded);
     }
 
+    #[test]
+    fn stores_optional_dag_run_state() {
+        let run_state = RunState::queued(sample_draft()).with_dag_run_state(sample_dag_run_state());
+        assert!(run_state.dag_run_state().is_some());
+    }
+
     fn sample_draft() -> RunStateDraft {
         RunStateDraft {
             task_id: TaskId::new("task-1".to_string()).unwrap(),
@@ -145,5 +165,9 @@ mod tests {
 
     fn sample_node_id() -> ActiveNodeId {
         ActiveNodeId::new("plan".to_string()).unwrap()
+    }
+
+    fn sample_dag_run_state() -> DagRunState {
+        DagRunState::new(vec![(sample_node_id(), DagNodeState::pending(vec![]))]).unwrap()
     }
 }

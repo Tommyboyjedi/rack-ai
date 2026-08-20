@@ -100,12 +100,14 @@ fn status(paths: RepositoryPaths) -> Result<(), String> {
 
 fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
     let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
-    let run_state_repository = FileSystemRunStateRepository::new(paths);
+    let run_state_repository = FileSystemRunStateRepository::new(paths.clone());
+    let task_spec_repository = FileSystemTaskSpecRepository::new(paths);
     let task_executor = PythonRackTaskExecutor::new(root);
     let service = RunNextTask::new(RunNextTaskDependencies {
         execution_queue_repository: &execution_queue_repository,
         run_state_repository: &run_state_repository,
         task_executor: &task_executor,
+        task_spec_repository: &task_spec_repository,
     });
     match service.execute()? {
         RunNextOutcome::NoQueuedTasks => println!("No queued tasks."),

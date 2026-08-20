@@ -103,6 +103,10 @@ mod tests {
                 .push((task_id.to_string(), spec_json.to_string()));
             Ok(())
         }
+
+        fn load(&self, _task: &crate::QueuedTask) -> Result<crate::TaskSpec, String> {
+            Err("not used in submit task tests".to_string())
+        }
     }
 
     fn sample_request() -> SubmitTaskRequest {

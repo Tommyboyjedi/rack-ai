@@ -405,3 +405,28 @@ What remains for the next Rust slice:
 - port lease-aware admission control into the Rust runner
 - add typed lease and queue history handling in Rust where still delegated to Python
 - retire the equivalent Python healthcheck once we are confident the Rust command is the stable operator surface
+
+### 2026-08-20: Rust DAG runner migration slice
+
+Completed in this slice:
+- added typed Rust DAG run-state primitives for node status, dependency tracking, and durable `active_node_id` persistence
+- added typed Rust task-spec loading so the application runner can inspect queued specs instead of treating them as opaque files
+- added a Rust execution request contract so DAG nodes can execute derived single-step specs without losing the original queued task
+- extended the Rust `run-next` path to initialize DAG state, execute one ready node per invocation, requeue between nodes, and mark terminal task failure when retries are exhausted
+- updated the filesystem task-spec repository, Python-backed executor, and CLI wiring to support the DAG-aware Rust runner path
+
+What is now true:
+- the Rust control-plane path can now advance dependency-aware DAG tasks instead of only linear queued jobs
+- DAG progress is durable in Rust run-state files and no longer depends on the Python runner for node progression semantics
+- the Rust runner keeps task-wide retry counting while resetting failed DAG nodes back to `pending` when retries remain, matching the Python reference behavior
+- the Python `rack-task` worker remains the execution unit underneath the Rust control plane, which keeps the migration incremental and reversible
+
+Verification completed in this slice:
+- `cargo test`
+- targeted application tests covering linear success, linear requeue, DAG node advancement, and DAG failure after retry exhaustion
+- pending live CLI smoke verification against an isolated temporary state root
+
+What remains for the next Rust slice:
+- port lease-aware resource admission into the Rust runner so queue selection respects live resource occupancy before execution
+- port richer run metadata such as result paths, timestamps, and structured failure reasons
+- replace more of the Python durable queue surface once the Rust control-plane behavior fully matches the live runner
