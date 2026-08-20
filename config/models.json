@@ -1,0 +1,24 @@
+{
+  "models": [
+    {
+      "id": "gemma4-12b-local-primary",
+      "label": "Gemma 4 12B",
+      "role": "planner-verifier",
+      "backend": "vllm",
+      "worker_id": "local-primary",
+      "endpoint": "http://127.0.0.1:8017/v1",
+      "port": 8017,
+      "status": "active"
+    },
+    {
+      "id": "qwen25-coder-3b-awq-local-coder",
+      "label": "Qwen2.5-Coder-3B-Instruct-AWQ",
+      "role": "implementer-tester",
+      "backend": "vllm",
+      "worker_id": "local-coder",
+      "endpoint": "http://127.0.0.1:8018/v1",
+      "port": 8018,
+      "status": "active"
+    }
+  ]
+}

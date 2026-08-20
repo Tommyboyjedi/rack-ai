@@ -191,3 +191,25 @@ What remains for the next slice of Phase 1:
 - add stronger retry policy controls and blocked-state handling
 - improve run history summarization and operator inspection
 - connect worker and resource registry data into scheduling decisions
+
+### 2026-08-20: worker, resource, and model registry slice
+
+Completed in this slice:
+- added `config/workers.json` as the authoritative worker registry for planner, coder, and fallback backends
+- added `config/resources.json` to describe current and planned rack GPU capacity and concurrency limits
+- added `config/models.json` to describe endpoint bindings and model roles independently of execution wrappers
+- added `bin/rack-healthcheck` to validate active model endpoints against the declared registry
+- added `tests/rack_healthcheck_smoke.sh` to prove registry-backed endpoint checks pass on the live rack
+
+What is now true:
+- rack capability is now described in versioned configuration rather than only in wrapper scripts
+- worker identity, model identity, and hardware resource identity are separated cleanly
+- active inference endpoints can be checked through a stable control-plane command
+- future hardware such as a 3090 can be represented in registry state before it is physically installed
+- later scheduling logic can bind work through registry data instead of hard-coded assumptions
+
+What remains for the next slice of Phase 1:
+- use the worker and resource registry for actual queue placement and admission control
+- add resource occupancy tracking during runs rather than assuming single-process exclusivity
+- add retry policy, timeout policy, and blocked-state controls at the queue layer
+- extend durable queue execution from linear jobs to dependency-aware DAG scheduling

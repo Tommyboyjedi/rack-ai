@@ -1,0 +1,34 @@
+{
+  "resources": [
+    {
+      "id": "gpu-4060ti",
+      "type": "gpu",
+      "label": "RTX 4060 Ti 16 GB",
+      "vram_gb": 16,
+      "device_hint": "planner-coordinator",
+      "max_concurrent_tasks": 1,
+      "owner": "local-primary",
+      "status": "active"
+    },
+    {
+      "id": "gpu-2060",
+      "type": "gpu",
+      "label": "RTX 2060 6 GB",
+      "vram_gb": 6,
+      "device_hint": "coding-worker",
+      "max_concurrent_tasks": 1,
+      "owner": "local-coder",
+      "status": "active"
+    },
+    {
+      "id": "future-3090-slot",
+      "type": "gpu-slot",
+      "label": "Planned RTX 3090 24 GB",
+      "vram_gb": 24,
+      "device_hint": "future-high-vram-worker",
+      "max_concurrent_tasks": 1,
+      "owner": null,
+      "status": "planned"
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import urllib.request
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def check_endpoint(url: str) -> dict:
+    req = urllib.request.Request(url)
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            return {
+                "ok": 200 <= response.status < 300,
+                "status": response.status,
+            }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": None,
+            "error": str(exc),
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Check configured Rack AI workers, resources, and model endpoints")
+    parser.add_argument("--emit-json", action="store_true")
+    args = parser.parse_args()
+
+    workers = load_json(REPO_ROOT / "config" / "workers.json")["workers"]
+    resources = load_json(REPO_ROOT / "config" / "resources.json")["resources"]
+    models = load_json(REPO_ROOT / "config" / "models.json")["models"]
+    resource_by_id = {item["id"]: item for item in resources}
+    model_by_id = {item["id"]: item for item in models}
+
+    checks = []
+    ok = True
+    for worker in workers:
+        model = model_by_id.get(worker["model_id"])
+        resource = resource_by_id.get(worker["resource_id"])
+        entry = {
+            "worker_id": worker["id"],
+            "enabled": worker["enabled"],
+            "backend": worker["backend"],
+            "resource_id": worker["resource_id"],
+            "resource_status": resource.get("status") if resource else None,
+            "model_id": worker["model_id"],
+            "model_status": model.get("status") if model else None,
+        }
+        if model and model.get("status") == "active":
+            entry["endpoint_check"] = check_endpoint(model["endpoint"] + "/models")
+            ok = ok and entry["endpoint_check"]["ok"]
+        checks.append(entry)
+
+    payload = {"ok": ok, "checks": checks}
+    if args.emit_json:
+        print(json.dumps(payload, indent=2))
+    else:
+        for entry in checks:
+            line = f"{entry['worker_id']}: enabled={entry['enabled']} backend={entry['backend']} resource={entry['resource_id']}"
+            if "endpoint_check" in entry:
+                line += f" endpoint_ok={entry['endpoint_check']['ok']}"
+            print(line)
+    return 0 if ok else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
