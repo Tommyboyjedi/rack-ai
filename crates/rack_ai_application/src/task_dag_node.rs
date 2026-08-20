@@ -21,6 +21,10 @@ impl TaskDagNode {
         &self.id
     }
 
+    pub fn worker_id(&self) -> &str {
+        self.worker.as_str()
+    }
+
     pub fn depends_on(&self) -> &[ActiveNodeId] {
         self.depends_on.as_slice()
     }
@@ -51,6 +55,7 @@ mod tests {
         }))
         .unwrap();
         let payload = node.execution_step();
+        assert_eq!(node.worker_id(), "coder");
         assert_eq!(payload["worker"], "coder");
         assert_eq!(payload["artifacts"][0], "plan.md");
     }

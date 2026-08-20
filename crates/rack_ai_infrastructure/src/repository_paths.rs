@@ -10,6 +10,10 @@ impl RepositoryPaths {
         Self { root }
     }
 
+    pub fn root(&self) -> &PathBuf {
+        &self.root
+    }
+
     pub fn queued_dir(&self) -> PathBuf {
         self.root.join("state/queue/queued")
     }

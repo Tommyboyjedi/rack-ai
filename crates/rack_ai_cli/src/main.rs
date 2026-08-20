@@ -22,12 +22,18 @@ use rack_ai_infrastructure::FileSystemQueueStateRepository;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRunStateRepository;
 use rack_ai_infrastructure::FileSystemTaskSpecRepository;
+use rack_ai_infrastructure::FileSystemWorkerCatalog;
 use rack_ai_infrastructure::HealthcheckService;
 use rack_ai_infrastructure::HealthcheckServiceDependencies;
 use rack_ai_infrastructure::PythonRackTaskExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use serde::Deserialize;
+
+struct CommandRoots {
+    repo_root: PathBuf,
+    state_root: PathBuf,
+}
 
 fn main() {
     if let Err(error) = execute() {
@@ -39,28 +45,52 @@ fn main() {
 fn execute() -> Result<(), String> {
     let arguments = env::args().collect::<Vec<_>>();
     let command = arguments.get(1).ok_or("expected command")?;
-    let root = current_root(&arguments)?;
-    let paths = RepositoryPaths::new(root.clone());
+    let roots = current_roots(&arguments)?;
+    let paths = RepositoryPaths::new(roots.state_root.clone());
     if command == "submit" {
         let spec_path = arguments.get(2).ok_or("expected spec path")?;
         submit(paths, PathBuf::from(spec_path))
     } else if command == "status" {
         status(paths)
     } else if command == "run-next" {
-        run_next(paths, root)
+        run_next(paths, roots.repo_root)
     } else if command == "healthcheck" {
-        healthcheck(root)
+        healthcheck(roots.repo_root)
     } else {
         Err("unsupported command".to_string())
     }
 }
 
-fn current_root(arguments: &[String]) -> Result<PathBuf, String> {
-    if let Some(index) = arguments.iter().position(|value| value == "--root") {
-        let value = arguments.get(index + 1).ok_or("expected root path")?;
-        return Ok(PathBuf::from(value));
-    }
-    env::current_dir().map_err(|error| error.to_string())
+fn current_roots(arguments: &[String]) -> Result<CommandRoots, String> {
+    let working_directory = env::current_dir().map_err(|error| error.to_string())?;
+    let repo_root = if let Some(value) = flag_value(arguments, "--repo-root") {
+        PathBuf::from(value)
+    } else if let Some(value) = flag_value(arguments, "--root") {
+        PathBuf::from(value)
+    } else {
+        working_directory.clone()
+    };
+    let state_root = if let Some(value) = flag_value(arguments, "--state-root") {
+        PathBuf::from(value)
+    } else if flag_value(arguments, "--repo-root").is_some() {
+        repo_root.clone()
+    } else if let Some(value) = flag_value(arguments, "--root") {
+        PathBuf::from(value)
+    } else {
+        repo_root.clone()
+    };
+    Ok(CommandRoots {
+        repo_root,
+        state_root,
+    })
+}
+
+fn flag_value(arguments: &[String], flag: &str) -> Option<String> {
+    arguments
+        .iter()
+        .position(|value| value == flag)
+        .and_then(|index| arguments.get(index + 1))
+        .cloned()
 }
 
 fn submit(paths: RepositoryPaths, spec_path: PathBuf) -> Result<(), String> {
@@ -99,18 +129,21 @@ fn status(paths: RepositoryPaths) -> Result<(), String> {
     Ok(())
 }
 
-fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
+fn run_next(paths: RepositoryPaths, repo_root: PathBuf) -> Result<(), String> {
+    let state_root = paths.root().to_path_buf();
     let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
     let lease_repository = FileSystemLeaseRepository::new(paths.clone());
     let run_state_repository = FileSystemRunStateRepository::new(paths.clone());
     let task_spec_repository = FileSystemTaskSpecRepository::new(paths);
-    let task_executor = PythonRackTaskExecutor::new(root);
+    let worker_catalog = FileSystemWorkerCatalog::new(RegistryPaths::new(repo_root.clone()));
+    let task_executor = PythonRackTaskExecutor::new(repo_root, state_root);
     let service = RunNextTask::new(RunNextTaskDependencies {
         execution_queue_repository: &execution_queue_repository,
         lease_repository: &lease_repository,
         run_state_repository: &run_state_repository,
         task_executor: &task_executor,
         task_spec_repository: &task_spec_repository,
+        worker_catalog: &worker_catalog,
     });
     match service.execute()? {
         RunNextOutcome::NoQueuedTasks => println!("No queued tasks."),
@@ -122,8 +155,8 @@ fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
     Ok(())
 }
 
-fn healthcheck(root: PathBuf) -> Result<(), String> {
-    let registry_repository = FileSystemRegistryRepository::new(RegistryPaths::new(root));
+fn healthcheck(repo_root: PathBuf) -> Result<(), String> {
+    let registry_repository = FileSystemRegistryRepository::new(RegistryPaths::new(repo_root));
     let probe = EndpointProbe;
     let service = HealthcheckService::new(HealthcheckServiceDependencies {
         endpoint_probe: &probe,

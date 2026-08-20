@@ -15,6 +15,8 @@ pub mod task_execution_request;
 pub mod task_executor;
 pub mod task_spec;
 pub mod task_spec_repository;
+pub mod worker_binding;
+pub mod worker_catalog;
 
 pub use execution_queue_repository::ExecutionQueueRepository;
 pub use inspect_status::InspectStatus;
@@ -38,3 +40,5 @@ pub use task_execution_request::TaskExecutionRequest;
 pub use task_executor::TaskExecutor;
 pub use task_spec::TaskSpec;
 pub use task_spec_repository::TaskSpecRepository;
+pub use worker_binding::WorkerBinding;
+pub use worker_catalog::WorkerCatalog;

@@ -453,3 +453,29 @@ What remains for the next Rust slice:
 - replace the current task-level DAG placement approximation with real per-node placement derived from the worker registry
 - add richer Rust run-state metadata for admission state, waiting resources, timestamps, and result paths
 - separate repository root from state root cleanly so isolated state roots do not need a symlinked `bin/rack-task`
+
+### 2026-08-20: Rust per-node placement and root-separation slice
+
+Completed in this slice:
+- added a Rust worker-catalog interface plus filesystem implementation backed by `config/workers.json`
+- updated Rust DAG execution to derive node placement from the node's declared worker binding instead of reusing task-level aggregate placement
+- changed Rust DAG execution-spec generation to persist the node-specific worker, model, backend, and resource placement into each derived exec spec
+- separated repository root from state root in the Rust CLI with explicit `--repo-root` and `--state-root` handling while preserving legacy `--root` behavior
+- updated the Python-backed Rust executor to write temporary DAG exec specs under the state root instead of assuming queue state lives under the repo root
+- hardened Rust runner behavior so executor-level errors are converted into task failures/requeues rather than leaving tasks stranded in `running/`
+
+What is now true:
+- Rust DAG admission and execution now follow the actual worker registry for each node rather than a task-level placement approximation
+- isolated control-plane state roots no longer need a symlinked `bin/rack-task` to run Rust queue flows
+- the Rust control plane can execute against one repo root while persisting durable queue state somewhere else
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+- isolated separated-root DAG smoke with custom worker bindings under `/tmp/rack-ai-rust-roots-repo` and `/tmp/rack-ai-rust-roots-state`
+- captured derived exec specs proved planner and coder nodes received different registry-backed placements
+
+What remains for the next Rust slice:
+- port richer Python run-state metadata such as timestamps, waiting resources, lease paths, and result paths into the Rust path
+- decide whether executor errors should remain normalized to generic failure or carry structured error text into durable run state
+- continue shrinking the Python queue surface now that DAG placement, lease admission, and root separation are working in Rust
