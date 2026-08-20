@@ -1,0 +1,13 @@
+[workspace]
+members = [
+  "crates/rack_ai_domain",
+  "crates/rack_ai_application",
+  "crates/rack_ai_infrastructure",
+  "crates/rack_ai_cli"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+license = "Proprietary"
+authors = ["tomp"]

@@ -294,3 +294,28 @@ What remains for the next slice:
 - install `cargo` and `rustc` on `gpurack`
 - create the initial Cargo workspace and crate layout
 - port the domain and durable state model from Python into Rust with tests first
+
+### 2026-08-20: Rust workspace bootstrap slice
+
+Completed in this slice:
+- installed `cargo`, `rustc`, and `rustfmt` on `gpurack`
+- created the initial Cargo workspace with `rack_ai_domain`, `rack_ai_application`, `rack_ai_infrastructure`, and `rack_ai_cli`
+- ported the first typed domain model into Rust for task identity, run status, attempts, timeout, placement, and queued run state
+- defined the first application-side repository interfaces and a `SubmitTask` use case
+- verified the Rust workspace with `cargo fmt` and `cargo test`
+
+What is now true:
+- Rack AI now has a real Rust application workspace on the rack rather than only a planned target architecture
+- the Rust code already encodes core control-plane concepts as typed values instead of free-form dictionaries and script state
+- application logic is beginning behind traits and dependency boundaries rather than direct script coupling
+- the Python implementation remains the behavioral oracle while Rust reaches feature parity
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+
+What remains for the next Rust slice:
+- port durable filesystem-backed repositories from the Python prototype into `rack_ai_infrastructure`
+- port run-state serialization and queue submission into Rust
+- add Rust integration tests for filesystem-backed submit and inspect flows
+- begin replacing Python command entrypoints with thin Rust CLI commands once parity exists
