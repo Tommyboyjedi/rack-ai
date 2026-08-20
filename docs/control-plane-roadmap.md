@@ -506,3 +506,20 @@ What remains for the next Rust slice:
 - restore and expand Rust test coverage around the new metadata transitions instead of relying mainly on cross-crate smoke coverage
 - add Rust status surface parity for richer DAG node inspection if more operator detail is needed
 - continue moving the durable execution core from Python wrappers into typed Rust services without forking away from the current rack behavior
+
+### 2026-08-20: Rust metadata coverage slice
+
+Completed in this slice:
+- added focused domain tests for `RunMetadata` transitions across submitted, waiting, running, requeued, completed, and failed states
+- added focused domain tests for `RunState` attempt counting, retry limits, and active-node clearing on terminal transitions
+- added application tests for `SubmitTask` so submission metadata and persisted spec writes are asserted directly
+- added application tests for `StatusRun` so Rust status serialization proves the new metadata fields are surfaced to operators
+- added infrastructure tests for file-based lease acquisition, busy-resource rejection, and lease release
+
+What is now true:
+- the new Rust metadata layer is no longer validated mainly by broad smoke behavior
+- queue admission, submission metadata, and lease persistence now have direct unit-level assertions
+- the next Rust slices can change implementation details with lower regression risk because the durable metadata contract is exercised more explicitly
+
+Verification completed in this slice:
+- `cargo test`

@@ -52,3 +52,60 @@ fn status_text(status: &RunStatus) -> &'static str {
         RunStatus::Blocked => "blocked",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use rack_ai_domain::ActiveNodeId;
+    use rack_ai_domain::AttemptLimit;
+    use rack_ai_domain::Placement;
+    use rack_ai_domain::RunMetadata;
+    use rack_ai_domain::RunState;
+    use rack_ai_domain::RunStateDraft;
+    use rack_ai_domain::TaskId;
+    use rack_ai_domain::TimeoutSeconds;
+
+    use super::StatusRun;
+
+    #[test]
+    fn serializes_run_metadata_for_status_output() {
+        let run_state = RunState::queued(RunStateDraft {
+            task_id: TaskId::new("task-77".to_string()).unwrap(),
+            attempt_limit: AttemptLimit::new(3).unwrap(),
+            timeout_seconds: TimeoutSeconds::new(90).unwrap(),
+            placement: Placement::new(
+                vec!["local-coder".to_string()],
+                vec!["gpu-2060".to_string()],
+            ),
+        })
+        .with_metadata(
+            RunMetadata::default()
+                .submitted(
+                    "2026-08-20T20:40:00Z".to_string(),
+                    "/tmp/spec.json".to_string(),
+                    "/state/queue/queued/task-77.json".to_string(),
+                )
+                .running(
+                    "2026-08-20T20:40:05Z".to_string(),
+                    "/state/queue/running/task-77.json".to_string(),
+                    BTreeMap::from([(
+                        "gpu-2060".to_string(),
+                        "/state/resources/leases/gpu-2060.json".to_string(),
+                    )]),
+                ),
+        )
+        .start(Some(ActiveNodeId::new("implement".to_string()).unwrap()));
+
+        let status_run = StatusRun::from_run_state(&run_state);
+        let json = serde_json::to_string(&status_run).unwrap();
+
+        assert!(json.contains("\"task_id\":\"task-77\""));
+        assert!(json.contains("\"status\":\"running\""));
+        assert!(json.contains("\"admission_state\":\"running\""));
+        assert!(json.contains("\"queue_path\":\"/state/queue/running/task-77.json\""));
+        assert!(json.contains("\"submitted_at\":\"2026-08-20T20:40:00Z\""));
+        assert!(json.contains("\"started_at\":\"2026-08-20T20:40:05Z\""));
+        assert!(json.contains("\"active_node_id\":\"implement\""));
+    }
+}

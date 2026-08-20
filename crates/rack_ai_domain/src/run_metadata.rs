@@ -143,3 +143,95 @@ impl RunMetadata {
         self.finished_at.as_ref()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use super::RunMetadata;
+
+    #[test]
+    fn transitions_through_waiting_running_and_requeued_states() {
+        let metadata = RunMetadata::default().submitted(
+            "2026-08-20T20:00:00Z".to_string(),
+            "/tmp/spec.json".to_string(),
+            "/state/queue/queued/task.json".to_string(),
+        );
+        let waiting = metadata.waiting_for_resources(
+            "/state/queue/queued/task.json".to_string(),
+            vec!["gpu-2060".to_string()],
+        );
+        let running = waiting.running(
+            "2026-08-20T20:00:05Z".to_string(),
+            "/state/queue/running/task.json".to_string(),
+            BTreeMap::from([(
+                "gpu-2060".to_string(),
+                "/state/resources/leases/gpu-2060.json".to_string(),
+            )]),
+        );
+        let queued = running.queued(
+            "/state/queue/queued/task.json".to_string(),
+            "2026-08-20T20:00:15Z".to_string(),
+            Some("/state/queue/history/task.result.json".to_string()),
+            Some("temporary failure".to_string()),
+        );
+
+        assert_eq!(
+            queued.submitted_at(),
+            Some(&"2026-08-20T20:00:00Z".to_string())
+        );
+        assert_eq!(queued.source_spec(), Some(&"/tmp/spec.json".to_string()));
+        assert_eq!(
+            queued.started_at(),
+            Some(&"2026-08-20T20:00:05Z".to_string())
+        );
+        assert_eq!(
+            queued.finished_at(),
+            Some(&"2026-08-20T20:00:15Z".to_string())
+        );
+        assert_eq!(queued.admission_state(), Some(&"queued".to_string()));
+        assert_eq!(
+            queued.queue_path(),
+            Some(&"/state/queue/queued/task.json".to_string())
+        );
+        assert_eq!(
+            queued.result_path(),
+            Some(&"/state/queue/history/task.result.json".to_string())
+        );
+        assert_eq!(queued.last_error(), Some(&"temporary failure".to_string()));
+        assert!(queued.waiting_on_resources().is_empty());
+        assert!(queued.lease_paths().is_empty());
+    }
+
+    #[test]
+    fn terminal_states_clear_queue_and_lease_data() {
+        let running = RunMetadata::default().running(
+            "2026-08-20T20:10:00Z".to_string(),
+            "/state/queue/running/task.json".to_string(),
+            BTreeMap::from([(
+                "gpu-4060ti".to_string(),
+                "/state/resources/leases/gpu-4060ti.json".to_string(),
+            )]),
+        );
+
+        let completed = running.clone().completed(
+            "2026-08-20T20:10:10Z".to_string(),
+            Some("/state/queue/history/task.result.json".to_string()),
+        );
+        let failed = running.failed(
+            "2026-08-20T20:10:11Z".to_string(),
+            Some("/state/queue/history/task.result.json".to_string()),
+            "boom".to_string(),
+        );
+
+        assert_eq!(completed.admission_state(), Some(&"completed".to_string()));
+        assert_eq!(completed.queue_path(), None);
+        assert!(completed.lease_paths().is_empty());
+        assert_eq!(completed.last_error(), None);
+
+        assert_eq!(failed.admission_state(), Some(&"failed".to_string()));
+        assert_eq!(failed.queue_path(), None);
+        assert!(failed.lease_paths().is_empty());
+        assert_eq!(failed.last_error(), Some(&"boom".to_string()));
+    }
+}

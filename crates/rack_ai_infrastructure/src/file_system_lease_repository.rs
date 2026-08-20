@@ -78,3 +78,68 @@ impl FileSystemLeaseRepository {
         self.paths.leases_dir().join(format!("{resource_id}.json"))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use rack_ai_application::LeaseRepository;
+    use rack_ai_domain::Placement;
+    use rack_ai_domain::TaskId;
+
+    use super::FileSystemLeaseRepository;
+    use crate::RepositoryPaths;
+
+    #[test]
+    fn acquires_blocks_and_releases_resource_leases() {
+        let root = temp_root();
+        let repository = FileSystemLeaseRepository::new(RepositoryPaths::new(root.clone()));
+        let placement = Placement::new(
+            vec!["local-coder".to_string()],
+            vec!["gpu-2060".to_string()],
+        )
+        .with_models(vec!["qwen25-coder-3b-awq-local-coder".to_string()]);
+
+        let lease_paths = repository
+            .acquire(&TaskId::new("task-lease".to_string()).unwrap(), &placement)
+            .unwrap();
+        let blocked = repository.blocked_resources(&placement).unwrap();
+        let lease_json =
+            fs::read_to_string(root.join("state/resources/leases/gpu-2060.json")).unwrap();
+
+        assert_eq!(blocked, vec!["gpu-2060".to_string()]);
+        assert!(lease_paths.contains_key("gpu-2060"));
+        assert!(lease_json.contains("task-lease"));
+        assert!(lease_json.contains("local-coder"));
+
+        repository.release(&placement).unwrap();
+        assert!(repository.blocked_resources(&placement).unwrap().is_empty());
+    }
+
+    #[test]
+    fn refuses_to_acquire_busy_resource() {
+        let root = temp_root();
+        let repository = FileSystemLeaseRepository::new(RepositoryPaths::new(root.clone()));
+        let placement = Placement::new(vec!["worker".to_string()], vec!["gpu-4060ti".to_string()]);
+
+        repository
+            .acquire(&TaskId::new("first".to_string()).unwrap(), &placement)
+            .unwrap();
+        let error = repository
+            .acquire(&TaskId::new("second".to_string()).unwrap(), &placement)
+            .unwrap_err();
+
+        assert!(error.contains("resource busy: gpu-4060ti"));
+    }
+
+    fn temp_root() -> std::path::PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("rack-ai-lease-{nanos}"));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+}
