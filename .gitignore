@@ -7,3 +7,13 @@ __pycache__/
 .env
 .env.*
 logs/
+state/queue/history/*.json
+state/queue/queued/*.json
+state/queue/running/*.json
+state/runs/*.json
+!state/.gitkeep
+!state/queue/.gitkeep
+!state/queue/history/.gitkeep
+!state/queue/queued/.gitkeep
+!state/queue/running/.gitkeep
+!state/runs/.gitkeep
