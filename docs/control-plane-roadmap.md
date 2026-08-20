@@ -276,3 +276,21 @@ What remains for the next slice of Phase 1:
 - add operator commands for retry, cancel, and requeue against durable run state
 - add explicit blocked-state handling for dependency deadlocks or exhausted prerequisites
 - improve scheduler policy so admission ordering is intentional rather than simple queue scan order
+
+### 2026-08-20: Rust transition decision and coding constraints
+
+Completed in this slice:
+- formally declared the current Python control-plane code to be the reference prototype rather than the target architecture
+- documented the target Rust application structure in `docs/rust-application-architecture.md`
+- recorded the coding constraints for the Rust build, including interface-first design, composition, small types, and full automated coverage
+- updated the repository README to reflect the transition from prototype Python to planned Rust application
+
+What is now true:
+- Rack AI has an explicit language and architecture direction for the long-term control plane
+- future implementation work should be judged against the Rust application structure rather than continued script growth
+- the next meaningful engineering step is toolchain installation and Cargo workspace creation on the rack
+
+What remains for the next slice:
+- install `cargo` and `rustc` on `gpurack`
+- create the initial Cargo workspace and crate layout
+- port the domain and durable state model from Python into Rust with tests first
