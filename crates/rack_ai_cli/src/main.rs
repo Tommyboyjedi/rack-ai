@@ -17,6 +17,7 @@ use rack_ai_domain::TaskId;
 use rack_ai_domain::TimeoutSeconds;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemExecutionQueueRepository;
+use rack_ai_infrastructure::FileSystemLeaseRepository;
 use rack_ai_infrastructure::FileSystemQueueStateRepository;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRunStateRepository;
@@ -100,17 +101,20 @@ fn status(paths: RepositoryPaths) -> Result<(), String> {
 
 fn run_next(paths: RepositoryPaths, root: PathBuf) -> Result<(), String> {
     let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
+    let lease_repository = FileSystemLeaseRepository::new(paths.clone());
     let run_state_repository = FileSystemRunStateRepository::new(paths.clone());
     let task_spec_repository = FileSystemTaskSpecRepository::new(paths);
     let task_executor = PythonRackTaskExecutor::new(root);
     let service = RunNextTask::new(RunNextTaskDependencies {
         execution_queue_repository: &execution_queue_repository,
+        lease_repository: &lease_repository,
         run_state_repository: &run_state_repository,
         task_executor: &task_executor,
         task_spec_repository: &task_spec_repository,
     });
     match service.execute()? {
         RunNextOutcome::NoQueuedTasks => println!("No queued tasks."),
+        RunNextOutcome::NoAdmissibleTasks => println!("No admissible queued tasks."),
         RunNextOutcome::Succeeded(task_id) => println!("{task_id}"),
         RunNextOutcome::Requeued(task_id) => println!("Requeued {task_id}"),
         RunNextOutcome::Failed(task_id) => println!("Failed {task_id}"),

@@ -1,7 +1,10 @@
+use rack_ai_domain::ActiveNodeId;
+use rack_ai_domain::Placement;
 use rack_ai_domain::RunState;
 use rack_ai_domain::TaskId;
 
 use crate::ExecutionQueueRepository;
+use crate::LeaseRepository;
 use crate::QueuedTask;
 use crate::RunStateRepository;
 use crate::TaskExecutionRequest;
@@ -11,6 +14,7 @@ use crate::TaskSpecRepository;
 
 pub struct RunNextTask<'a> {
     execution_queue_repository: &'a dyn ExecutionQueueRepository,
+    lease_repository: &'a dyn LeaseRepository,
     run_state_repository: &'a dyn RunStateRepository,
     task_executor: &'a dyn TaskExecutor,
     task_spec_repository: &'a dyn TaskSpecRepository,
@@ -18,6 +22,7 @@ pub struct RunNextTask<'a> {
 
 pub struct RunNextTaskDependencies<'a> {
     pub execution_queue_repository: &'a dyn ExecutionQueueRepository,
+    pub lease_repository: &'a dyn LeaseRepository,
     pub run_state_repository: &'a dyn RunStateRepository,
     pub task_executor: &'a dyn TaskExecutor,
     pub task_spec_repository: &'a dyn TaskSpecRepository,
@@ -25,15 +30,25 @@ pub struct RunNextTaskDependencies<'a> {
 
 pub enum RunNextOutcome {
     NoQueuedTasks,
+    NoAdmissibleTasks,
     Succeeded(String),
     Requeued(String),
     Failed(String),
+}
+
+struct SelectedTask {
+    queued_task: QueuedTask,
+    run_state: RunState,
+    task_spec: TaskSpec,
+    active_node_id: Option<ActiveNodeId>,
+    placement: Placement,
 }
 
 impl<'a> RunNextTask<'a> {
     pub fn new(dependencies: RunNextTaskDependencies<'a>) -> Self {
         Self {
             execution_queue_repository: dependencies.execution_queue_repository,
+            lease_repository: dependencies.lease_repository,
             run_state_repository: dependencies.run_state_repository,
             task_executor: dependencies.task_executor,
             task_spec_repository: dependencies.task_spec_repository,
@@ -41,55 +56,90 @@ impl<'a> RunNextTask<'a> {
     }
 
     pub fn execute(&self) -> Result<RunNextOutcome, String> {
-        let queued_task = match self.execution_queue_repository.take_next()? {
-            Some(value) => value,
-            None => return Ok(RunNextOutcome::NoQueuedTasks),
+        let selection = self.select_task()?;
+        let selected_task = match selection {
+            Selection::NoneQueued => return Ok(RunNextOutcome::NoQueuedTasks),
+            Selection::NoneAdmissible => return Ok(RunNextOutcome::NoAdmissibleTasks),
+            Selection::Selected(value) => value,
         };
-        let task_id = TaskId::new(queued_task.task_id().to_string())?;
-        let run_state = self.load_run_state(&task_id)?;
-        let task_spec = self.task_spec_repository.load(&queued_task)?;
-        if task_spec.has_dag() {
-            return self.execute_dag_task(queued_task, run_state, task_spec);
-        }
-        self.execute_linear_task(queued_task, run_state)
+        self.lease_repository
+            .acquire(selected_task.run_state.task_id(), &selected_task.placement)?;
+        let result = if selected_task.task_spec.has_dag() {
+            self.execute_dag_task(selected_task)
+        } else {
+            self.execute_linear_task(selected_task)
+        };
+        result
     }
 
-    fn execute_dag_task(
+    fn execute_dag_task(&self, selected_task: SelectedTask) -> Result<RunNextOutcome, String> {
+        let dag_run_state = selected_task
+            .run_state
+            .dag_run_state()
+            .cloned()
+            .ok_or("dag run state missing".to_string())?
+            .mark_running(
+                selected_task
+                    .active_node_id
+                    .as_ref()
+                    .ok_or("active dag node missing".to_string())?,
+            )?;
+        let started_run_state = selected_task
+            .run_state
+            .start(selected_task.active_node_id.clone())
+            .with_dag_run_state(dag_run_state);
+        self.run_state_repository.save(&started_run_state)?;
+        let node_id = selected_task
+            .active_node_id
+            .ok_or("active dag node missing".to_string())?;
+        let execution_request = TaskExecutionRequest::new(
+            selected_task.queued_task.task_id().to_string(),
+            selected_task.queued_task.spec_path().to_string(),
+        )
+        .with_execution_spec_json(
+            selected_task
+                .task_spec
+                .build_execution_spec_json(&node_id)?,
+        );
+        let execution = self.task_executor.execute(&execution_request);
+        let outcome = self.resolve_dag_execution(
+            selected_task.queued_task,
+            started_run_state,
+            node_id,
+            execution,
+        );
+        self.lease_repository.release(&selected_task.placement)?;
+        outcome
+    }
+
+    fn execute_linear_task(&self, selected_task: SelectedTask) -> Result<RunNextOutcome, String> {
+        let started_run_state = selected_task.run_state.start(None);
+        self.run_state_repository.save(&started_run_state)?;
+        let execution_request = TaskExecutionRequest::new(
+            selected_task.queued_task.task_id().to_string(),
+            selected_task.queued_task.spec_path().to_string(),
+        );
+        let execution = self.task_executor.execute(&execution_request);
+        let outcome =
+            self.resolve_linear_execution(selected_task.queued_task, started_run_state, execution);
+        self.lease_repository.release(&selected_task.placement)?;
+        outcome
+    }
+
+    fn resolve_dag_execution(
         &self,
         queued_task: QueuedTask,
-        run_state: RunState,
-        task_spec: TaskSpec,
+        started_run_state: RunState,
+        node_id: ActiveNodeId,
+        execution: Result<crate::TaskExecution, String>,
     ) -> Result<RunNextOutcome, String> {
-        let current_run_state = self.ensure_dag_run_state(run_state, &task_spec)?;
-        let dag_run_state = current_run_state
+        let dag_run_state = started_run_state
             .dag_run_state()
             .cloned()
             .ok_or("dag run state missing".to_string())?;
-        if dag_run_state.all_succeeded() {
-            self.execution_queue_repository.complete(&queued_task)?;
-            self.run_state_repository.save(
-                &current_run_state
-                    .succeed()
-                    .with_dag_run_state(dag_run_state),
-            )?;
-            return Ok(RunNextOutcome::Succeeded(queued_task.task_id().to_string()));
-        }
-        let node_id = task_spec
-            .first_ready_node_id(&dag_run_state)
-            .ok_or("no ready dag node available".to_string())?;
-        let started_dag_run_state = dag_run_state.mark_running(&node_id)?;
-        let started_run_state = current_run_state
-            .start(Some(node_id.clone()))
-            .with_dag_run_state(started_dag_run_state.clone());
-        self.run_state_repository.save(&started_run_state)?;
-        let execution_request = TaskExecutionRequest::new(
-            queued_task.task_id().to_string(),
-            queued_task.spec_path().to_string(),
-        )
-        .with_execution_spec_json(task_spec.build_execution_spec_json(&node_id)?);
-        let execution = self.task_executor.execute(&execution_request)?;
+        let execution = execution?;
         if execution.was_successful() {
-            let succeeded_dag_run_state = started_dag_run_state.mark_succeeded(&node_id)?;
+            let succeeded_dag_run_state = dag_run_state.mark_succeeded(&node_id)?;
             if succeeded_dag_run_state.all_succeeded() {
                 self.execution_queue_repository.complete(&queued_task)?;
                 self.run_state_repository.save(
@@ -109,7 +159,7 @@ impl<'a> RunNextTask<'a> {
         }
         if started_run_state.can_retry() {
             let pending_dag_run_state =
-                started_dag_run_state.mark_pending(&node_id, "execution failed".to_string())?;
+                dag_run_state.mark_pending(&node_id, "execution failed".to_string())?;
             self.execution_queue_repository.requeue(&queued_task)?;
             self.run_state_repository.save(
                 &started_run_state
@@ -119,7 +169,7 @@ impl<'a> RunNextTask<'a> {
             return Ok(RunNextOutcome::Requeued(queued_task.task_id().to_string()));
         }
         let failed_dag_run_state =
-            started_dag_run_state.mark_failed(&node_id, "execution failed".to_string())?;
+            dag_run_state.mark_failed(&node_id, "execution failed".to_string())?;
         self.execution_queue_repository.complete(&queued_task)?;
         self.run_state_repository.save(
             &started_run_state
@@ -129,18 +179,13 @@ impl<'a> RunNextTask<'a> {
         Ok(RunNextOutcome::Failed(queued_task.task_id().to_string()))
     }
 
-    fn execute_linear_task(
+    fn resolve_linear_execution(
         &self,
         queued_task: QueuedTask,
-        run_state: RunState,
+        started_run_state: RunState,
+        execution: Result<crate::TaskExecution, String>,
     ) -> Result<RunNextOutcome, String> {
-        let started_run_state = run_state.start(None);
-        self.run_state_repository.save(&started_run_state)?;
-        let execution_request = TaskExecutionRequest::new(
-            queued_task.task_id().to_string(),
-            queued_task.spec_path().to_string(),
-        );
-        let execution = self.task_executor.execute(&execution_request)?;
+        let execution = execution?;
         if execution.was_successful() {
             self.execution_queue_repository.complete(&queued_task)?;
             self.run_state_repository
@@ -155,6 +200,69 @@ impl<'a> RunNextTask<'a> {
         self.execution_queue_repository.complete(&queued_task)?;
         self.run_state_repository.save(&started_run_state.fail())?;
         Ok(RunNextOutcome::Failed(queued_task.task_id().to_string()))
+    }
+
+    fn select_task(&self) -> Result<Selection, String> {
+        let queued_tasks = self.execution_queue_repository.list()?;
+        if queued_tasks.is_empty() {
+            return Ok(Selection::NoneQueued);
+        }
+        for queued_task in queued_tasks {
+            let task_id = TaskId::new(queued_task.task_id().to_string())?;
+            let run_state = self.load_run_state(&task_id)?;
+            let task_spec = self.task_spec_repository.load(&queued_task)?;
+            let plan = self.plan_task(run_state, task_spec)?;
+            let planned = match plan {
+                Plan::Waiting => continue,
+                Plan::Ready(value) => value,
+            };
+            let blocked = self
+                .lease_repository
+                .blocked_resources(&planned.placement)?;
+            if !blocked.is_empty() {
+                continue;
+            }
+            let claimed = self.execution_queue_repository.claim(&queued_task)?;
+            return Ok(Selection::Selected(SelectedTask {
+                queued_task: claimed,
+                run_state: planned.run_state,
+                task_spec: planned.task_spec,
+                active_node_id: planned.active_node_id,
+                placement: planned.placement,
+            }));
+        }
+        Ok(Selection::NoneAdmissible)
+    }
+
+    fn plan_task(&self, run_state: RunState, task_spec: TaskSpec) -> Result<Plan, String> {
+        if !task_spec.has_dag() {
+            let placement = run_state.placement().clone();
+            return Ok(Plan::Ready(ReadyTask {
+                run_state,
+                task_spec,
+                active_node_id: None,
+                placement,
+            }));
+        }
+        let run_state = self.ensure_dag_run_state(run_state, &task_spec)?;
+        let dag_run_state = run_state
+            .dag_run_state()
+            .cloned()
+            .ok_or("dag run state missing".to_string())?;
+        if dag_run_state.all_succeeded() {
+            return Ok(Plan::Waiting);
+        }
+        let node_id = match task_spec.first_ready_node_id(&dag_run_state) {
+            Some(value) => value,
+            None => return Ok(Plan::Waiting),
+        };
+        let placement = run_state.placement().clone();
+        Ok(Plan::Ready(ReadyTask {
+            run_state,
+            task_spec,
+            active_node_id: Some(node_id),
+            placement,
+        }))
     }
 
     fn ensure_dag_run_state(
@@ -178,6 +286,24 @@ impl<'a> RunNextTask<'a> {
     }
 }
 
+enum Selection {
+    NoneQueued,
+    NoneAdmissible,
+    Selected(SelectedTask),
+}
+
+enum Plan {
+    Waiting,
+    Ready(ReadyTask),
+}
+
+struct ReadyTask {
+    run_state: RunState,
+    task_spec: TaskSpec,
+    active_node_id: Option<ActiveNodeId>,
+    placement: Placement,
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::RefCell;
@@ -195,6 +321,7 @@ mod tests {
     use super::RunNextTask;
     use super::RunNextTaskDependencies;
     use crate::ExecutionQueueRepository;
+    use crate::LeaseRepository;
     use crate::QueuedTask;
     use crate::RunStateRepository;
     use crate::TaskExecution;
@@ -205,26 +332,51 @@ mod tests {
 
     #[test]
     fn returns_no_queued_tasks_when_queue_is_empty() {
+        let task_spec_repository = IdleTaskSpecRepository;
+        let lease_repository = OpenLeaseRepository;
         let service = RunNextTask::new(RunNextTaskDependencies {
             execution_queue_repository: &EmptyQueueRepository,
+            lease_repository: &lease_repository,
             run_state_repository: &IdleRunStateRepository,
             task_executor: &SuccessfulExecutor,
-            task_spec_repository: &IdleTaskSpecRepository,
+            task_spec_repository: &task_spec_repository,
         });
         let outcome = service.execute().unwrap();
         assert!(matches!(outcome, RunNextOutcome::NoQueuedTasks));
     }
 
     #[test]
+    fn returns_no_admissible_tasks_when_resources_are_busy() {
+        let task_spec_repository = MemoryTaskSpecRepository::linear();
+        let lease_repository = BusyLeaseRepository;
+        let run_states = RefCell::new(vec![sample_run_state("task-busy")]);
+        let queue = SingleTaskQueueRepository::new("task-busy");
+        let run_state_repository = MemoryRunStateRepository {
+            run_states: &run_states,
+        };
+        let service = RunNextTask::new(RunNextTaskDependencies {
+            execution_queue_repository: &queue,
+            lease_repository: &lease_repository,
+            run_state_repository: &run_state_repository,
+            task_executor: &SuccessfulExecutor,
+            task_spec_repository: &task_spec_repository,
+        });
+        let outcome = service.execute().unwrap();
+        assert!(matches!(outcome, RunNextOutcome::NoAdmissibleTasks));
+    }
+
+    #[test]
     fn marks_successful_linear_task_succeeded() {
+        let task_spec_repository = MemoryTaskSpecRepository::linear();
+        let lease_repository = TrackingLeaseRepository::new();
         let run_states = RefCell::new(vec![sample_run_state("task-a")]);
         let queue = SingleTaskQueueRepository::new("task-a");
         let run_state_repository = MemoryRunStateRepository {
             run_states: &run_states,
         };
-        let task_spec_repository = MemoryTaskSpecRepository::linear();
         let service = RunNextTask::new(RunNextTaskDependencies {
             execution_queue_repository: &queue,
+            lease_repository: &lease_repository,
             run_state_repository: &run_state_repository,
             task_executor: &SuccessfulExecutor,
             task_spec_repository: &task_spec_repository,
@@ -235,18 +387,22 @@ mod tests {
             run_states.borrow().last().unwrap().status(),
             &RunStatus::Succeeded
         );
+        assert_eq!(*lease_repository.acquired.borrow(), 1);
+        assert_eq!(*lease_repository.released.borrow(), 1);
     }
 
     #[test]
     fn requeues_failed_linear_task_when_attempts_remain() {
+        let task_spec_repository = MemoryTaskSpecRepository::linear();
+        let lease_repository = TrackingLeaseRepository::new();
         let run_states = RefCell::new(vec![sample_run_state("task-b")]);
         let queue = SingleTaskQueueRepository::new("task-b");
         let run_state_repository = MemoryRunStateRepository {
             run_states: &run_states,
         };
-        let task_spec_repository = MemoryTaskSpecRepository::linear();
         let service = RunNextTask::new(RunNextTaskDependencies {
             execution_queue_repository: &queue,
+            lease_repository: &lease_repository,
             run_state_repository: &run_state_repository,
             task_executor: &FailingExecutor,
             task_spec_repository: &task_spec_repository,
@@ -261,14 +417,16 @@ mod tests {
 
     #[test]
     fn advances_dag_task_by_requeueing_after_successful_node() {
-        let run_states = RefCell::new(vec![sample_run_state("task-c")]);
+        let task_spec_repository = MemoryTaskSpecRepository::dag();
+        let lease_repository = TrackingLeaseRepository::new();
+        let run_states = RefCell::new(vec![sample_dag_run_state("task-c")]);
         let queue = SingleTaskQueueRepository::new("task-c");
         let run_state_repository = MemoryRunStateRepository {
             run_states: &run_states,
         };
-        let task_spec_repository = MemoryTaskSpecRepository::dag();
         let service = RunNextTask::new(RunNextTaskDependencies {
             execution_queue_repository: &queue,
+            lease_repository: &lease_repository,
             run_state_repository: &run_state_repository,
             task_executor: &SuccessfulExecutor,
             task_spec_repository: &task_spec_repository,
@@ -285,14 +443,16 @@ mod tests {
 
     #[test]
     fn fails_dag_task_after_exhausting_attempts() {
-        let run_states = RefCell::new(vec![sample_single_attempt_run_state("task-d")]);
+        let task_spec_repository = MemoryTaskSpecRepository::dag();
+        let lease_repository = TrackingLeaseRepository::new();
+        let run_states = RefCell::new(vec![sample_single_attempt_dag_run_state("task-d")]);
         let queue = SingleTaskQueueRepository::new("task-d");
         let run_state_repository = MemoryRunStateRepository {
             run_states: &run_states,
         };
-        let task_spec_repository = MemoryTaskSpecRepository::dag();
         let service = RunNextTask::new(RunNextTaskDependencies {
             execution_queue_repository: &queue,
+            lease_repository: &lease_repository,
             run_state_repository: &run_state_repository,
             task_executor: &FailingExecutor,
             task_spec_repository: &task_spec_repository,
@@ -308,8 +468,11 @@ mod tests {
     struct EmptyQueueRepository;
 
     impl ExecutionQueueRepository for EmptyQueueRepository {
-        fn take_next(&self) -> Result<Option<QueuedTask>, String> {
-            Ok(None)
+        fn list(&self) -> Result<Vec<QueuedTask>, String> {
+            Ok(vec![])
+        }
+        fn claim(&self, _task: &QueuedTask) -> Result<QueuedTask, String> {
+            Err("not used".to_string())
         }
         fn complete(&self, _task: &QueuedTask) -> Result<(), String> {
             Ok(())
@@ -321,28 +484,35 @@ mod tests {
 
     struct SingleTaskQueueRepository {
         task_id: String,
-        taken: RefCell<bool>,
+        claimed: RefCell<bool>,
     }
 
     impl SingleTaskQueueRepository {
         fn new(task_id: &str) -> Self {
             Self {
                 task_id: task_id.to_string(),
-                taken: RefCell::new(false),
+                claimed: RefCell::new(false),
             }
         }
     }
 
     impl ExecutionQueueRepository for SingleTaskQueueRepository {
-        fn take_next(&self) -> Result<Option<QueuedTask>, String> {
-            if *self.taken.borrow() {
-                return Ok(None);
+        fn list(&self) -> Result<Vec<QueuedTask>, String> {
+            if *self.claimed.borrow() {
+                return Ok(vec![]);
             }
-            *self.taken.borrow_mut() = true;
-            Ok(Some(QueuedTask::new(
+            Ok(vec![QueuedTask::new(
                 self.task_id.clone(),
                 "/tmp/spec.json".to_string(),
-            )))
+            )])
+        }
+
+        fn claim(&self, task: &QueuedTask) -> Result<QueuedTask, String> {
+            *self.claimed.borrow_mut() = true;
+            Ok(QueuedTask::new(
+                task.task_id().to_string(),
+                "/tmp/running.json".to_string(),
+            ))
         }
 
         fn complete(&self, _task: &QueuedTask) -> Result<(), String> {
@@ -421,7 +591,6 @@ mod tests {
         fn save(&self, _task_id: &str, _spec_json: &str) -> Result<(), String> {
             Ok(())
         }
-
         fn load(&self, _task: &QueuedTask) -> Result<TaskSpec, String> {
             Ok(self.task_spec.clone())
         }
@@ -433,7 +602,6 @@ mod tests {
         fn save(&self, _task_id: &str, _spec_json: &str) -> Result<(), String> {
             Ok(())
         }
-
         fn load(&self, _task: &QueuedTask) -> Result<TaskSpec, String> {
             Err("no task spec".to_string())
         }
@@ -455,6 +623,62 @@ mod tests {
         }
     }
 
+    struct OpenLeaseRepository;
+
+    impl LeaseRepository for OpenLeaseRepository {
+        fn blocked_resources(&self, _placement: &Placement) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn acquire(&self, _task_id: &TaskId, _placement: &Placement) -> Result<(), String> {
+            Ok(())
+        }
+        fn release(&self, _placement: &Placement) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct BusyLeaseRepository;
+
+    impl LeaseRepository for BusyLeaseRepository {
+        fn blocked_resources(&self, _placement: &Placement) -> Result<Vec<String>, String> {
+            Ok(vec!["gpu".to_string()])
+        }
+        fn acquire(&self, _task_id: &TaskId, _placement: &Placement) -> Result<(), String> {
+            Ok(())
+        }
+        fn release(&self, _placement: &Placement) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    struct TrackingLeaseRepository {
+        acquired: RefCell<u32>,
+        released: RefCell<u32>,
+    }
+
+    impl TrackingLeaseRepository {
+        fn new() -> Self {
+            Self {
+                acquired: RefCell::new(0),
+                released: RefCell::new(0),
+            }
+        }
+    }
+
+    impl LeaseRepository for TrackingLeaseRepository {
+        fn blocked_resources(&self, _placement: &Placement) -> Result<Vec<String>, String> {
+            Ok(vec![])
+        }
+        fn acquire(&self, _task_id: &TaskId, _placement: &Placement) -> Result<(), String> {
+            *self.acquired.borrow_mut() += 1;
+            Ok(())
+        }
+        fn release(&self, _placement: &Placement) -> Result<(), String> {
+            *self.released.borrow_mut() += 1;
+            Ok(())
+        }
+    }
+
     fn sample_run_state(task_id: &str) -> RunState {
         RunState::queued(RunStateDraft {
             task_id: TaskId::new(task_id.to_string()).unwrap(),
@@ -464,12 +688,21 @@ mod tests {
         })
     }
 
-    fn sample_single_attempt_run_state(task_id: &str) -> RunState {
+    fn sample_dag_run_state(task_id: &str) -> RunState {
+        RunState::queued(RunStateDraft {
+            task_id: TaskId::new(task_id.to_string()).unwrap(),
+            attempt_limit: AttemptLimit::new(2).unwrap(),
+            timeout_seconds: TimeoutSeconds::new(60).unwrap(),
+            placement: Placement::new(vec!["planner".to_string()], vec!["gpu".to_string()]),
+        })
+    }
+
+    fn sample_single_attempt_dag_run_state(task_id: &str) -> RunState {
         RunState::queued(RunStateDraft {
             task_id: TaskId::new(task_id.to_string()).unwrap(),
             attempt_limit: AttemptLimit::new(1).unwrap(),
             timeout_seconds: TimeoutSeconds::new(60).unwrap(),
-            placement: Placement::new(vec!["worker".to_string()], vec!["gpu".to_string()]),
+            placement: Placement::new(vec!["planner".to_string()], vec!["gpu".to_string()]),
         })
     }
 }

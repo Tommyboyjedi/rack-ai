@@ -1,5 +1,6 @@
 pub mod endpoint_probe;
 pub mod file_system_execution_queue_repository;
+pub mod file_system_lease_repository;
 pub mod file_system_queue_state_repository;
 pub mod file_system_registry_repository;
 pub mod file_system_run_state_repository;
@@ -19,6 +20,7 @@ pub mod workers_document;
 
 pub use endpoint_probe::EndpointProbe;
 pub use file_system_execution_queue_repository::FileSystemExecutionQueueRepository;
+pub use file_system_lease_repository::FileSystemLeaseRepository;
 pub use file_system_queue_state_repository::FileSystemQueueStateRepository;
 pub use file_system_registry_repository::FileSystemRegistryRepository;
 pub use file_system_run_state_repository::FileSystemRunStateRepository;

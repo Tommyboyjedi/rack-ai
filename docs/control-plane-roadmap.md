@@ -430,3 +430,26 @@ What remains for the next Rust slice:
 - port lease-aware resource admission into the Rust runner so queue selection respects live resource occupancy before execution
 - port richer run metadata such as result paths, timestamps, and structured failure reasons
 - replace more of the Python durable queue surface once the Rust control-plane behavior fully matches the live runner
+
+### 2026-08-20: Rust lease-aware admission slice
+
+Completed in this slice:
+- added Rust queue listing and claiming so admission policy lives in the application layer rather than the filesystem queue repository
+- added a filesystem-backed Rust lease repository using durable files under `state/resources/leases/`
+- updated the Rust `run-next` flow to skip busy queued tasks, acquire leases only for the selected task, and release leases across success, requeue, and failure paths
+- extended the Rust CLI to report `No admissible queued tasks.` when queue state exists but all compatible resources are busy
+
+What is now true:
+- the Rust control-plane path no longer blindly claims the first queued task when its required resource is already occupied
+- queue admission and lease lifecycle now exist in the Rust runner instead of only in the Python runner
+- isolated control-plane smoke verification can now prove busy-resource deferral without touching the live rack queue
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+- isolated busy-resource smoke under `/tmp/rack-ai-rust-admission-smoke`
+
+What remains for the next Rust slice:
+- replace the current task-level DAG placement approximation with real per-node placement derived from the worker registry
+- add richer Rust run-state metadata for admission state, waiting resources, timestamps, and result paths
+- separate repository root from state root cleanly so isolated state roots do not need a symlinked `bin/rack-task`
