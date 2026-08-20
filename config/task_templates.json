@@ -1,0 +1,67 @@
+{
+  "plan": {
+    "description": "Planning only on the coordinator GPU.",
+    "steps": [
+      {
+        "name": "plan",
+        "worker": "local-primary",
+        "prompt": "Review the following request, form a concrete execution plan, and reply with exactly COMPLETE once the plan is ready. Do not modify project files unless the request explicitly asks you to.\n\nRequest:\n{request}"
+      }
+    ]
+  },
+  "implement": {
+    "description": "Direct implementation on the coder worker.",
+    "steps": [
+      {
+        "name": "implement",
+        "worker": "local-coder",
+        "prompt": "{request}"
+      }
+    ]
+  },
+  "verify": {
+    "description": "Verification on the coordinator GPU.",
+    "steps": [
+      {
+        "name": "verify",
+        "worker": "local-primary",
+        "prompt": "Verify the following request has been satisfied. Use your tools as needed, then reply with exactly COMPLETE.\n\nRequest:\n{request}"
+      }
+    ]
+  },
+  "patch": {
+    "description": "Plan, implement, and verify a coding request.",
+    "steps": [
+      {
+        "name": "plan",
+        "worker": "local-primary",
+        "prompt": "Create a concise execution plan for the following request. Use tools only if they are genuinely needed. When the plan is ready, reply with exactly COMPLETE.\n\nRequest:\n{request}"
+      },
+      {
+        "name": "implement",
+        "worker": "local-coder",
+        "prompt": "{request}"
+      },
+      {
+        "name": "verify",
+        "worker": "local-primary",
+        "prompt": "Verify the requested work is complete. Use your tools as needed, then reply with exactly COMPLETE.\n\nRequest:\n{request}"
+      }
+    ]
+  },
+  "test": {
+    "description": "Run requested tests and verify results.",
+    "steps": [
+      {
+        "name": "test",
+        "worker": "local-coder",
+        "prompt": "Using your tools, run the requested tests or validation steps and collect the relevant outputs. Reply with exactly COMPLETE when done.\n\nRequest:\n{request}"
+      },
+      {
+        "name": "verify",
+        "worker": "local-primary",
+        "prompt": "Inspect the results of the following test request and verify success. Reply with exactly COMPLETE when verification is done.\n\nRequest:\n{request}"
+      }
+    ]
+  }
+}

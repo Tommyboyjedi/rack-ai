@@ -1,3 +1,3 @@
 # Config
 
-This directory will hold version pins, model-role mappings, and policy/config files for the rack.
+This directory holds version pins, model-role mappings, task templates, and policy/config files for the rack.

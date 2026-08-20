@@ -7,6 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def iso_z(ts: datetime) -> str:
+    return ts.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
 def load_spec(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -68,12 +76,21 @@ def build_steps(spec: dict) -> list[dict]:
     }]
 
 
-def execute_step(repo_root: Path, step: dict) -> dict:
+def summarize_step(result: dict) -> str:
+    if not result["ok"]:
+        return f"{result['name']} failed on {result['worker']}"
+    if result["artifacts"]:
+        ok_count = sum(1 for item in result["artifacts"] if item.get("exists"))
+        return f"{result['name']} passed with {ok_count} artifact checks"
+    return f"{result['name']} passed"
+
+
+def execute_step(repo_root: Path, step: dict, index: int) -> dict:
     worker = step.get("worker")
     cwd = step.get("cwd")
     prompt = step.get("prompt")
     artifacts = step.get("artifacts", [])
-    name = step.get("name", worker or "unnamed-step")
+    name = step.get("name", worker or f"step-{index}")
 
     if not worker or not cwd or not prompt:
         raise ValueError(f"step {name!r} must include worker, cwd, and prompt")
@@ -82,7 +99,9 @@ def execute_step(repo_root: Path, step: dict) -> dict:
 
     worker_bin = resolve_worker(repo_root, worker)
     cmd = [str(worker_bin), "--cwd", cwd, "--", prompt]
+    started = utc_now()
     proc = subprocess.run(cmd, capture_output=True, text=True)
+    finished = utc_now()
     artifact_results = validate_artifacts(artifacts)
     artifact_failures = [
         item for item in artifact_results
@@ -91,7 +110,8 @@ def execute_step(repo_root: Path, step: dict) -> dict:
         or item.get("contains_match") is False
     ]
 
-    return {
+    result = {
+        "index": index,
         "name": name,
         "worker": worker,
         "cwd": cwd,
@@ -100,18 +120,23 @@ def execute_step(repo_root: Path, step: dict) -> dict:
         "stdout": proc.stdout,
         "stderr": proc.stderr,
         "artifacts": artifact_results,
+        "started_at": iso_z(started),
+        "finished_at": iso_z(finished),
+        "duration_seconds": round((finished - started).total_seconds(), 3),
         "ok": proc.returncode == 0 and not artifact_failures,
     }
+    result["summary"] = summarize_step(result)
+    return result
 
 
 def write_run_log(repo_root: Path, result: dict) -> str:
     log_dir = repo_root / "logs" / "runs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    log_path = log_dir / f"{run_id}-rack-task.json"
+    run_id = result["task_id"]
+    log_path = log_dir / f"{run_id}.json"
     suffix = 1
     while log_path.exists():
-        log_path = log_dir / f"{run_id}-rack-task-{suffix}.json"
+        log_path = log_dir / f"{run_id}-{suffix}.json"
         suffix += 1
     with log_path.open("w", encoding="utf-8") as handle:
         json.dump(result, handle, indent=2)
@@ -130,21 +155,31 @@ def main() -> int:
     spec = load_spec(spec_path)
     steps = build_steps(spec)
 
+    started = utc_now()
     step_results = []
     overall_ok = True
-    for step in steps:
-        result = execute_step(repo_root, step)
+    for index, step in enumerate(steps, start=1):
+        result = execute_step(repo_root, step, index)
         step_results.append(result)
         if not result["ok"]:
             overall_ok = False
             break
+    finished = utc_now()
 
+    task_id = spec.get("task_id") or finished.strftime("%Y%m%dT%H%M%SZ-rack-task")
     final = {
+        "task_id": task_id,
+        "template": spec.get("template", "legacy"),
+        "request": spec.get("request"),
         "spec": str(spec_path),
         "step_count": len(steps),
+        "started_at": iso_z(started),
+        "finished_at": iso_z(finished),
+        "duration_seconds": round((finished - started).total_seconds(), 3),
         "steps": step_results,
         "ok": overall_ok,
     }
+    final["summary"] = [step["summary"] for step in step_results]
     final["log_path"] = write_run_log(repo_root, final)
 
     if args.emit_json:
@@ -159,6 +194,7 @@ def main() -> int:
             sys.stdout.write("\nArtifact checks:\n")
             for artifact in result["artifacts"]:
                 sys.stdout.write(json.dumps(artifact, indent=2) + "\n")
+            sys.stdout.write(f"Summary: {result['summary']}\n")
         sys.stdout.write(f"Run log: {final['log_path']}\n")
 
     return 0 if final["ok"] else 1
