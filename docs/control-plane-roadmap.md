@@ -544,3 +544,23 @@ Verification completed in this slice:
 - `cargo test`
 - `./tests/rack_queue_smoke.sh`
 - `./tests/rack_dag_smoke.sh`
+
+### 2026-08-20: Rust runner ownership slice
+
+Completed in this slice:
+- added a Rust `runner` command that owns one-shot and looped queue processing instead of relying on the Python `rack-runner` control path
+- switched `run-next`/runner orchestration to the Rust lease acquisition path including persisted `acquired_at` lease metadata
+- replaced `bin/rack-runner` with a Rust-backed shell wrapper
+- updated the resource-admission smoke to invoke the rack runner directly instead of forcing `python3`
+- hardened Rust queue, run-state, and lease repositories to ignore non-JSON placeholder files so status and runner inspection are stable on the live repository layout
+
+What is now true:
+- durable queue admission and orchestration no longer depend on Python control-plane code
+- `rack-submit`, `rack-status`, and `rack-runner` are now Rust-owned command paths
+- the remaining Python surface is concentrated primarily in `rack-task` and the worker execution bridge below the Rust control plane
+
+Verification completed in this slice:
+- `cargo test`
+- `./tests/rack_queue_smoke.sh`
+- `./tests/rack_dag_smoke.sh`
+- `./tests/rack_resource_admission_smoke.sh`

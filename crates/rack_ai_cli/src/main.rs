@@ -74,7 +74,13 @@ fn execute() -> Result<(), String> {
     } else if command == "status" {
         status(paths, arguments.iter().any(|value| value == "--emit-json"))
     } else if command == "run-next" {
-        run_next(paths, roots.repo_root)
+        print_run_next(run_next_once(paths, roots.repo_root)?)
+    } else if command == "runner" {
+        run_runner(
+            paths,
+            roots.repo_root,
+            arguments.iter().any(|value| value == "--once"),
+        )
     } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
     } else {
@@ -228,7 +234,7 @@ fn status(paths: RepositoryPaths, emit_json: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn run_next(paths: RepositoryPaths, repo_root: PathBuf) -> Result<(), String> {
+fn run_next_once(paths: RepositoryPaths, repo_root: PathBuf) -> Result<RunNextOutcome, String> {
     let state_root = paths.root().to_path_buf();
     let clock = UtcDateCommandClock;
     let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
@@ -246,7 +252,25 @@ fn run_next(paths: RepositoryPaths, repo_root: PathBuf) -> Result<(), String> {
         task_spec_repository: &task_spec_repository,
         worker_catalog: &worker_catalog,
     });
-    match service.execute()? {
+    service.execute()
+}
+
+fn run_runner(paths: RepositoryPaths, repo_root: PathBuf, once: bool) -> Result<(), String> {
+    if once {
+        return print_run_next(run_next_once(paths, repo_root)?);
+    }
+    loop {
+        let outcome = run_next_once(paths.clone(), repo_root.clone())?;
+        let stop = matches!(outcome, RunNextOutcome::NoQueuedTasks);
+        print_run_next(outcome)?;
+        if stop {
+            return Ok(());
+        }
+    }
+}
+
+fn print_run_next(outcome: RunNextOutcome) -> Result<(), String> {
+    match outcome {
         RunNextOutcome::NoQueuedTasks => println!("No queued tasks."),
         RunNextOutcome::NoAdmissibleTasks => println!("No admissible queued tasks."),
         RunNextOutcome::Succeeded(task_id) => println!("{task_id}"),
