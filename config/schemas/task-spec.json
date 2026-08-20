@@ -8,6 +8,15 @@
     "task_id": {"type": "string"},
     "template": {"type": "string"},
     "request": {"type": ["string", "null"]},
+    "placement": {
+      "type": "object",
+      "properties": {
+        "worker_ids": {"type": "array", "items": {"type": "string"}},
+        "resource_ids": {"type": "array", "items": {"type": "string"}},
+        "model_ids": {"type": "array", "items": {"type": "string"}},
+        "backends": {"type": "array", "items": {"type": "string"}}
+      }
+    },
     "steps": {
       "type": "array",
       "items": {

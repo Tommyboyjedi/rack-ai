@@ -213,3 +213,34 @@ What remains for the next slice of Phase 1:
 - add resource occupancy tracking during runs rather than assuming single-process exclusivity
 - add retry policy, timeout policy, and blocked-state controls at the queue layer
 - extend durable queue execution from linear jobs to dependency-aware DAG scheduling
+
+### 2026-08-20: registry-backed placement and admission slice
+
+Completed in this slice:
+- added `bin/racklib.py` as a shared control-plane registry helper for workers, resources, models, and leases
+- updated `bin/rack-task` so worker resolution comes from the worker registry instead of a hard-coded map
+- updated `bin/rack-submit` to persist derived placement metadata with each queued task
+- updated `bin/rack-runner` to defer jobs when required resources are already leased and to acquire/release resource leases around execution
+- updated `bin/rack-status` to expose leases, placement, and admission state
+- added `state/resources/leases/` as durable occupancy state and `tests/rack_resource_admission_smoke.sh` to prove busy-resource deferral works
+
+What is now true:
+- the queue layer now knows which workers, models, backends, and GPU resources a task depends on
+- execution admission is no longer implicit in wrapper scripts alone
+- resource occupancy is represented on disk and can block incompatible work without losing queue state
+- worker routing inside `rack-task` now follows versioned registry data rather than a duplicated code map
+- the control plane can safely represent planned concurrency rules before full DAG scheduling exists
+
+Verification completed in this slice:
+- `./tests/rack_queue_smoke.sh`
+- `./tests/rack_resource_admission_smoke.sh`
+- `./tests/rack_task_smoke.sh`
+- `./tests/rack_coordinator_smoke.sh`
+- `./tests/rack_coordinator_auto_smoke.sh`
+- `./tests/rack_healthcheck_smoke.sh`
+
+What remains for the next slice of Phase 1:
+- extend queue submission and execution from linear jobs to explicit dependency-aware DAG runs
+- add richer retry policy and blocked-state handling beyond simple requeue behavior
+- add stronger operator commands for retry, cancel, and requeue
+- evolve lease handling from simple file presence to deliberate scheduling policy and admission ordering

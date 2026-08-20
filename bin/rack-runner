@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 import argparse
-import json
 import subprocess
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
+
+from racklib import acquire_leases, busy_resources, ensure_task_placement, load_json, release_leases, write_json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUEUED_DIR = REPO_ROOT / "state" / "queue" / "queued"
@@ -17,16 +19,6 @@ def iso_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
-def load_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
-
-
-def write_json(path: Path, payload: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-
-
 def update_run(task_id: str, **changes: object) -> dict:
     run_path = RUNS_DIR / f"{task_id}.json"
     run_state = load_json(run_path)
@@ -35,9 +27,43 @@ def update_run(task_id: str, **changes: object) -> dict:
     return run_state
 
 
-def pick_next() -> Path | None:
-    candidates = sorted(QUEUED_DIR.glob("*.json"))
-    return candidates[0] if candidates else None
+def queued_candidates() -> list[Path]:
+    return sorted(QUEUED_DIR.glob("*.json"))
+
+
+def pick_next_admissible() -> tuple[Path | None, dict | None, list[dict]]:
+    blocked = []
+    for queued_path in queued_candidates():
+        spec = load_json(queued_path)
+        task_id = spec["task_id"]
+        placement = ensure_task_placement(spec)
+        write_json(queued_path, spec)
+        busy = busy_resources(placement.get("resource_ids", []))
+        if busy:
+            blocked_ids = [item["resource_id"] for item in busy]
+            blocked.append({"task_id": task_id, "resource_ids": blocked_ids})
+            update_run(
+                task_id,
+                status="queued",
+                placement=placement,
+                admission_state="waiting_for_resources",
+                waiting_on_resources=blocked_ids,
+                lease_paths={},
+                queue_path=str(queued_path),
+            )
+            continue
+
+        update_run(
+            task_id,
+            status="queued",
+            placement=placement,
+            admission_state="ready",
+            waiting_on_resources=[],
+            lease_paths={},
+            queue_path=str(queued_path),
+        )
+        return queued_path, spec, blocked
+    return None, None, blocked
 
 
 def execute_once() -> int:
@@ -46,28 +72,37 @@ def execute_once() -> int:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
-    queued_path = pick_next()
-    if queued_path is None:
+    queued_path, spec, blocked = pick_next_admissible()
+    if queued_path is None or spec is None:
+        if blocked:
+            print("No admissible queued tasks.")
+            return 0
         print("No queued tasks.")
         return 0
 
-    spec = load_json(queued_path)
     task_id = spec["task_id"]
+    placement = spec["placement"]
     max_attempts = int(spec.get("max_attempts", 1))
     timeout_seconds = int(spec.get("timeout_seconds", 900))
 
     run_state = load_json(RUNS_DIR / f"{task_id}.json")
     attempt = int(run_state.get("attempt", 0)) + 1
 
+    started_at = iso_now()
+    lease_paths = acquire_leases(task_id, placement, started_at)
     running_path = RUNNING_DIR / queued_path.name
     queued_path.rename(running_path)
     update_run(
         task_id,
         status="running",
         attempt=attempt,
-        started_at=iso_now(),
+        started_at=started_at,
         queue_path=str(running_path),
         last_error=None,
+        placement=placement,
+        admission_state="running",
+        waiting_on_resources=[],
+        lease_paths=lease_paths,
     )
 
     try:
@@ -89,6 +124,9 @@ def execute_once() -> int:
                 queue_path=None,
                 result_path=str(result_path),
                 last_error=None,
+                admission_state="completed",
+                waiting_on_resources=[],
+                lease_paths={},
             )
             print(task_id)
             return 0
@@ -104,6 +142,9 @@ def execute_once() -> int:
                 queue_path=str(requeue_path),
                 result_path=str(result_path),
                 last_error=last_error,
+                admission_state="queued",
+                waiting_on_resources=[],
+                lease_paths={},
             )
             print(f"Requeued {task_id}")
             return 1
@@ -116,6 +157,9 @@ def execute_once() -> int:
             queue_path=None,
             result_path=str(result_path),
             last_error=last_error,
+            admission_state="failed",
+            waiting_on_resources=[],
+            lease_paths={},
         )
         print(f"Failed {task_id}", file=sys.stderr)
         return 1
@@ -130,6 +174,9 @@ def execute_once() -> int:
                 queue_path=str(requeue_path),
                 result_path=None,
                 last_error=f"timed out after {timeout_seconds}s",
+                admission_state="queued",
+                waiting_on_resources=[],
+                lease_paths={},
             )
             print(f"Timed out and requeued {task_id}")
             return 1
@@ -142,9 +189,14 @@ def execute_once() -> int:
             queue_path=None,
             result_path=None,
             last_error=f"timed out after {timeout_seconds}s",
+            admission_state="timed_out",
+            waiting_on_resources=[],
+            lease_paths={},
         )
         print(f"Timed out {task_id}", file=sys.stderr)
         return 1
+    finally:
+        release_leases(placement.get("resource_ids", []))
 
 
 def main() -> int:
@@ -157,7 +209,7 @@ def main() -> int:
 
     while True:
         rc = execute_once()
-        if rc == 0 and pick_next() is None:
+        if rc == 0 and not queued_candidates():
             return 0
 
 

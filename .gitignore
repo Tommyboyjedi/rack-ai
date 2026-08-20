@@ -17,3 +17,5 @@ state/runs/*.json
 !state/queue/queued/.gitkeep
 !state/queue/running/.gitkeep
 !state/runs/.gitkeep
+state/resources/leases/*.json
+!state/resources/leases/.gitkeep

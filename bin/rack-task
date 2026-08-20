@@ -6,6 +6,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from racklib import load_workers_index
+
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -23,15 +25,15 @@ def load_spec(path: Path) -> dict:
     return data
 
 
-def resolve_worker(repo_root: Path, worker: str) -> Path:
-    mapping = {
-        "local-coder": repo_root / "bin" / "rack-coder",
-        "local-primary": repo_root / "bin" / "rack-primary",
-    }
-    try:
-        return mapping[worker]
-    except KeyError as exc:
-        raise ValueError(f"unsupported worker: {worker}") from exc
+def resolve_worker(worker: str) -> Path:
+    workers = load_workers_index()
+    entry = workers.get(worker)
+    if entry is None:
+        raise ValueError(f"unsupported worker: {worker}")
+    entrypoint = entry.get("entrypoint")
+    if not entrypoint:
+        raise ValueError(f"worker {worker} is missing an entrypoint")
+    return Path(entrypoint)
 
 
 def validate_artifacts(artifacts: list[dict]) -> list[dict]:
@@ -85,7 +87,7 @@ def summarize_step(result: dict) -> str:
     return f"{result['name']} passed"
 
 
-def execute_step(repo_root: Path, step: dict, index: int) -> dict:
+def execute_step(step: dict, index: int) -> dict:
     worker = step.get("worker")
     cwd = step.get("cwd")
     prompt = step.get("prompt")
@@ -97,7 +99,7 @@ def execute_step(repo_root: Path, step: dict, index: int) -> dict:
     if not isinstance(artifacts, list):
         raise ValueError(f"step {name!r} artifacts must be a list")
 
-    worker_bin = resolve_worker(repo_root, worker)
+    worker_bin = resolve_worker(worker)
     cmd = [str(worker_bin), "--cwd", cwd, "--", prompt]
     started = utc_now()
     proc = subprocess.run(cmd, capture_output=True, text=True)
@@ -159,7 +161,7 @@ def main() -> int:
     step_results = []
     overall_ok = True
     for index, step in enumerate(steps, start=1):
-        result = execute_step(repo_root, step, index)
+        result = execute_step(step, index)
         step_results.append(result)
         if not result["ok"]:
             overall_ok = False
@@ -173,6 +175,7 @@ def main() -> int:
         "request": spec.get("request"),
         "spec": str(spec_path),
         "step_count": len(steps),
+        "placement": spec.get("placement"),
         "started_at": iso_z(started),
         "finished_at": iso_z(finished),
         "duration_seconds": round((finished - started).total_seconds(), 3),

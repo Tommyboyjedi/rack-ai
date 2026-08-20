@@ -5,6 +5,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from racklib import ensure_task_placement, write_json
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUEUE_DIR = REPO_ROOT / "state" / "queue" / "queued"
 RUNS_DIR = REPO_ROOT / "state" / "runs"
@@ -35,6 +37,7 @@ def main() -> int:
 
     max_attempts = args.max_attempts or spec.get("max_attempts", 1)
     timeout_seconds = args.timeout_seconds or spec.get("timeout_seconds", 900)
+    placement = ensure_task_placement(spec)
 
     QUEUE_DIR.mkdir(parents=True, exist_ok=True)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,7 +49,7 @@ def main() -> int:
 
     spec["max_attempts"] = max_attempts
     spec["timeout_seconds"] = timeout_seconds
-    queued_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+    write_json(queued_path, spec)
 
     run_state = {
         "task_id": task_id,
@@ -59,8 +62,12 @@ def main() -> int:
         "last_error": None,
         "submitted_at": utc_now(),
         "source_spec": str(source),
+        "placement": placement,
+        "admission_state": "queued",
+        "waiting_on_resources": [],
+        "lease_paths": {},
     }
-    (RUNS_DIR / f"{task_id}.json").write_text(json.dumps(run_state, indent=2) + "\n", encoding="utf-8")
+    write_json(RUNS_DIR / f"{task_id}.json", run_state)
     print(str(queued_path))
     return 0
 

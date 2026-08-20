@@ -3,15 +3,12 @@ import argparse
 import json
 from pathlib import Path
 
+from racklib import list_leases, load_json
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUEUED_DIR = REPO_ROOT / "state" / "queue" / "queued"
 RUNNING_DIR = REPO_ROOT / "state" / "queue" / "running"
 RUNS_DIR = REPO_ROOT / "state" / "runs"
-
-
-def load(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
 
 
 def main() -> int:
@@ -24,7 +21,7 @@ def main() -> int:
     runs = []
     if RUNS_DIR.exists():
         for path in sorted(RUNS_DIR.glob("*.json")):
-            payload = load(path)
+            payload = load_json(path)
             runs.append(
                 {
                     "task_id": payload.get("task_id"),
@@ -32,10 +29,13 @@ def main() -> int:
                     "attempt": payload.get("attempt"),
                     "max_attempts": payload.get("max_attempts"),
                     "last_error": payload.get("last_error"),
+                    "admission_state": payload.get("admission_state"),
+                    "waiting_on_resources": payload.get("waiting_on_resources", []),
+                    "placement": payload.get("placement"),
                 }
             )
 
-    summary = {"queued": queued, "running": running, "runs": runs}
+    summary = {"queued": queued, "running": running, "leases": list_leases(), "runs": runs}
     if args.emit_json:
         print(json.dumps(summary, indent=2))
         return 0
@@ -46,9 +46,18 @@ def main() -> int:
     print(f"Running: {len(running)}")
     for item in running:
         print(f"  - {item}")
+    print(f"Leases: {len(summary['leases'])}")
+    for lease in summary["leases"]:
+        print(f"  - {lease['resource_id']}: {lease.get('task_id')}")
     print(f"Runs: {len(runs)}")
     for item in runs:
-        print(f"  - {item['task_id']}: {item['status']} (attempt {item['attempt']}/{item['max_attempts']})")
+        waiting = item["waiting_on_resources"] or []
+        waiting_text = f" waiting={','.join(waiting)}" if waiting else ""
+        print(
+            f"  - {item['task_id']}: {item['status']} "
+            f"(attempt {item['attempt']}/{item['max_attempts']}, admission={item['admission_state']})"
+            f"{waiting_text}"
+        )
     return 0
 
 
