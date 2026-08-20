@@ -1,0 +1,11 @@
+{
+  "worker": "local-coder",
+  "cwd": "/tmp/jcode-rack-test",
+  "prompt": "Create /tmp/jcode-rack-test/EXAMPLE_TASK.txt containing exactly EXAMPLE_OK. Then read the file and reply with exactly COMPLETE.",
+  "artifacts": [
+    {
+      "path": "/tmp/jcode-rack-test/EXAMPLE_TASK.txt",
+      "exact_text": "EXAMPLE_OK"
+    }
+  ]
+}

@@ -12,4 +12,4 @@ Immediate priorities:
 1. record the current commissioned state
 2. fix local coder tool-calling for JCode
 3. prove direct coder tool execution
-4. re-prove simple coordinator to coder delegation
+4. replace broken native swarm delegation with explicit repo-managed orchestration

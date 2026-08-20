@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  rack-primary [--cwd DIR] -- PROMPT
+  rack-primary [--cwd DIR] --prompt-file FILE
+  rack-primary [--cwd DIR]
+
+If no prompt argument is supplied, prompt text is read from stdin.
+USAGE
+}
+
+cwd="$(pwd)"
+prompt_file=""
+prompt=""
+
+while (($#)); do
+  case "$1" in
+    --cwd)
+      cwd="$2"
+      shift 2
+      ;;
+    --prompt-file)
+      prompt_file="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      prompt="$*"
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$prompt_file" ]]; then
+  prompt="$(cat "$prompt_file")"
+elif [[ -z "$prompt" ]]; then
+  prompt="$(cat)"
+fi
+
+if [[ -z "${prompt//[$' 	
+']/}" ]]; then
+  echo "Prompt is empty." >&2
+  exit 2
+fi
+
+exec /home/tomp/.local/bin/jcode --provider-profile local-primary --model local-primary -C "$cwd" run "$prompt"

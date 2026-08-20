@@ -1,0 +1,108 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+
+def load_spec(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise ValueError("task spec must be a JSON object")
+    return data
+
+
+def resolve_worker(repo_root: Path, worker: str) -> Path:
+    mapping = {
+        "local-coder": repo_root / "bin" / "rack-coder",
+        "local-primary": repo_root / "bin" / "rack-primary",
+    }
+    try:
+        return mapping[worker]
+    except KeyError as exc:
+        raise ValueError(f"unsupported worker: {worker}") from exc
+
+
+def validate_artifacts(artifacts: list[dict]) -> list[dict]:
+    results = []
+    for artifact in artifacts:
+        path = Path(artifact["path"])
+        entry = {"path": str(path), "exists": path.exists()}
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+            entry["size"] = len(content)
+            expected_exact = artifact.get("exact_text")
+            expected_contains = artifact.get("must_contain")
+            if expected_exact is not None:
+                entry["exact_match"] = content == expected_exact
+            if expected_contains is not None:
+                entry["contains_match"] = expected_contains in content
+        results.append(entry)
+    return results
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Explicit rack task runner")
+    parser.add_argument("spec", help="Path to task JSON spec")
+    parser.add_argument("--emit-json", action="store_true", help="Print machine-readable result summary")
+    args = parser.parse_args()
+
+    repo_root = Path(__file__).resolve().parent.parent
+    spec_path = Path(args.spec).resolve()
+    spec = load_spec(spec_path)
+
+    worker = spec.get("worker")
+    cwd = spec.get("cwd")
+    prompt = spec.get("prompt")
+    artifacts = spec.get("artifacts", [])
+
+    if not worker or not cwd or not prompt:
+        raise ValueError("spec must include worker, cwd, and prompt")
+    if not isinstance(artifacts, list):
+        raise ValueError("artifacts must be a list")
+
+    worker_bin = resolve_worker(repo_root, worker)
+    cmd = [str(worker_bin), "--cwd", cwd, "--", prompt]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    artifact_results = validate_artifacts(artifacts)
+    artifact_failures = [
+        item for item in artifact_results
+        if not item.get("exists")
+        or item.get("exact_match") is False
+        or item.get("contains_match") is False
+    ]
+
+    result = {
+        "worker": worker,
+        "cwd": cwd,
+        "command": cmd,
+        "returncode": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+        "artifacts": artifact_results,
+        "ok": proc.returncode == 0 and not artifact_failures,
+    }
+
+    if args.emit_json:
+        json.dump(result, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+    else:
+        sys.stdout.write(proc.stdout)
+        if proc.stderr:
+            sys.stderr.write(proc.stderr)
+        sys.stdout.write("\nArtifact checks:\n")
+        for artifact in artifact_results:
+            sys.stdout.write(json.dumps(artifact, indent=2) + "\n")
+
+    return 0 if result["ok"] else 1
+
+
+if __name__ == "__main__":
+    try:
+        raise SystemExit(main())
+    except Exception as exc:
+        print(f"rack-task error: {exc}", file=sys.stderr)
+        raise SystemExit(2)
