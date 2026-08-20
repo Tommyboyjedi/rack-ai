@@ -1,0 +1,44 @@
+{
+  "steps": [
+    {
+      "name": "plan",
+      "worker": "local-primary",
+      "cwd": "/tmp/jcode-rack-test",
+      "prompt": "Create /tmp/jcode-rack-test/PIPELINE_PLAN.txt containing exactly PLAN_READY. Then read the file and reply with exactly COMPLETE.",
+      "artifacts": [
+        {
+          "path": "/tmp/jcode-rack-test/PIPELINE_PLAN.txt",
+          "exact_text": "PLAN_READY"
+        }
+      ]
+    },
+    {
+      "name": "implement",
+      "worker": "local-coder",
+      "cwd": "/tmp/jcode-rack-test",
+      "prompt": "Create /tmp/jcode-rack-test/PIPELINE_OUTPUT.txt containing exactly PIPELINE_OK. Then read the file and reply with exactly COMPLETE.",
+      "artifacts": [
+        {
+          "path": "/tmp/jcode-rack-test/PIPELINE_OUTPUT.txt",
+          "exact_text": "PIPELINE_OK"
+        }
+      ]
+    },
+    {
+      "name": "verify",
+      "worker": "local-primary",
+      "cwd": "/tmp/jcode-rack-test",
+      "prompt": "Read /tmp/jcode-rack-test/PIPELINE_OUTPUT.txt. Then create /tmp/jcode-rack-test/PIPELINE_VERIFY.txt containing exactly VERIFIED_OK. Then read that file and reply with exactly COMPLETE.",
+      "artifacts": [
+        {
+          "path": "/tmp/jcode-rack-test/PIPELINE_VERIFY.txt",
+          "exact_text": "VERIFIED_OK"
+        },
+        {
+          "path": "/tmp/jcode-rack-test/PIPELINE_OUTPUT.txt",
+          "exact_text": "PIPELINE_OK"
+        }
+      ]
+    }
+  ]
+}

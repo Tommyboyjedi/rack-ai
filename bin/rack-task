@@ -3,6 +3,7 @@ import argparse
 import json
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -43,29 +44,44 @@ def validate_artifacts(artifacts: list[dict]) -> list[dict]:
     return results
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Explicit rack task runner")
-    parser.add_argument("spec", help="Path to task JSON spec")
-    parser.add_argument("--emit-json", action="store_true", help="Print machine-readable result summary")
-    args = parser.parse_args()
-
-    repo_root = Path(__file__).resolve().parent.parent
-    spec_path = Path(args.spec).resolve()
-    spec = load_spec(spec_path)
+def build_steps(spec: dict) -> list[dict]:
+    if "steps" in spec:
+        steps = spec["steps"]
+        if not isinstance(steps, list) or not steps:
+            raise ValueError("steps must be a non-empty list")
+        return steps
 
     worker = spec.get("worker")
     cwd = spec.get("cwd")
     prompt = spec.get("prompt")
     artifacts = spec.get("artifacts", [])
-
     if not worker or not cwd or not prompt:
         raise ValueError("spec must include worker, cwd, and prompt")
     if not isinstance(artifacts, list):
         raise ValueError("artifacts must be a list")
+    return [{
+        "name": spec.get("name", "single-step"),
+        "worker": worker,
+        "cwd": cwd,
+        "prompt": prompt,
+        "artifacts": artifacts,
+    }]
+
+
+def execute_step(repo_root: Path, step: dict) -> dict:
+    worker = step.get("worker")
+    cwd = step.get("cwd")
+    prompt = step.get("prompt")
+    artifacts = step.get("artifacts", [])
+    name = step.get("name", worker or "unnamed-step")
+
+    if not worker or not cwd or not prompt:
+        raise ValueError(f"step {name!r} must include worker, cwd, and prompt")
+    if not isinstance(artifacts, list):
+        raise ValueError(f"step {name!r} artifacts must be a list")
 
     worker_bin = resolve_worker(repo_root, worker)
     cmd = [str(worker_bin), "--cwd", cwd, "--", prompt]
-
     proc = subprocess.run(cmd, capture_output=True, text=True)
     artifact_results = validate_artifacts(artifacts)
     artifact_failures = [
@@ -75,7 +91,8 @@ def main() -> int:
         or item.get("contains_match") is False
     ]
 
-    result = {
+    return {
+        "name": name,
         "worker": worker,
         "cwd": cwd,
         "command": cmd,
@@ -86,18 +103,65 @@ def main() -> int:
         "ok": proc.returncode == 0 and not artifact_failures,
     }
 
+
+def write_run_log(repo_root: Path, result: dict) -> str:
+    log_dir = repo_root / "logs" / "runs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = log_dir / f"{run_id}-rack-task.json"
+    suffix = 1
+    while log_path.exists():
+        log_path = log_dir / f"{run_id}-rack-task-{suffix}.json"
+        suffix += 1
+    with log_path.open("w", encoding="utf-8") as handle:
+        json.dump(result, handle, indent=2)
+        handle.write("\n")
+    return str(log_path)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Explicit rack task runner")
+    parser.add_argument("spec", help="Path to task JSON spec")
+    parser.add_argument("--emit-json", action="store_true", help="Print machine-readable result summary")
+    args = parser.parse_args()
+
+    repo_root = Path(__file__).resolve().parent.parent
+    spec_path = Path(args.spec).resolve()
+    spec = load_spec(spec_path)
+    steps = build_steps(spec)
+
+    step_results = []
+    overall_ok = True
+    for step in steps:
+        result = execute_step(repo_root, step)
+        step_results.append(result)
+        if not result["ok"]:
+            overall_ok = False
+            break
+
+    final = {
+        "spec": str(spec_path),
+        "step_count": len(steps),
+        "steps": step_results,
+        "ok": overall_ok,
+    }
+    final["log_path"] = write_run_log(repo_root, final)
+
     if args.emit_json:
-        json.dump(result, sys.stdout, indent=2)
+        json.dump(final, sys.stdout, indent=2)
         sys.stdout.write("\n")
     else:
-        sys.stdout.write(proc.stdout)
-        if proc.stderr:
-            sys.stderr.write(proc.stderr)
-        sys.stdout.write("\nArtifact checks:\n")
-        for artifact in artifact_results:
-            sys.stdout.write(json.dumps(artifact, indent=2) + "\n")
+        for result in step_results:
+            sys.stdout.write(f"== {result['name']} ({result['worker']}) ==\n")
+            sys.stdout.write(result["stdout"])
+            if result["stderr"]:
+                sys.stderr.write(result["stderr"])
+            sys.stdout.write("\nArtifact checks:\n")
+            for artifact in result["artifacts"]:
+                sys.stdout.write(json.dumps(artifact, indent=2) + "\n")
+        sys.stdout.write(f"Run log: {final['log_path']}\n")
 
-    return 0 if result["ok"] else 1
+    return 0 if final["ok"] else 1
 
 
 if __name__ == "__main__":

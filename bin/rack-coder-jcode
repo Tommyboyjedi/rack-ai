@@ -1,0 +1,72 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  rack-coder-jcode [--cwd DIR] -- PROMPT
+  rack-coder-jcode [--cwd DIR] --prompt-file FILE
+  rack-coder-jcode [--cwd DIR]
+
+If no prompt argument is supplied, prompt text is read from stdin.
+USAGE
+}
+
+cwd="$(pwd)"
+prompt_file=""
+prompt=""
+
+while (($#)); do
+  case "$1" in
+    --cwd)
+      cwd="$2"
+      shift 2
+      ;;
+    --prompt-file)
+      prompt_file="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --)
+      shift
+      prompt="$*"
+      break
+      ;;
+    *)
+      echo "Unknown argument: $1" >&2
+      usage >&2
+      exit 2
+      ;;
+  esac
+done
+
+if [[ -n "$prompt_file" ]]; then
+  prompt="$(cat "$prompt_file")"
+elif [[ -z "$prompt" ]]; then
+  prompt="$(cat)"
+fi
+
+if [[ -z "${prompt//[$' 	
+']/}" ]]; then
+  echo "Prompt is empty." >&2
+  exit 2
+fi
+
+wrapped_prompt=$(cat <<PROMPT
+Using your tools, complete the following task exactly as requested.
+
+Rules:
+- Use actual tool calls. Do not print pseudo-JSON or describe tool calls in plain text.
+- After the requested file action is confirmed, reply with exactly COMPLETE and stop.
+- Do not write the word COMPLETE into any project file unless the task explicitly asks for that exact file content.
+- Do not call any more tools after the task is complete.
+
+Task:
+$prompt
+PROMPT
+)
+
+exec /home/tomp/.local/bin/jcode --provider-profile local-coder --model local-coder -C "$cwd" run "$wrapped_prompt"

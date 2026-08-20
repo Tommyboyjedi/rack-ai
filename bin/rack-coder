@@ -1,57 +1,171 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+import subprocess
+import sys
+import urllib.request
+from pathlib import Path
 
-usage() {
-  cat <<'USAGE'
-Usage:
-  rack-coder [--cwd DIR] -- PROMPT
-  rack-coder [--cwd DIR] --prompt-file FILE
-  rack-coder [--cwd DIR]
+URL = "http://127.0.0.1:8018/v1/chat/completions"
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "Write a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "intent": {"type": "string"},
+                },
+                "required": ["file_path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Read a file",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "file_path": {"type": "string"},
+                    "start_line": {"type": "integer"},
+                    "limit": {"type": "integer"},
+                    "intent": {"type": "string"},
+                },
+                "required": ["file_path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "bash",
+            "description": "Run a shell command",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "description": {"type": "string"},
+                },
+                "required": ["command"],
+            },
+        },
+    },
+]
 
-If no prompt argument is supplied, prompt text is read from stdin.
-USAGE
-}
+SYSTEM = (
+    "You are a coding worker. Use tools when needed. "
+    "When the task is complete, stop calling tools and reply exactly as requested."
+)
 
-cwd="$(pwd)"
-prompt_file=""
-prompt=""
 
-while (($#)); do
-  case "$1" in
-    --cwd)
-      cwd="$2"
-      shift 2
-      ;;
-    --prompt-file)
-      prompt_file="$2"
-      shift 2
-      ;;
-    -h|--help)
-      usage
-      exit 0
-      ;;
-    --)
-      shift
-      prompt="$*"
-      break
-      ;;
-    *)
-      echo "Unknown argument: $1" >&2
-      usage >&2
-      exit 2
-      ;;
-  esac
-done
+def call_api(messages: list[dict]) -> dict:
+    body = json.dumps(
+        {
+            "model": "local-coder",
+            "messages": messages,
+            "tools": TOOLS,
+            "tool_choice": "auto",
+            "stream": False,
+            "temperature": 0,
+        }
+    ).encode()
+    req = urllib.request.Request(URL, data=body, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=180) as response:
+        return json.load(response)
 
-if [[ -n "$prompt_file" ]]; then
-  prompt="$(cat "$prompt_file")"
-elif [[ -z "$prompt" ]]; then
-  prompt="$(cat)"
-fi
 
-if [[ -z "${prompt//[$' \t\r\n']/}" ]]; then
-  echo "Prompt is empty." >&2
-  exit 2
-fi
+def run_tool(name: str, args: dict) -> str:
+    if name == "write":
+        path = Path(args["file_path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(args["content"], encoding="utf-8")
+        return f"Created {path}"
+    if name == "read":
+        path = Path(args["file_path"])
+        text = path.read_text(encoding="utf-8")
+        start_line = max(1, int(args.get("start_line", 1)))
+        limit = int(args.get("limit", 400))
+        lines = text.splitlines()
+        selected = lines[start_line - 1:start_line - 1 + limit]
+        return "\n".join(f"{idx}\t{line}" for idx, line in enumerate(selected, start=start_line))
+    if name == "bash":
+        cp = subprocess.run(args["command"], shell=True, capture_output=True, text=True, check=False)
+        return (cp.stdout + cp.stderr).strip()
+    raise ValueError(f"Unsupported tool {name}")
 
-exec /home/tomp/.local/bin/jcode --provider-profile local-coder --model local-coder -C "$cwd" run "$prompt"
+
+def build_prompt(task: str) -> str:
+    return (
+        "Using your tools, complete the following task exactly as requested.\n\n"
+        "Rules:\n"
+        "- Use actual tool calls.\n"
+        "- Do not describe tool calls in plain text.\n"
+        "- After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n"
+        "- Do not write the word COMPLETE into any project file unless explicitly asked.\n\n"
+        f"Task:\n{task}"
+    )
+
+
+def run_task(prompt: str, max_turns: int) -> str:
+    messages = [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": build_prompt(prompt)},
+    ]
+    for _ in range(max_turns):
+        response = call_api(messages)
+        choice = response["choices"][0]
+        message = choice["message"]
+        finish_reason = choice["finish_reason"]
+        messages.append(message)
+        if finish_reason == "stop":
+            return message.get("content") or ""
+        if finish_reason != "tool_calls":
+            raise RuntimeError(f"unexpected finish_reason: {finish_reason}")
+        for tool_call in message.get("tool_calls") or []:
+            args = json.loads(tool_call["function"]["arguments"])
+            result = run_tool(tool_call["function"]["name"], args)
+            messages.append({"role": "tool", "tool_call_id": tool_call["id"], "content": result})
+    raise RuntimeError("max turns exceeded")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Direct local-coder worker")
+    parser.add_argument("--cwd", default=".")
+    parser.add_argument("--prompt-file")
+    parser.add_argument("--max-turns", type=int, default=6)
+    parser.add_argument("prompt", nargs="?")
+    args = parser.parse_args()
+
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    elif args.prompt is not None:
+        prompt = args.prompt
+    else:
+        prompt = sys.stdin.read()
+
+    if not prompt.strip():
+        print("Prompt is empty.", file=sys.stderr)
+        return 2
+
+    proc_cwd = Path(args.cwd)
+    proc_cwd.mkdir(parents=True, exist_ok=True)
+    old_cwd = Path.cwd()
+    try:
+        os.chdir(proc_cwd)
+        final_text = run_task(prompt, args.max_turns)
+    finally:
+        os.chdir(old_cwd)
+
+    print(final_text)
+    return 0 if final_text.strip() == "COMPLETE" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
