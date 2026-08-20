@@ -38,6 +38,9 @@ pub mod worker_record;
 pub mod workers_document;
 pub mod workspace_coder_tool_runner;
 
+#[cfg(test)]
+mod live_path_policy;
+
 pub use changed_paths::ChangedPaths;
 pub use cli_rack_task_executor::CliRackTaskExecutor;
 pub use direct_coder_worker::DirectCoderWorker;
