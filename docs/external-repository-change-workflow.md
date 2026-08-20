@@ -122,11 +122,12 @@ environment with:
 - resource and time limits;
 - no path escape through file tools or shell commands.
 
-The exact isolation backend is an operator decision and must be made
-explicitly before implementation.  Acceptable candidates include a
-rootless/containerised executor or a Linux namespace sandbox.  The Rust
-application must depend on the executor interface, not on a particular
-backend.
+The selected v1 isolation backend is a **rootless Podman container**.  Each
+job receives a fresh unprivileged container with the worktree mounted at the
+fixed workspace path.  It must not receive a Docker/Podman socket, host home
+directory, or privileged capabilities.  The Rust application must depend on
+the executor interface, not directly on Podman, so a future backend change
+does not alter workflow behaviour.
 
 Until that executor exists, jobs are suitable only for a disposable target
 branch under active human supervision.
@@ -197,7 +198,7 @@ a normal job capability.
 ### Milestone 2: safe executor
 
 - Introduce `WorkspaceExecutor` and route coder file/shell tools through it.
-- Implement the selected isolation backend.
+- Implement the rootless Podman executor and its image/cache lifecycle.
 - Add path-escape, credential-access, network, and timeout rejection tests.
 - Make the executor mandatory for external-repository changes.
 
