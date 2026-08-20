@@ -244,3 +244,35 @@ What remains for the next slice of Phase 1:
 - add richer retry policy and blocked-state handling beyond simple requeue behavior
 - add stronger operator commands for retry, cancel, and requeue
 - evolve lease handling from simple file presence to deliberate scheduling policy and admission ordering
+
+### 2026-08-20: dependency-aware DAG execution slice
+
+Completed in this slice:
+- extended the task schema to support explicit DAG nodes with worker, cwd, prompt, dependencies, and artifact checks
+- extended run state to persist `dag_state` and `active_node_id`
+- updated `bin/rack-submit` to initialize durable node state for DAG tasks
+- updated `bin/rack-runner` to advance one ready DAG node per invocation while preserving queue state between nodes
+- updated `bin/rack-status` to surface DAG progress in addition to queue, lease, and placement state
+- added `tests/rack_dag_smoke.sh` to prove a planner -> coder -> verifier DAG executes durably across multiple runner invocations
+
+What is now true:
+- the control plane can represent work as dependencies instead of only linear step lists
+- DAG progress is written to disk node by node rather than existing only in conversational context
+- a partially completed task can be resumed by the durable runner without losing completed node history
+- placement and admission are now applied at the runnable node level rather than only at the whole-task level
+- this is enough to support a first real execution graph above JCode and vLLM without introducing premature scheduling complexity
+
+Verification completed in this slice:
+- `./tests/rack_dag_smoke.sh`
+- `./tests/rack_queue_smoke.sh`
+- `./tests/rack_resource_admission_smoke.sh`
+- `./tests/rack_task_smoke.sh`
+- `./tests/rack_coordinator_smoke.sh`
+- `./tests/rack_coordinator_auto_smoke.sh`
+- `./tests/rack_healthcheck_smoke.sh`
+
+What remains for the next slice of Phase 1:
+- add richer retry semantics at the node level instead of task-level attempt counting only
+- add operator commands for retry, cancel, and requeue against durable run state
+- add explicit blocked-state handling for dependency deadlocks or exhausted prerequisites
+- improve scheduler policy so admission ordering is intentional rather than simple queue scan order

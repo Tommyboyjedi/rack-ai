@@ -32,6 +32,8 @@ def main() -> int:
                     "admission_state": payload.get("admission_state"),
                     "waiting_on_resources": payload.get("waiting_on_resources", []),
                     "placement": payload.get("placement"),
+                    "active_node_id": payload.get("active_node_id"),
+                    "dag_state": payload.get("dag_state"),
                 }
             )
 
@@ -53,10 +55,11 @@ def main() -> int:
     for item in runs:
         waiting = item["waiting_on_resources"] or []
         waiting_text = f" waiting={','.join(waiting)}" if waiting else ""
+        active_node = f" node={item['active_node_id']}" if item.get("active_node_id") else ""
         print(
             f"  - {item['task_id']}: {item['status']} "
             f"(attempt {item['attempt']}/{item['max_attempts']}, admission={item['admission_state']})"
-            f"{waiting_text}"
+            f"{active_node}{waiting_text}"
         )
     return 0
 

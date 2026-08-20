@@ -64,8 +64,60 @@ def unique_ordered(values: list[str]) -> list[str]:
     return ordered
 
 
+def list_task_nodes(spec: dict) -> list[dict]:
+    if "dag" not in spec:
+        return []
+    dag = spec.get("dag")
+    if not isinstance(dag, dict):
+        raise RegistryError("dag must be an object")
+    nodes = dag.get("nodes", [])
+    if not isinstance(nodes, list) or not nodes:
+        raise RegistryError("dag nodes must be a non-empty list")
+    return nodes
+
+
+def validate_task_nodes(nodes: list[dict]) -> None:
+    seen = set()
+    valid_ids = []
+    for node in nodes:
+        if not isinstance(node, dict):
+            raise RegistryError("dag node entries must be objects")
+        node_id = node.get("id")
+        if not node_id:
+            raise RegistryError("dag nodes must include id")
+        if node_id in seen:
+            raise RegistryError(f"duplicate dag node id: {node_id}")
+        if not node.get("worker") or not node.get("cwd") or not node.get("prompt"):
+            raise RegistryError(f"dag node {node_id} must include worker, cwd, and prompt")
+        seen.add(node_id)
+        valid_ids.append(node_id)
+
+    valid_id_set = set(valid_ids)
+    for node in nodes:
+        for dependency in node.get("depends_on", []):
+            if dependency not in valid_id_set:
+                raise RegistryError(f"dag node {node['id']} depends on unknown node {dependency}")
+
+
+def build_step_from_node(node: dict) -> dict:
+    return {
+        "name": node.get("name", node["id"]),
+        "worker": node["worker"],
+        "cwd": node["cwd"],
+        "prompt": node["prompt"],
+        "artifacts": node.get("artifacts", []),
+    }
+
+
 def extract_step_workers(spec: dict) -> list[str]:
     workers = []
+    nodes = list_task_nodes(spec)
+    if nodes:
+        validate_task_nodes(nodes)
+        for node in nodes:
+            workers.append(node["worker"])
+        return unique_ordered(workers)
+
     if "steps" in spec:
         steps = spec.get("steps", [])
         if not isinstance(steps, list):
@@ -118,6 +170,63 @@ def ensure_task_placement(spec: dict) -> dict:
     placement = derive_task_placement(spec)
     spec["placement"] = placement
     return placement
+
+
+def derive_node_placement(node: dict) -> dict:
+    return derive_task_placement({"steps": [build_step_from_node(node)]})
+
+
+def build_single_step_spec(task_id: str, template: str | None, request: str | None, node: dict, placement: dict) -> dict:
+    return {
+        "task_id": task_id,
+        "template": template or "dag-node",
+        "request": request,
+        "placement": placement,
+        "steps": [build_step_from_node(node)],
+    }
+
+
+def build_initial_dag_state(spec: dict) -> dict | None:
+    nodes = list_task_nodes(spec)
+    if not nodes:
+        return None
+    validate_task_nodes(nodes)
+    return {
+        node["id"]: {
+            "status": "pending",
+            "depends_on": node.get("depends_on", []),
+            "started_at": None,
+            "finished_at": None,
+            "result_path": None,
+            "last_error": None,
+        }
+        for node in nodes
+    }
+
+
+def ready_dag_nodes(spec: dict, dag_state: dict | None) -> list[dict]:
+    nodes = list_task_nodes(spec)
+    if not nodes:
+        return []
+    if dag_state is None:
+        raise RegistryError("dag_state is required for dag tasks")
+
+    ready = []
+    for node in nodes:
+        node_id = node["id"]
+        state = dag_state.get(node_id, {})
+        if state.get("status") != "pending":
+            continue
+        dependencies = node.get("depends_on", [])
+        if all(dag_state.get(dep, {}).get("status") == "succeeded" for dep in dependencies):
+            ready.append(node)
+    return ready
+
+
+def all_dag_nodes_succeeded(dag_state: dict | None) -> bool:
+    if not dag_state:
+        return False
+    return all(node.get("status") == "succeeded" for node in dag_state.values())
 
 
 def lease_path(resource_id: str) -> Path:

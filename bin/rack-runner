@@ -5,7 +5,19 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from racklib import acquire_leases, busy_resources, ensure_task_placement, load_json, release_leases, write_json
+from racklib import (
+    acquire_leases,
+    all_dag_nodes_succeeded,
+    build_initial_dag_state,
+    build_single_step_spec,
+    busy_resources,
+    derive_node_placement,
+    ensure_task_placement,
+    load_json,
+    ready_dag_nodes,
+    release_leases,
+    write_json,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 QUEUED_DIR = REPO_ROOT / "state" / "queue" / "queued"
@@ -31,23 +43,77 @@ def queued_candidates() -> list[Path]:
     return sorted(QUEUED_DIR.glob("*.json"))
 
 
-def pick_next_admissible() -> tuple[Path | None, dict | None, list[dict]]:
+def finalize_history_spec(task_id: str, running_path: Path) -> Path:
+    history_path = HISTORY_DIR / f"{task_id}.spec.json"
+    suffix = 1
+    while history_path.exists():
+        history_path = HISTORY_DIR / f"{task_id}-{suffix}.spec.json"
+        suffix += 1
+    running_path.rename(history_path)
+    return history_path
+
+
+def choose_execution_unit(spec: dict, run_state: dict) -> tuple[dict | None, str | None]:
+    dag_state = run_state.get("dag_state")
+    if dag_state is not None:
+        ready_nodes = ready_dag_nodes(spec, dag_state)
+        if ready_nodes:
+            node = ready_nodes[0]
+            placement = derive_node_placement(node)
+            return {
+                "kind": "dag-node",
+                "node": node,
+                "node_id": node["id"],
+                "placement": placement,
+            }, None
+        if all_dag_nodes_succeeded(dag_state):
+            return None, "complete"
+        return None, "waiting_for_dependencies"
+
+    placement = ensure_task_placement(spec)
+    return {
+        "kind": "task",
+        "placement": placement,
+    }, None
+
+
+def pick_next_admissible() -> tuple[Path | None, dict | None, dict | None, dict | None, list[dict]]:
     blocked = []
     for queued_path in queued_candidates():
         spec = load_json(queued_path)
         task_id = spec["task_id"]
+        run_state = load_json(RUNS_DIR / f"{task_id}.json")
+        if "dag_state" not in run_state:
+            run_state["dag_state"] = build_initial_dag_state(spec)
         placement = ensure_task_placement(spec)
         write_json(queued_path, spec)
-        busy = busy_resources(placement.get("resource_ids", []))
+        update_run(task_id, placement=placement, dag_state=run_state.get("dag_state"))
+
+        unit, hold_reason = choose_execution_unit(spec, run_state)
+        if unit is None:
+            admission_state = "completed" if hold_reason == "complete" else "waiting_for_dependencies"
+            update_run(
+                task_id,
+                status="queued",
+                admission_state=admission_state,
+                waiting_on_resources=[],
+                active_node_id=None,
+                lease_paths={},
+                queue_path=str(queued_path),
+            )
+            continue
+
+        unit_placement = unit["placement"]
+        busy = busy_resources(unit_placement.get("resource_ids", []))
         if busy:
             blocked_ids = [item["resource_id"] for item in busy]
             blocked.append({"task_id": task_id, "resource_ids": blocked_ids})
             update_run(
                 task_id,
                 status="queued",
-                placement=placement,
                 admission_state="waiting_for_resources",
                 waiting_on_resources=blocked_ids,
+                active_node_id=unit.get("node_id"),
                 lease_paths={},
                 queue_path=str(queued_path),
             )
@@ -56,14 +122,37 @@ def pick_next_admissible() -> tuple[Path | None, dict | None, list[dict]]:
         update_run(
             task_id,
             status="queued",
-            placement=placement,
             admission_state="ready",
             waiting_on_resources=[],
+            active_node_id=unit.get("node_id"),
             lease_paths={},
             queue_path=str(queued_path),
         )
-        return queued_path, spec, blocked
-    return None, None, blocked
+        return queued_path, spec, run_state, unit, blocked
+    return None, None, None, None, blocked
+
+
+def build_exec_spec(task_id: str, spec: dict, unit: dict) -> dict:
+    if unit["kind"] == "task":
+        exec_spec = dict(spec)
+        exec_spec["placement"] = unit["placement"]
+        return exec_spec
+    node = unit["node"]
+    return build_single_step_spec(
+        task_id=f"{task_id}--{node['id']}",
+        template=spec.get("template"),
+        request=spec.get("request"),
+        node=node,
+        placement=unit["placement"],
+    )
+
+
+def mark_dag_node(run_state: dict, node_id: str, **changes: object) -> dict:
+    dag_state = dict(run_state.get("dag_state") or {})
+    node_state = dict(dag_state.get(node_id) or {})
+    node_state.update(changes)
+    dag_state[node_id] = node_state
+    return dag_state
 
 
 def execute_once() -> int:
@@ -72,8 +161,8 @@ def execute_once() -> int:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     RUNS_DIR.mkdir(parents=True, exist_ok=True)
 
-    queued_path, spec, blocked = pick_next_admissible()
-    if queued_path is None or spec is None:
+    queued_path, spec, run_state, unit, blocked = pick_next_admissible()
+    if queued_path is None or spec is None or run_state is None or unit is None:
         if blocked:
             print("No admissible queued tasks.")
             return 0
@@ -81,17 +170,25 @@ def execute_once() -> int:
         return 0
 
     task_id = spec["task_id"]
-    placement = spec["placement"]
+    placement = unit["placement"]
+    active_node_id = unit.get("node_id")
     max_attempts = int(spec.get("max_attempts", 1))
     timeout_seconds = int(spec.get("timeout_seconds", 900))
-
-    run_state = load_json(RUNS_DIR / f"{task_id}.json")
     attempt = int(run_state.get("attempt", 0)) + 1
 
     started_at = iso_now()
     lease_paths = acquire_leases(task_id, placement, started_at)
     running_path = RUNNING_DIR / queued_path.name
     queued_path.rename(running_path)
+    exec_spec = build_exec_spec(task_id, spec, unit)
+    exec_spec_path = RUNNING_DIR / f"{task_id}--exec.json"
+    write_json(exec_spec_path, exec_spec)
+
+    if active_node_id:
+        dag_state = mark_dag_node(run_state, active_node_id, status="running", started_at=started_at, last_error=None)
+    else:
+        dag_state = run_state.get("dag_state")
+
     update_run(
         task_id,
         status="running",
@@ -99,24 +196,74 @@ def execute_once() -> int:
         started_at=started_at,
         queue_path=str(running_path),
         last_error=None,
-        placement=placement,
+        placement=spec.get("placement"),
         admission_state="running",
         waiting_on_resources=[],
         lease_paths=lease_paths,
+        active_node_id=active_node_id,
+        dag_state=dag_state,
     )
 
     try:
         cp = subprocess.run(
-            [str(RACK_TASK), "--emit-json", str(running_path)],
+            [str(RACK_TASK), "--emit-json", str(exec_spec_path)],
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             check=False,
         )
-        result_path = HISTORY_DIR / f"{task_id}-attempt{attempt}.result.json"
+        result_suffix = active_node_id or f"attempt{attempt}"
+        result_path = HISTORY_DIR / f"{task_id}-{result_suffix}.result.json"
         result_path.write_text(cp.stdout, encoding="utf-8")
+
         if cp.returncode == 0:
-            running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+            if active_node_id:
+                current_run = load_json(RUNS_DIR / f"{task_id}.json")
+                dag_state = mark_dag_node(
+                    current_run,
+                    active_node_id,
+                    status="succeeded",
+                    finished_at=iso_now(),
+                    result_path=str(result_path),
+                    last_error=None,
+                )
+                if all_dag_nodes_succeeded(dag_state):
+                    finalize_history_spec(task_id, running_path)
+                    update_run(
+                        task_id,
+                        status="succeeded",
+                        finished_at=iso_now(),
+                        queue_path=None,
+                        result_path=str(result_path),
+                        last_error=None,
+                        admission_state="completed",
+                        waiting_on_resources=[],
+                        lease_paths={},
+                        active_node_id=None,
+                        dag_state=dag_state,
+                    )
+                    print(task_id)
+                    return 0
+
+                requeue_path = QUEUED_DIR / queued_path.name
+                running_path.rename(requeue_path)
+                update_run(
+                    task_id,
+                    status="queued",
+                    finished_at=iso_now(),
+                    queue_path=str(requeue_path),
+                    result_path=str(result_path),
+                    last_error=None,
+                    admission_state="queued",
+                    waiting_on_resources=[],
+                    lease_paths={},
+                    active_node_id=None,
+                    dag_state=dag_state,
+                )
+                print(f"Advanced {task_id}:{active_node_id}")
+                return 0
+
+            finalize_history_spec(task_id, running_path)
             update_run(
                 task_id,
                 status="succeeded",
@@ -127,6 +274,8 @@ def execute_once() -> int:
                 admission_state="completed",
                 waiting_on_resources=[],
                 lease_paths={},
+                active_node_id=None,
+                dag_state=run_state.get("dag_state"),
             )
             print(task_id)
             return 0
@@ -135,6 +284,11 @@ def execute_once() -> int:
         if attempt < max_attempts:
             requeue_path = QUEUED_DIR / queued_path.name
             running_path.rename(requeue_path)
+            if active_node_id:
+                current_run = load_json(RUNS_DIR / f"{task_id}.json")
+                dag_state = mark_dag_node(current_run, active_node_id, status="pending", last_error=last_error)
+            else:
+                dag_state = run_state.get("dag_state")
             update_run(
                 task_id,
                 status="queued",
@@ -145,11 +299,18 @@ def execute_once() -> int:
                 admission_state="queued",
                 waiting_on_resources=[],
                 lease_paths={},
+                active_node_id=None,
+                dag_state=dag_state,
             )
             print(f"Requeued {task_id}")
             return 1
 
-        running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+        finalize_history_spec(task_id, running_path)
+        if active_node_id:
+            current_run = load_json(RUNS_DIR / f"{task_id}.json")
+            dag_state = mark_dag_node(current_run, active_node_id, status="failed", finished_at=iso_now(), result_path=str(result_path), last_error=last_error)
+        else:
+            dag_state = run_state.get("dag_state")
         update_run(
             task_id,
             status="failed",
@@ -160,43 +321,62 @@ def execute_once() -> int:
             admission_state="failed",
             waiting_on_resources=[],
             lease_paths={},
+            active_node_id=None,
+            dag_state=dag_state,
         )
         print(f"Failed {task_id}", file=sys.stderr)
         return 1
     except subprocess.TimeoutExpired:
+        last_error = f"timed out after {timeout_seconds}s"
         if attempt < max_attempts:
             requeue_path = QUEUED_DIR / queued_path.name
             running_path.rename(requeue_path)
+            if active_node_id:
+                current_run = load_json(RUNS_DIR / f"{task_id}.json")
+                dag_state = mark_dag_node(current_run, active_node_id, status="pending", last_error=last_error)
+            else:
+                dag_state = run_state.get("dag_state")
             update_run(
                 task_id,
                 status="queued",
                 finished_at=iso_now(),
                 queue_path=str(requeue_path),
                 result_path=None,
-                last_error=f"timed out after {timeout_seconds}s",
+                last_error=last_error,
                 admission_state="queued",
                 waiting_on_resources=[],
                 lease_paths={},
+                active_node_id=None,
+                dag_state=dag_state,
             )
             print(f"Timed out and requeued {task_id}")
             return 1
 
-        running_path.rename(HISTORY_DIR / f"{task_id}-attempt{attempt}.spec.json")
+        finalize_history_spec(task_id, running_path)
+        if active_node_id:
+            current_run = load_json(RUNS_DIR / f"{task_id}.json")
+            dag_state = mark_dag_node(current_run, active_node_id, status="timed_out", finished_at=iso_now(), result_path=None, last_error=last_error)
+        else:
+            dag_state = run_state.get("dag_state")
         update_run(
             task_id,
             status="timed_out",
             finished_at=iso_now(),
             queue_path=None,
             result_path=None,
-            last_error=f"timed out after {timeout_seconds}s",
+            last_error=last_error,
             admission_state="timed_out",
             waiting_on_resources=[],
             lease_paths={},
+            active_node_id=None,
+            dag_state=dag_state,
         )
         print(f"Timed out {task_id}", file=sys.stderr)
         return 1
     finally:
         release_leases(placement.get("resource_ids", []))
+        if exec_spec_path.exists():
+            exec_spec_path.unlink()
 
 
 def main() -> int:

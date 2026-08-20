@@ -17,6 +17,27 @@
         "backends": {"type": "array", "items": {"type": "string"}}
       }
     },
+    "dag": {
+      "type": "object",
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "worker", "cwd", "prompt"],
+            "properties": {
+              "id": {"type": "string"},
+              "name": {"type": "string"},
+              "worker": {"type": "string"},
+              "cwd": {"type": "string"},
+              "prompt": {"type": "string"},
+              "depends_on": {"type": "array", "items": {"type": "string"}},
+              "artifacts": {"type": "array"}
+            }
+          }
+        }
+      }
+    },
     "steps": {
       "type": "array",
       "items": {

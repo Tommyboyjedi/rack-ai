@@ -15,6 +15,9 @@
     "timeout_seconds": {"type": "integer", "minimum": 1},
     "queue_path": {"type": ["string", "null"]},
     "result_path": {"type": ["string", "null"]},
-    "last_error": {"type": ["string", "null"]}
+    "last_error": {"type": ["string", "null"]},
+    "admission_state": {"type": ["string", "null"]},
+    "active_node_id": {"type": ["string", "null"]},
+    "dag_state": {"type": ["object", "null"]}
   }
 }
