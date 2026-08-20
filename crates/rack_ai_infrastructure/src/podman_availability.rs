@@ -5,7 +5,11 @@ pub struct PodmanAvailability;
 
 impl PodmanAvailability {
     pub fn ensure() -> Result<(), String> {
-        match Command::new("podman").arg("--version").output() {
+        Self::ensure_command("podman")
+    }
+
+    pub fn ensure_command(command: &str) -> Result<(), String> {
+        match Command::new(command).arg("--version").output() {
             Ok(output) if output.status.success() => Ok(()),
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -29,7 +33,7 @@ mod tests {
 
     #[test]
     fn reports_missing_podman_explicitly_on_this_host() {
-        match PodmanAvailability::ensure() {
+        match PodmanAvailability::ensure_command("__definitely_missing_podman_binary__") {
             Ok(()) => {}
             Err(error) => assert!(error.contains("podman is not available")),
         }

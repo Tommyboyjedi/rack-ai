@@ -17,11 +17,16 @@ use crate::PodmanRunPlan;
 
 pub struct PodmanWorkspaceExecutor {
     config: ExecutorConfig,
+    command: String,
 }
 
 impl PodmanWorkspaceExecutor {
     pub fn new(config: ExecutorConfig) -> Self {
-        Self { config }
+        Self::new_with_command(config, "podman".to_string())
+    }
+
+    pub fn new_with_command(config: ExecutorConfig, command: String) -> Self {
+        Self { config, command }
     }
 }
 
@@ -85,7 +90,7 @@ impl PodmanWorkspaceExecutor {
                 worktree_path.display()
             ));
         }
-        PodmanAvailability::ensure()?;
+        PodmanAvailability::ensure_command(self.command.as_str())?;
         let invocation =
             PodmanInvocation::new(self.config.image().to_string(), worktree_path.to_path_buf())?
                 .with_workspace_mount(self.config.workspace_mount().to_string())
@@ -95,7 +100,7 @@ impl PodmanWorkspaceExecutor {
                 .with_argv(argv.clone())
                 .with_stdin(stdin.clone());
         let plan = PodmanRunPlan::from_invocation(&invocation)?;
-        let mut command = Command::new("podman");
+        let mut command = Command::new(self.command.as_str());
         command.args(plan.arguments());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
@@ -160,8 +165,9 @@ mod tests {
 
     #[test]
     fn fails_closed_when_podman_is_unavailable() {
-        let executor = PodmanWorkspaceExecutor::new(
+        let executor = PodmanWorkspaceExecutor::new_with_command(
             ExecutorConfig::podman("rust:bookworm".to_string()).unwrap(),
+            "__definitely_missing_podman_binary__".to_string(),
         );
         let worktree = existing_worktree();
         let error = executor
