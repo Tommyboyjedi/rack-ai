@@ -1,3 +1,6 @@
+use serde::Deserialize;
+use serde::Serialize;
+
 use crate::ActiveNodeId;
 use crate::AttemptCount;
 use crate::AttemptLimit;
@@ -6,11 +9,13 @@ use crate::RunStatus;
 use crate::TaskId;
 use crate::TimeoutSeconds;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunState {
     task_id: TaskId,
     status: RunStatus,
+    #[serde(rename = "attempt")]
     attempt_count: AttemptCount,
+    #[serde(rename = "max_attempts")]
     attempt_limit: AttemptLimit,
     timeout_seconds: TimeoutSeconds,
     placement: Placement,
@@ -48,13 +53,23 @@ impl RunState {
     pub fn status(&self) -> &RunStatus {
         &self.status
     }
-
     pub fn attempt_count(&self) -> AttemptCount {
         self.attempt_count
     }
-
     pub fn task_id(&self) -> &TaskId {
         &self.task_id
+    }
+    pub fn attempt_limit(&self) -> AttemptLimit {
+        self.attempt_limit
+    }
+    pub fn timeout_seconds(&self) -> TimeoutSeconds {
+        self.timeout_seconds
+    }
+    pub fn placement(&self) -> &Placement {
+        &self.placement
+    }
+    pub fn active_node_id(&self) -> Option<&ActiveNodeId> {
+        self.active_node_id.as_ref()
     }
 }
 

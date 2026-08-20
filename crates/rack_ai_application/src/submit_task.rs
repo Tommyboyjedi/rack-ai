@@ -86,6 +86,10 @@ mod tests {
         fn find(&self, _task_id: &TaskId) -> Result<Option<RunState>, String> {
             Ok(None)
         }
+
+        fn list(&self) -> Result<Vec<RunState>, String> {
+            Ok(self.run_states.borrow().clone())
+        }
     }
 
     struct FakeTaskSpecRepository<'a> {

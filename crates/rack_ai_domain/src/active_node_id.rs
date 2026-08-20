@@ -1,4 +1,7 @@
-#[derive(Clone, Debug, Eq, PartialEq)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActiveNodeId(String);
 
 impl ActiveNodeId {
@@ -6,7 +9,6 @@ impl ActiveNodeId {
         if value.trim().is_empty() {
             return Err("active node id cannot be empty".to_string());
         }
-
         Ok(Self(value))
     }
 

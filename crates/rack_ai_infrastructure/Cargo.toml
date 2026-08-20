@@ -8,3 +8,4 @@ authors.workspace = true
 [dependencies]
 rack_ai_application = { path = "../rack_ai_application" }
 rack_ai_domain = { path = "../rack_ai_domain" }
+serde_json = "1"

@@ -1,4 +1,7 @@
-#[derive(Clone, Debug, Eq, PartialEq)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Placement {
     worker_ids: Vec<String>,
     resource_ids: Vec<String>,
@@ -29,9 +32,14 @@ impl Placement {
     pub fn worker_ids(&self) -> &[String] {
         self.worker_ids.as_slice()
     }
-
     pub fn resource_ids(&self) -> &[String] {
         self.resource_ids.as_slice()
+    }
+    pub fn model_ids(&self) -> &[String] {
+        self.model_ids.as_slice()
+    }
+    pub fn backends(&self) -> &[String] {
+        self.backends.as_slice()
     }
 }
 
@@ -51,7 +59,7 @@ mod tests {
         let placement = Placement::new(vec![], vec![])
             .with_models(vec!["model-a".to_string()])
             .with_backends(vec!["vllm".to_string()]);
-        assert_eq!(placement.worker_ids(), Vec::<String>::new());
-        assert_eq!(placement.resource_ids(), Vec::<String>::new());
+        assert_eq!(placement.model_ids(), ["model-a".to_string()]);
+        assert_eq!(placement.backends(), ["vllm".to_string()]);
     }
 }

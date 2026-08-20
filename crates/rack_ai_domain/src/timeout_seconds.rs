@@ -1,4 +1,7 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct TimeoutSeconds(u32);
 
 impl TimeoutSeconds {
@@ -6,7 +9,6 @@ impl TimeoutSeconds {
         if value == 0 {
             return Err("timeout seconds must be greater than zero".to_string());
         }
-
         Ok(Self(value))
     }
 

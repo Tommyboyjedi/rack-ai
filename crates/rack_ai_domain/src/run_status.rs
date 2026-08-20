@@ -1,4 +1,8 @@
-#[derive(Clone, Debug, Eq, PartialEq)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     Queued,
     Running,

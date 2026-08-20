@@ -1,4 +1,7 @@
-#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Hash, Serialize)]
 pub struct TaskId(String);
 
 impl TaskId {
@@ -6,7 +9,6 @@ impl TaskId {
         if value.trim().is_empty() {
             return Err("task id cannot be empty".to_string());
         }
-
         Ok(Self(value))
     }
 

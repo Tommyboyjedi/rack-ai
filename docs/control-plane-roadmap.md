@@ -319,3 +319,30 @@ What remains for the next Rust slice:
 - port run-state serialization and queue submission into Rust
 - add Rust integration tests for filesystem-backed submit and inspect flows
 - begin replacing Python command entrypoints with thin Rust CLI commands once parity exists
+
+### 2026-08-20: Rust filesystem repository and status slice
+
+Completed in this slice:
+- added serde-backed Rust serialization for the first durable domain types
+- added Rust application abstractions for queue inspection and status snapshots
+- added filesystem-backed Rust repositories for queued specs, run-state persistence, and queue directory inspection
+- replaced the Rust CLI bootstrap placeholder with working `submit` and `status` commands
+- proved the Rust submit/status path end to end against an isolated temporary state root
+
+What is now true:
+- Rust can now persist queued task specs and run-state files onto disk in the rack repository layout
+- Rust can inspect queued and running entries plus saved runs without relying on the Python status command
+- the Rust migration has moved beyond scaffolding into real control-plane I/O behavior
+- Python is still the authoritative implementation for the runner and DAG execution, but Rust now owns the first durable control-plane surface area
+
+Verification completed in this slice:
+- `cargo fmt`
+- `cargo test`
+- `cargo run -p rack_ai_cli -- submit ... --root <tempdir>`
+- `cargo run -p rack_ai_cli -- status --root <tempdir>`
+
+What remains for the next Rust slice:
+- port the durable runner and node-level DAG progression from Python into Rust
+- port worker/resource/model registry loading into typed Rust adapters
+- expand the Rust CLI beyond submit/status into runner and healthcheck commands
+- begin retiring equivalent Python entrypoints only after behavior parity is proven

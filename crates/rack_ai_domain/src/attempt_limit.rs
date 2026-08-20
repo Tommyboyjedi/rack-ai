@@ -1,4 +1,7 @@
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use serde::Deserialize;
+use serde::Serialize;
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct AttemptLimit(u32);
 
 impl AttemptLimit {
@@ -6,7 +9,6 @@ impl AttemptLimit {
         if value == 0 {
             return Err("attempt limit must be greater than zero".to_string());
         }
-
         Ok(Self(value))
     }
 

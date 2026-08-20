@@ -1,10 +1,20 @@
+pub mod inspect_status;
 pub mod lease_repository;
+pub mod queue_state_repository;
 pub mod run_state_repository;
+pub mod status_run;
+pub mod status_snapshot;
 pub mod submit_task;
 pub mod task_spec_repository;
 
+pub use inspect_status::InspectStatus;
+pub use inspect_status::InspectStatusDependencies;
 pub use lease_repository::LeaseRepository;
+pub use queue_state_repository::QueueStateRepository;
 pub use run_state_repository::RunStateRepository;
+pub use status_run::StatusRun;
+pub use status_snapshot::StatusSnapshot;
 pub use submit_task::SubmitTask;
+pub use submit_task::SubmitTaskDependencies;
 pub use submit_task::SubmitTaskRequest;
 pub use task_spec_repository::TaskSpecRepository;
