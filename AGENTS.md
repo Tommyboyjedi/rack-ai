@@ -12,7 +12,7 @@ Current working rack pattern:
 - `bin/rack-primary` uses fresh direct JCode runs for the 4060 Ti coordinator path.
 - `bin/rack-coder` uses a repo-local direct OpenAI-compatible tool loop against the 2060 worker endpoint.
 - `bin/rack-coder-jcode` preserves the old direct JCode coder wrapper as a fallback/debug path.
-- `bin/rack-coordinator` turns named templates plus a request into executable task specs.
+- `bin/rack-coordinator` can either use an explicit template or auto-select one from the request.
 - `bin/rack-task` runs those specs and writes structured manifests under `logs/runs/`.
 
 Treat this as temporary rack glue. Remove it after JCode swarm delegation is trustworthy for cross-provider workers.

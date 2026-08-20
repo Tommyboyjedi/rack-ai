@@ -35,6 +35,30 @@ def parse_artifact_contains(values: list[str]) -> list[dict]:
     return artifacts
 
 
+def choose_template(request: str) -> str:
+    text = request.lower()
+    padded = f" {text} "
+
+    def has_phrase(phrases: list[str]) -> bool:
+        return any(f" {phrase} " in padded for phrase in phrases)
+
+    if has_phrase(["verify tests", "run tests", "smoke test"]):
+        return "test"
+    if any(token in text.split() for token in ["test", "pytest", "unittest"]):
+        return "test"
+    if has_phrase(["design only", "do not implement"]):
+        return "plan"
+    if any(token in text.split() for token in ["plan", "brainstorm", "proposal"]):
+        return "plan"
+    if has_phrase(["check whether", "confirm whether", "validate whether"]):
+        return "verify"
+    if any(token in text.split() for token in ["verify", "validate", "confirm", "check"]):
+        return "verify"
+    if any(token in text.split() for token in ["implement", "create", "modify", "change", "patch", "update", "fix", "write"]):
+        return "patch"
+    return "patch"
+
+
 def build_spec(template_name: str, request: str, cwd: str, exact_artifacts: list[dict], contains_artifacts: list[dict]) -> dict:
     templates = load_templates()
     try:
@@ -68,12 +92,14 @@ def build_spec(template_name: str, request: str, cwd: str, exact_artifacts: list
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Rack coordinator scaffold")
-    parser.add_argument("--template", default="patch", choices=sorted(load_templates().keys()))
+    parser.add_argument("--template", choices=sorted(load_templates().keys()))
+    parser.add_argument("--auto-template", action="store_true", help="Choose a template from the request text")
     parser.add_argument("--cwd", default="/tmp/jcode-rack-test")
     parser.add_argument("--request-file")
     parser.add_argument("--output")
     parser.add_argument("--artifact-exact", action="append", default=[])
     parser.add_argument("--artifact-contains", action="append", default=[])
+    parser.add_argument("--preview", action="store_true", help="Print the generated spec JSON before exiting or running")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("request", nargs="?")
     args = parser.parse_args()
@@ -89,8 +115,12 @@ def main() -> int:
         print("Request is empty.", file=sys.stderr)
         return 2
 
+    template_name = args.template
+    if template_name is None:
+        template_name = choose_template(request) if args.auto_template else "patch"
+
     spec = build_spec(
-        args.template,
+        template_name,
         request,
         args.cwd,
         parse_artifact_exact(args.artifact_exact),
@@ -105,6 +135,11 @@ def main() -> int:
         spec_path = spec_dir / f"{spec['task_id']}.json"
     spec_path.parent.mkdir(parents=True, exist_ok=True)
     spec_path.write_text(json.dumps(spec, indent=2) + "\n", encoding="utf-8")
+
+    if args.preview:
+        sys.stdout.write(json.dumps(spec, indent=2) + "\n")
+        if not args.run:
+            return 0
 
     if not args.run:
         print(str(spec_path))

@@ -9,3 +9,4 @@ The first non-swarm orchestration path is the JSON task contract executed by `bi
 - a pipeline shape with ordered `steps` for planner, worker, and verifier flows
 
 `bin/rack-coordinator` builds those specs from named templates in `config/task_templates.json`.
+It can also auto-select a template from the request text and preview the generated spec without running it.
