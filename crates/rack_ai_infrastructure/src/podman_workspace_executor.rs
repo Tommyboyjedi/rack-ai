@@ -1,7 +1,9 @@
+use std::fs;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use rack_ai_application::CommandEvidence;
 use rack_ai_application::ExecutorConfig;
@@ -12,6 +14,7 @@ use rack_ai_application::WorkspaceExecutor;
 use rack_ai_application::WriteFileRequest;
 
 use crate::PodmanAvailability;
+use crate::PodmanContainerCleanup;
 use crate::PodmanInvocation;
 use crate::PodmanRunPlan;
 use crate::WaitOutcome;
@@ -94,6 +97,8 @@ impl PodmanWorkspaceExecutor {
         }
         PodmanAvailability::ensure_command(self.command.as_str())?;
         PodmanAvailability::ensure_image(self.command.as_str(), self.config.image())?;
+        let cidfile = unique_cidfile();
+        let cleanup = PodmanContainerCleanup::new(self.command.clone(), cidfile.clone());
         let invocation =
             PodmanInvocation::new(self.config.image().to_string(), worktree_path.to_path_buf())?
                 .with_workspace_mount(self.config.workspace_mount().to_string())
@@ -101,7 +106,8 @@ impl PodmanWorkspaceExecutor {
                 .with_pids_limit(self.config.pids_limit())
                 .with_timeout_seconds(timeout_seconds)
                 .with_argv(argv.clone())
-                .with_stdin(stdin.clone());
+                .with_stdin(stdin.clone())
+                .with_cidfile(cidfile);
         let plan = PodmanRunPlan::from_invocation(&invocation)?;
         let mut command = Command::new(self.command.as_str());
         command.args(plan.arguments());
@@ -110,7 +116,13 @@ impl PodmanWorkspaceExecutor {
         if stdin.is_some() {
             command.stdin(Stdio::piped());
         }
-        let mut child = command.spawn().map_err(|error| map_spawn_error(error))?;
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(error) => {
+                let _ = fs::remove_file(cleanup.cidfile());
+                return Err(map_spawn_error(error));
+            }
+        };
         if let Some(payload) = stdin {
             if let Some(mut handle) = child.stdin.take() {
                 handle
@@ -120,6 +132,7 @@ impl PodmanWorkspaceExecutor {
         }
         match WallClockWait::child_output(child, timeout_seconds)? {
             WaitOutcome::Completed(output) => {
+                let _ = fs::remove_file(cleanup.cidfile());
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let evidence = CommandEvidence::new(argv, output.status.code().unwrap_or(1))
@@ -128,6 +141,7 @@ impl PodmanWorkspaceExecutor {
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
             WaitOutcome::TimedOut => {
+                cleanup.stop_and_remove();
                 let evidence = CommandEvidence::new(argv, 124)
                     .with_stderr(format!(
                         "workspace command exceeded wall-clock timeout of {timeout_seconds}s"
@@ -137,6 +151,14 @@ impl PodmanWorkspaceExecutor {
             }
         }
     }
+}
+
+fn unique_cidfile() -> std::path::PathBuf {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    std::env::temp_dir().join(format!("rack-ai-{nanos}.cid"))
 }
 
 fn map_spawn_error(error: std::io::Error) -> String {

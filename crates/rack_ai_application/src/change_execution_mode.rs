@@ -1,3 +1,6 @@
+/// Change-job execution mode for the Milestone 1–2 pilot.
+/// `ImplementAndVerify` means coder + deterministic gates, not the
+/// local-primary planner/verifier DAG.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ChangeExecutionMode {
     PrepareOnly,

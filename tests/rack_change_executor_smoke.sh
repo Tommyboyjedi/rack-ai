@@ -52,6 +52,7 @@ mod tests {
     }
 }
 ' > "$fixture/src/lib.rs"
+(cd "$fixture" && cargo generate-lockfile >/dev/null)
 git -C "$fixture" init -b main >/dev/null
 git -C "$fixture" config user.email "test@example.com"
 git -C "$fixture" config user.name "test"
@@ -90,10 +91,15 @@ echo "$output"
 
 packet="$rack/state/changes/fixture-executor-001/review-packet.json"
 test -f "$packet"
+worktree="$tmp/workspaces/fixture-executor-001/repo"
 grep -q 'status: checks_passed' <<< "$output"
+grep -q 'acceptance_verdict: approved' <<< "$output"
 grep -q 'cargo' "$packet"
 grep -q '"status": "checks_passed"' "$packet"
+grep -q '"acceptance_verdict": "approved"' "$packet"
 grep -q '"exit_code": 0' "$packet"
+test ! -d "$worktree/target"
+test ! -d "$worktree/.rack-cargo"
 test "$(git -C "$fixture" rev-parse HEAD)" = "$base_sha"
 test "$(git -C "$repo_root" rev-parse HEAD)" = "$before_sha"
 

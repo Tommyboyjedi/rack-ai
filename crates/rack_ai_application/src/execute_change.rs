@@ -1,5 +1,5 @@
+use rack_ai_domain::AcceptanceVerdict;
 use rack_ai_domain::ChangeStatus;
-use rack_ai_domain::VerifierVerdict;
 
 use crate::ChangeExecutionMode;
 use crate::ChangeImplementer;
@@ -107,6 +107,22 @@ impl<'a> ExecuteChange<'a> {
         }
         if request.mode.runs_checks() {
             packet = self.run_checks(&change_request, &workspace, packet)?;
+        }
+        if request.mode.runs_implementer() || request.mode.runs_checks() {
+            if packet.status() != &ChangeStatus::ExecutorUnavailable {
+                packet = match self.inspect_into(&change_request, &workspace, packet) {
+                    Ok(value) => value,
+                    Err((packet, error)) => {
+                        return self.persist(fail(packet, ChangeStatus::Failed, error));
+                    }
+                };
+                if let Some(rejected) = reject_disallowed(&change_request, &packet) {
+                    return self.persist(rejected);
+                }
+                if packet.status() == &ChangeStatus::ChecksPassed {
+                    packet = packet.with_acceptance_verdict(AcceptanceVerdict::Approved);
+                }
+            }
         }
         self.persist(packet)
     }
@@ -221,8 +237,7 @@ impl<'a> ExecuteChange<'a> {
         }
         Ok(packet
             .with_commands(commands)
-            .with_status(ChangeStatus::ChecksPassed)
-            .with_verdict(VerifierVerdict::Approved))
+            .with_status(ChangeStatus::ChecksPassed))
     }
 
     fn assert_artifacts(
@@ -277,7 +292,7 @@ fn reject_disallowed(request: &ChangeRequest, packet: &ReviewPacket) -> Option<R
 fn fail(packet: ReviewPacket, status: ChangeStatus, error: String) -> ReviewPacket {
     packet
         .with_status(status)
-        .with_verdict(VerifierVerdict::Rejected)
+        .with_acceptance_verdict(AcceptanceVerdict::Rejected)
         .with_last_error(Some(error))
 }
 
@@ -301,10 +316,10 @@ mod tests {
     use std::cell::RefCell;
     use std::path::PathBuf;
 
+    use rack_ai_domain::AcceptanceVerdict;
     use rack_ai_domain::ChangeStatus;
     use rack_ai_domain::GitSha;
     use rack_ai_domain::RepositoryId;
-    use rack_ai_domain::VerifierVerdict;
 
     use super::ExecuteChange;
     use super::ExecuteChangeDependencies;
@@ -404,7 +419,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
         assert!(!result.succeeded());
     }
 
@@ -491,7 +509,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Approved));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Approved)
+        );
         assert_eq!(result.packet.commands().len(), 1);
     }
 
@@ -509,7 +530,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksFailed);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
         assert!(!result.succeeded());
     }
 
@@ -531,7 +555,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Approved));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Approved)
+        );
         assert_eq!(result.packet.changed_paths(), ["src/lib.rs"]);
         assert_eq!(
             result.packet.implementer_output(),
@@ -557,9 +584,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
         assert!(result.packet.last_error().unwrap().contains("README.md"));
         assert!(result.packet.commands().is_empty());
+    }
+
+    #[test]
+    fn rejects_out_of_policy_paths_after_checks() {
+        let git = FakeGit::matching("a".repeat(40))
+            .with_after_paths(vec!["src/lib.rs".to_string()])
+            .with_after_checks_paths(vec!["src/lib.rs".to_string(), "README.md".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
+        assert!(result.packet.last_error().unwrap().contains("README.md"));
+        assert_eq!(result.packet.commands().len(), 1);
     }
 
     #[test]
@@ -576,7 +633,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result.packet.status(), &ChangeStatus::ExecutorUnavailable);
-        assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
     }
 
     fn execute(
@@ -659,6 +719,7 @@ mod tests {
         inspect_count: Cell<usize>,
         baseline_paths: Vec<String>,
         after_paths: Vec<String>,
+        after_checks_paths: Option<Vec<String>>,
     }
 
     impl FakeGit {
@@ -668,6 +729,7 @@ mod tests {
                 inspect_count: Cell::new(0),
                 baseline_paths: Vec::new(),
                 after_paths: Vec::new(),
+                after_checks_paths: None,
             }
         }
 
@@ -678,6 +740,11 @@ mod tests {
 
         fn with_after_paths(mut self, after_paths: Vec<String>) -> Self {
             self.after_paths = after_paths;
+            self
+        }
+
+        fn with_after_checks_paths(mut self, after_checks_paths: Vec<String>) -> Self {
+            self.after_checks_paths = Some(after_checks_paths);
             self
         }
     }
@@ -704,8 +771,12 @@ mod tests {
             self.inspect_count.set(count);
             let paths = if count == 1 {
                 self.baseline_paths.clone()
-            } else {
+            } else if count == 2 {
                 self.after_paths.clone()
+            } else {
+                self.after_checks_paths
+                    .clone()
+                    .unwrap_or_else(|| self.after_paths.clone())
             };
             Ok(GitEvidence::new(self.sha.clone(), String::new()).with_changed_paths(paths))
         }

@@ -11,6 +11,7 @@ pub struct PodmanInvocation {
     pids_limit: u32,
     argv: Vec<String>,
     stdin: Option<String>,
+    cidfile: Option<PathBuf>,
 }
 
 impl PodmanInvocation {
@@ -30,6 +31,7 @@ impl PodmanInvocation {
             pids_limit: 256,
             argv: Vec::new(),
             stdin: None,
+            cidfile: None,
         })
     }
 
@@ -63,6 +65,11 @@ impl PodmanInvocation {
         self
     }
 
+    pub fn with_cidfile(mut self, cidfile: PathBuf) -> Self {
+        self.cidfile = Some(cidfile);
+        self
+    }
+
     pub fn image(&self) -> &str {
         self.image.as_str()
     }
@@ -93,6 +100,10 @@ impl PodmanInvocation {
 
     pub fn stdin(&self) -> Option<&String> {
         self.stdin.as_ref()
+    }
+
+    pub fn cidfile(&self) -> Option<&Path> {
+        self.cidfile.as_deref()
     }
 }
 

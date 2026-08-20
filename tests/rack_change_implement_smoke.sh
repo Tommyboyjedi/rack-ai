@@ -53,6 +53,7 @@ mod tests {
     }
 }
 EOF
+(cd "$fixture" && cargo generate-lockfile >/dev/null)
 git -C "$fixture" init -b main >/dev/null
 git -C "$fixture" config user.email "test@example.com"
 git -C "$fixture" config user.name "test"
@@ -93,9 +94,11 @@ worktree="$tmp/workspaces/fixture-implement-001/repo"
 packet="$rack/state/changes/fixture-implement-001/review-packet.json"
 test -f "$packet"
 grep -q 'status: checks_passed' <<< "$output"
-grep -q 'verdict: approved' <<< "$output"
+grep -q 'acceptance_verdict: approved' <<< "$output"
 grep -q '"status": "checks_passed"' "$packet"
-grep -q '"verifier_verdict": "approved"' "$packet"
+grep -q '"acceptance_verdict": "approved"' "$packet"
+test ! -d "$worktree/target"
+test ! -d "$worktree/.rack-cargo"
 grep -q 'src/lib.rs' "$packet"
 grep -q '42' "$worktree/src/lib.rs"
 test "$(git -C "$worktree" rev-parse HEAD)" = "$base_sha"

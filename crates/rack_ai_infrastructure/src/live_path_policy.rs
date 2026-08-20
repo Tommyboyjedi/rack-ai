@@ -13,8 +13,8 @@ use rack_ai_application::ImplementChangeResult;
 use rack_ai_application::RepositoryRegistry;
 use rack_ai_application::RunCommandRequest;
 use rack_ai_application::WorkspaceExecutor;
+use rack_ai_domain::AcceptanceVerdict;
 use rack_ai_domain::ChangeStatus;
-use rack_ai_domain::VerifierVerdict;
 
 use crate::FileSystemChangeManifestRepository;
 use crate::FileSystemRepositoryRegistry;
@@ -124,7 +124,10 @@ fn live_podman_bash_forbidden_write_rejected_by_path_gate() {
     .unwrap();
 
     assert_eq!(result.packet.status(), &ChangeStatus::PathPolicyFailed);
-    assert_eq!(result.packet.verdict(), Some(&VerifierVerdict::Rejected));
+    assert_eq!(
+        result.packet.acceptance_verdict(),
+        Some(&AcceptanceVerdict::Rejected)
+    );
     assert!(result.packet.last_error().unwrap().contains("README.md"));
     assert!(result.packet.commands().is_empty());
     let worktree = root.join("workspaces/live-policy-001/repo");

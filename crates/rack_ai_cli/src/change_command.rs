@@ -93,9 +93,12 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     println!("base_sha: {}", result.packet.base_sha());
     let status = serde_json::to_value(result.packet.status()).map_err(|error| error.to_string())?;
     println!("status: {}", status.as_str().unwrap_or("unknown"));
-    if let Some(verdict) = result.packet.verdict() {
+    if let Some(verdict) = result.packet.acceptance_verdict() {
         let verdict = serde_json::to_value(verdict).map_err(|error| error.to_string())?;
-        println!("verdict: {}", verdict.as_str().unwrap_or("unknown"));
+        println!(
+            "acceptance_verdict: {}",
+            verdict.as_str().unwrap_or("unknown")
+        );
     }
     println!("packet: {}", result.packet_path);
     if let Some(error) = result.packet.last_error() {

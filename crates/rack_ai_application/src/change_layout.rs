@@ -19,6 +19,10 @@ impl ChangeLayout {
         "/workspace"
     }
 
+    pub fn build_cache_mount_path() -> &'static str {
+        "/rack-build"
+    }
+
     pub fn coder_max_turns() -> usize {
         8
     }

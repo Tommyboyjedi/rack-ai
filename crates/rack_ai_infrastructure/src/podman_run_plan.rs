@@ -10,6 +10,7 @@ impl PodmanRunPlan {
         if invocation.argv().is_empty() {
             return Err("podman invocation command cannot be empty".to_string());
         }
+        let build = "/rack-build";
         let mut arguments = vec![
             "run".to_string(),
             "--rm".to_string(),
@@ -22,12 +23,12 @@ impl PodmanRunPlan {
             "--read-only".to_string(),
             "--tmpfs".to_string(),
             "/tmp:rw,noexec,nosuid,size=64m".to_string(),
+            "--tmpfs".to_string(),
+            format!("{build}:rw,exec,nosuid,size=512m"),
             "--memory".to_string(),
             invocation.memory().to_string(),
             "--pids-limit".to_string(),
             invocation.pids_limit().to_string(),
-            "--timeout".to_string(),
-            invocation.timeout_seconds().to_string(),
             "--userns".to_string(),
             "keep-id".to_string(),
             "--mount".to_string(),
@@ -42,16 +43,22 @@ impl PodmanRunPlan {
             "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin"
                 .to_string(),
             "--env".to_string(),
-            format!("HOME={}", invocation.workspace_mount()),
+            format!("HOME={build}"),
             "--env".to_string(),
-            format!("CARGO_HOME={}/.rack-cargo", invocation.workspace_mount()),
+            format!("TMPDIR={build}"),
             "--env".to_string(),
-            format!("CARGO_TARGET_DIR={}/target", invocation.workspace_mount()),
+            format!("CARGO_HOME={build}/cargo"),
+            "--env".to_string(),
+            format!("CARGO_TARGET_DIR={build}/target"),
             "--env".to_string(),
             "RUSTUP_HOME=/usr/local/rustup".to_string(),
             "--env".to_string(),
             "LANG=C.UTF-8".to_string(),
         ];
+        if let Some(cidfile) = invocation.cidfile() {
+            arguments.push("--cidfile".to_string());
+            arguments.push(cidfile.display().to_string());
+        }
         if invocation.stdin().is_some() {
             arguments.insert(1, "-i".to_string());
         }
@@ -83,6 +90,7 @@ mod tests {
                 PathBuf::from("/tmp/work"),
             )
             .unwrap()
+            .with_cidfile(PathBuf::from("/tmp/work.cid"))
             .with_argv(vec!["cargo".to_string(), "test".to_string()]),
         )
         .unwrap();
@@ -92,11 +100,18 @@ mod tests {
         assert!(plan.contains("ALL"));
         assert!(plan.contains("no-new-privileges"));
         assert!(plan.contains("type=bind,src=/tmp/work,dst=/workspace"));
+        assert!(plan.contains("--cidfile"));
+        assert!(plan.contains("/tmp/work.cid"));
+        assert!(plan.contains("HOME=/rack-build"));
+        assert!(plan.contains("TMPDIR=/rack-build"));
+        assert!(plan.contains("CARGO_HOME=/rack-build/cargo"));
+        assert!(plan.contains("CARGO_TARGET_DIR=/rack-build/target"));
+        assert!(!plan.contains("/workspace/.rack-cargo"));
+        assert!(!plan.contains("/workspace/target"));
         assert!(!plan.contains("docker.sock"));
-        assert!(!plan.contains("/home"));
+        assert!(!plan.contains("src=/home"));
         assert!(!plan.contains("--privileged"));
         assert!(!plan.contains("SSH"));
-        assert!(plan.contains("CARGO_HOME=/workspace/.rack-cargo"));
         assert_eq!(plan.arguments().last(), Some(&"test".to_string()));
     }
 
