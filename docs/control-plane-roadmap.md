@@ -589,6 +589,26 @@ Verification completed in this slice:
 - `./tests/rack_coordinator_auto_smoke.sh`
 
 What remains for the next slice:
-- remove or port the remaining Python-only utilities and test helpers under `plugins/` and `tests/`
-- decide whether the temporary vLLM parser plugin stays as Rust, moves into core infrastructure, or is deleted with the model workaround
+- keep Python only where vLLM structurally requires it
 - continue tightening crate/module boundaries so the Rust application reflects the intended long-term architecture
+- remove temporary workaround code when the 2060 coder model no longer needs the vLLM parser plugin
+
+### 2026-08-20: Python boundary reduction slice
+
+Completed in this slice:
+- replaced `bin/rack-healthcheck` with a Rust-backed shell wrapper
+- updated the remaining queue, DAG, and healthcheck smoke scripts to invoke rack commands directly instead of forcing `python3`
+- removed the ad hoc Python verification harnesses under `tests/` once the Rust-owned smoke surface became authoritative
+- documented the repository rule that Python remains only where vLLM structurally requires it
+
+What is now true:
+- the live control-plane command surface is Rust-owned end to end
+- the only remaining Python file in the repository is the temporary vLLM tool parser plugin for the 2060 coder model
+- repository verification now flows through the maintained shell smoke tests and Rust unit tests rather than parallel Python harnesses
+
+Verification completed in this slice:
+- `cargo test -q`
+- `./tests/rack_queue_smoke.sh`
+- `./tests/rack_dag_smoke.sh`
+- `./tests/rack_healthcheck_smoke.sh`
+- `find . -name '*.py'`

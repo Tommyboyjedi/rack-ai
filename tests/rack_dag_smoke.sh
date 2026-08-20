@@ -59,12 +59,12 @@ cat > "$spec" <<EOF2
 EOF2
 
 "$repo_root/bin/rack-submit" "$spec"
-python3 "$repo_root/bin/rack-runner" --once
+"$repo_root/bin/rack-runner" --once
 "$repo_root/bin/rack-status" --emit-json > "$status_mid"
 grep -q '"plan"' "$status_mid"
 grep -q '"status": "succeeded"' "$status_mid"
-python3 "$repo_root/bin/rack-runner" --once
-python3 "$repo_root/bin/rack-runner" --once
+"$repo_root/bin/rack-runner" --once
+"$repo_root/bin/rack-runner" --once
 "$repo_root/bin/rack-status" --emit-json > "$status_final"
 grep -q '"status": "succeeded"' "$status_final"
 grep -q '"verify"' "$status_final"
