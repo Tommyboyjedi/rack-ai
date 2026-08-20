@@ -22,7 +22,7 @@ pub struct RunState {
     timeout_seconds: TimeoutSeconds,
     placement: Placement,
     active_node_id: Option<ActiveNodeId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "dag_state", skip_serializing_if = "Option::is_none")]
     dag_run_state: Option<DagRunState>,
     #[serde(flatten)]
     metadata: RunMetadata,

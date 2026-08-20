@@ -37,11 +37,11 @@ cat > "$spec" <<EOF
 }
 EOF
 
-python3 "$repo_root/bin/rack-submit" "$spec"
-python3 "$repo_root/bin/rack-status" --emit-json > "$workdir/rack_queue_status_before.json"
+"$repo_root/bin/rack-submit" "$spec"
+"$repo_root/bin/rack-status" --emit-json > "$workdir/rack_queue_status_before.json"
 grep -q "$task_id.json" "$workdir/rack_queue_status_before.json"
 python3 "$repo_root/bin/rack-runner" --once
-python3 "$repo_root/bin/rack-status" --emit-json > "$workdir/rack_queue_status_after.json"
+"$repo_root/bin/rack-status" --emit-json > "$workdir/rack_queue_status_after.json"
 grep -q '"status": "succeeded"' "$workdir/rack_queue_status_after.json"
 grep -qx 'RACK_QUEUE_OK' "$target"
 rm -f "$spec" "$workdir/rack_queue_status_before.json" "$workdir/rack_queue_status_after.json"

@@ -32,6 +32,9 @@ fn read_names(directory: PathBuf) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
     for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
         let path = entry.map_err(|error| error.to_string())?.path();
+        if path.extension().and_then(|value| value.to_str()) != Some("json") {
+            continue;
+        }
         if let Some(name) = path.file_name().and_then(|value| value.to_str()) {
             names.push(name.to_string());
         }
@@ -56,6 +59,7 @@ mod tests {
         fs::create_dir_all(root.join("state/queue/queued")).unwrap();
         fs::create_dir_all(root.join("state/queue/running")).unwrap();
         fs::write(root.join("state/queue/queued/a.json"), "{}").unwrap();
+        fs::write(root.join("state/queue/queued/.gitkeep"), "").unwrap();
         fs::write(root.join("state/queue/running/b.json"), "{}").unwrap();
         let repository = FileSystemQueueStateRepository::new(RepositoryPaths::new(root));
         assert_eq!(

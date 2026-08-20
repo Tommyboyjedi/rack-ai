@@ -79,21 +79,24 @@ impl<'a> RunNextTask<'a> {
             Selection::NoneAdmissible => return Ok(RunNextOutcome::NoAdmissibleTasks),
             Selection::Selected(value) => value,
         };
-        let lease_paths = self
-            .lease_repository
-            .acquire(selected_task.run_state.task_id(), &selected_task.placement)?;
+        let started_at = self.clock.now_text()?;
+        let lease_paths = self.lease_repository.acquire(
+            selected_task.run_state.task_id(),
+            &selected_task.placement,
+            &started_at,
+        )?;
         if selected_task.task_spec.has_dag() {
-            return self.execute_dag_task(selected_task, lease_paths);
+            return self.execute_dag_task(selected_task, started_at, lease_paths);
         }
-        self.execute_linear_task(selected_task, lease_paths)
+        self.execute_linear_task(selected_task, started_at, lease_paths)
     }
 
     fn execute_dag_task(
         &self,
         selected_task: SelectedTask,
+        started_at: String,
         lease_paths: BTreeMap<String, String>,
     ) -> Result<RunNextOutcome, String> {
-        let started_at = self.clock.now_text()?;
         let node_id = selected_task
             .active_node_id
             .clone()
@@ -140,9 +143,9 @@ impl<'a> RunNextTask<'a> {
     fn execute_linear_task(
         &self,
         selected_task: SelectedTask,
+        started_at: String,
         lease_paths: BTreeMap<String, String>,
     ) -> Result<RunNextOutcome, String> {
-        let started_at = self.clock.now_text()?;
         let running_metadata = selected_task.run_state.metadata().clone().running(
             started_at,
             selected_task.queued_task.spec_path().to_string(),

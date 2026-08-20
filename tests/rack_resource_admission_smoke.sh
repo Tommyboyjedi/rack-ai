@@ -41,7 +41,7 @@ cat > "$spec" <<EOF2
 }
 EOF2
 
-python3 "$repo_root/bin/rack-submit" "$spec"
+"$repo_root/bin/rack-submit" "$spec"
 cat > "$lease_path" <<EOF2
 {
   "task_id": "external-holder",
@@ -52,7 +52,7 @@ cat > "$lease_path" <<EOF2
 }
 EOF2
 python3 "$repo_root/bin/rack-runner" --once
-python3 "$repo_root/bin/rack-status" --emit-json > "$status_before"
+"$repo_root/bin/rack-status" --emit-json > "$status_before"
 grep -q '"admission_state": "waiting_for_resources"' "$status_before"
 grep -q '"gpu-2060"' "$status_before"
 if [[ -e "$target" ]]; then
@@ -62,7 +62,7 @@ fi
 
 rm -f "$lease_path"
 python3 "$repo_root/bin/rack-runner" --once
-python3 "$repo_root/bin/rack-status" --emit-json > "$status_after"
+"$repo_root/bin/rack-status" --emit-json > "$status_after"
 grep -q '"status": "succeeded"' "$status_after"
 grep -qx 'RACK_RESOURCE_OK' "$target"
 

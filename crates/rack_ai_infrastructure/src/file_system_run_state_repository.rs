@@ -46,12 +46,19 @@ impl RunStateRepository for FileSystemRunStateRepository {
         let mut items: Vec<RunState> = Vec::new();
         for entry in fs::read_dir(runs_dir).map_err(|error| error.to_string())? {
             let path = entry.map_err(|error| error.to_string())?.path();
+            if !is_json_file(&path) {
+                continue;
+            }
             let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
             items.push(serde_json::from_str(&content).map_err(|error| error.to_string())?);
         }
         items.sort_by(|left, right| left.task_id().value().cmp(right.task_id().value()));
         Ok(items)
     }
+}
+
+fn is_json_file(path: &std::path::Path) -> bool {
+    path.extension().and_then(|value| value.to_str()) == Some("json")
 }
 
 #[cfg(test)]
@@ -83,9 +90,10 @@ mod tests {
     #[test]
     fn lists_saved_run_states() {
         let root = temp_root();
-        let repository = FileSystemRunStateRepository::new(RepositoryPaths::new(root));
+        let repository = FileSystemRunStateRepository::new(RepositoryPaths::new(root.clone()));
         repository.save(&sample_run_state("task-b")).unwrap();
         repository.save(&sample_run_state("task-a")).unwrap();
+        fs::write(root.join("state/runs/.gitkeep"), "").unwrap();
         assert_eq!(repository.list().unwrap().len(), 2);
     }
 

@@ -23,6 +23,7 @@ impl TaskSpec {
             Some(value) => value,
             None => return Ok(None),
         };
+        dag.validate()?;
         let states = dag
             .nodes()
             .iter()

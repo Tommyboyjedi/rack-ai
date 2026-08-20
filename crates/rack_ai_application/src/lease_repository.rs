@@ -9,6 +9,7 @@ pub trait LeaseRepository {
         &self,
         task_id: &TaskId,
         placement: &Placement,
+        acquired_at: &str,
     ) -> Result<BTreeMap<String, String>, String>;
     fn release(&self, placement: &Placement) -> Result<(), String>;
 }

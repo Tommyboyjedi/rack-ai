@@ -1,3 +1,4 @@
+use rack_ai_domain::DagRunState;
 use rack_ai_domain::RunMetadata;
 use rack_ai_domain::RunState;
 use rack_ai_domain::RunStateDraft;
@@ -18,6 +19,7 @@ pub struct SubmitTaskDependencies<'a> {
 pub struct SubmitTaskRequest {
     pub spec_json: String,
     pub run_state: RunStateDraft,
+    pub dag_run_state: Option<DagRunState>,
     pub submitted_at: String,
     pub source_spec: String,
     pub queue_path: String,
@@ -38,6 +40,11 @@ impl<'a> SubmitTask<'a> {
                 request.source_spec,
                 request.queue_path,
             ));
+        let run_state = if let Some(dag_run_state) = request.dag_run_state {
+            run_state.with_dag_run_state(dag_run_state)
+        } else {
+            run_state
+        };
         self.task_spec_repository
             .save(run_state.task_id().value(), request.spec_json.as_str())?;
         self.run_state_repository.save(&run_state)?;
@@ -77,6 +84,7 @@ mod tests {
             .execute(SubmitTaskRequest {
                 spec_json: "{\"task_id\":\"task-22\"}".to_string(),
                 run_state: sample_run_state_draft(),
+                dag_run_state: None,
                 submitted_at: "2026-08-20T20:30:00Z".to_string(),
                 source_spec: "/tmp/spec.json".to_string(),
                 queue_path: "/state/queue/queued/task-22.json".to_string(),

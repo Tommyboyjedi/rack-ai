@@ -523,3 +523,24 @@ What is now true:
 
 Verification completed in this slice:
 - `cargo test`
+
+### 2026-08-20: Rust submit and status ownership slice
+
+Completed in this slice:
+- moved high-level task submission normalization into Rust so submit specs without explicit `placement` are now resolved through the Rust worker catalog
+- moved initial Rust DAG validation and durable `dag_state` initialization into the Rust submit path
+- extended Rust status inspection to include leases, placement, and `dag_state`, matching the operator-facing surface previously owned by Python
+- hardened filesystem-backed Rust repositories to ignore placeholder files such as `.gitkeep` instead of attempting to parse them as JSON state
+- replaced `bin/rack-submit` and `bin/rack-status` Python entrypoints with Rust-backed shell wrappers
+- updated the queue and DAG smoke scripts to execute the rack commands directly rather than forcing `python3`
+
+What is now true:
+- `rack-submit` and `rack-status` are no longer Python control-plane implementations
+- operator-visible queue, run, lease, placement, and DAG inspection for those commands now flows through Rust
+- high-level task specs can be normalized into the durable Rust queue format without relying on Python registry helpers
+- the remaining Python control-plane ownership is now concentrated much more narrowly in the runner/task-execution path
+
+Verification completed in this slice:
+- `cargo test`
+- `./tests/rack_queue_smoke.sh`
+- `./tests/rack_dag_smoke.sh`

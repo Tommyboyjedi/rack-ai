@@ -68,7 +68,10 @@ impl ExecutionQueueRepository for FileSystemExecutionQueueRepository {
 fn read_queue_entries(directory: PathBuf) -> Result<Vec<PathBuf>, String> {
     let mut entries = Vec::new();
     for entry in fs::read_dir(directory).map_err(|error| error.to_string())? {
-        entries.push(entry.map_err(|error| error.to_string())?.path());
+        let path = entry.map_err(|error| error.to_string())?.path();
+        if path.extension().and_then(|value| value.to_str()) == Some("json") {
+            entries.push(path);
+        }
     }
     entries.sort();
     Ok(entries)
@@ -104,6 +107,7 @@ mod tests {
         let queued_dir = root.join("state/queue/queued");
         fs::create_dir_all(&queued_dir).unwrap();
         fs::write(queued_dir.join("task-a.json"), "{}").unwrap();
+        fs::write(queued_dir.join(".gitkeep"), "").unwrap();
         let repository =
             FileSystemExecutionQueueRepository::new(RepositoryPaths::new(root.clone()));
         let queued = repository.list().unwrap();

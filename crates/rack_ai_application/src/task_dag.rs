@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use rack_ai_domain::ActiveNodeId;
 use serde::Deserialize;
 use serde::Serialize;
@@ -21,6 +23,26 @@ impl TaskDag {
     pub fn nodes(&self) -> &[TaskDagNode] {
         self.nodes.as_slice()
     }
+
+    pub fn validate(&self) -> Result<(), String> {
+        let known_ids: BTreeSet<String> = self
+            .nodes
+            .iter()
+            .map(|node| node.id().value().to_string())
+            .collect();
+        for node in &self.nodes {
+            for dependency in node.depends_on() {
+                if !known_ids.contains(dependency.value()) {
+                    return Err(format!(
+                        "dag node {} depends on unknown node {}",
+                        node.id().value(),
+                        dependency.value()
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -39,6 +61,20 @@ mod tests {
         assert!(
             dag.find_node(&rack_ai_domain::ActiveNodeId::new("code".to_string()).unwrap())
                 .is_some()
+        );
+    }
+
+    #[test]
+    fn rejects_unknown_dependencies() {
+        let dag = serde_json::from_value::<TaskDag>(serde_json::json!({
+            "nodes": [
+                {"id": "verify", "worker": "planner", "cwd": "/tmp", "prompt": "Verify", "depends_on": ["missing"]}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            dag.validate(),
+            Err("dag node verify depends on unknown node missing".to_string())
         );
     }
 }

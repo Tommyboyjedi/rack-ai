@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use rack_ai_domain::DagRunState;
+use rack_ai_domain::Placement;
 use rack_ai_domain::RunState;
 use rack_ai_domain::RunStatus;
 
@@ -17,7 +19,10 @@ pub struct StatusRun {
     submitted_at: Option<String>,
     started_at: Option<String>,
     finished_at: Option<String>,
+    placement: Placement,
     active_node_id: Option<String>,
+    #[serde(rename = "dag_state")]
+    dag_run_state: Option<DagRunState>,
 }
 
 impl StatusRun {
@@ -35,10 +40,40 @@ impl StatusRun {
             submitted_at: run_state.metadata().submitted_at().cloned(),
             started_at: run_state.metadata().started_at().cloned(),
             finished_at: run_state.metadata().finished_at().cloned(),
+            placement: run_state.placement().clone(),
             active_node_id: run_state
                 .active_node_id()
                 .map(|value| value.value().to_string()),
+            dag_run_state: run_state.dag_run_state().cloned(),
         }
+    }
+
+    pub fn task_id(&self) -> &str {
+        self.task_id.as_str()
+    }
+
+    pub fn status(&self) -> &str {
+        self.status.as_str()
+    }
+
+    pub fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    pub fn max_attempts(&self) -> u32 {
+        self.max_attempts
+    }
+
+    pub fn admission_state(&self) -> Option<&String> {
+        self.admission_state.as_ref()
+    }
+
+    pub fn waiting_on_resources(&self) -> &[String] {
+        self.waiting_on_resources.as_slice()
+    }
+
+    pub fn active_node_id(&self) -> Option<&String> {
+        self.active_node_id.as_ref()
     }
 }
 
@@ -107,5 +142,6 @@ mod tests {
         assert!(json.contains("\"submitted_at\":\"2026-08-20T20:40:00Z\""));
         assert!(json.contains("\"started_at\":\"2026-08-20T20:40:05Z\""));
         assert!(json.contains("\"active_node_id\":\"implement\""));
+        assert!(json.contains("\"placement\""));
     }
 }
