@@ -1,3 +1,4 @@
+pub mod clock;
 pub mod execution_queue_repository;
 pub mod inspect_status;
 pub mod lease_repository;
@@ -18,6 +19,7 @@ pub mod task_spec_repository;
 pub mod worker_binding;
 pub mod worker_catalog;
 
+pub use clock::Clock;
 pub use execution_queue_repository::ExecutionQueueRepository;
 pub use inspect_status::InspectStatus;
 pub use inspect_status::InspectStatusDependencies;

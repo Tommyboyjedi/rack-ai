@@ -2,6 +2,7 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 
+use rack_ai_application::Clock;
 use rack_ai_application::InspectStatus;
 use rack_ai_application::InspectStatusDependencies;
 use rack_ai_application::RunNextOutcome;
@@ -28,6 +29,7 @@ use rack_ai_infrastructure::HealthcheckServiceDependencies;
 use rack_ai_infrastructure::PythonRackTaskExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
+use rack_ai_infrastructure::UtcDateCommandClock;
 use serde::Deserialize;
 
 struct CommandRoots {
@@ -94,22 +96,31 @@ fn flag_value(arguments: &[String], flag: &str) -> Option<String> {
 }
 
 fn submit(paths: RepositoryPaths, spec_path: PathBuf) -> Result<(), String> {
-    let spec_json = fs::read_to_string(spec_path).map_err(|error| error.to_string())?;
+    let spec_json = fs::read_to_string(&spec_path).map_err(|error| error.to_string())?;
     let spec = serde_json::from_str::<SubmitSpec>(&spec_json).map_err(|error| error.to_string())?;
+    let clock = UtcDateCommandClock;
     let run_state_repository = FileSystemRunStateRepository::new(paths.clone());
-    let task_spec_repository = FileSystemTaskSpecRepository::new(paths);
+    let task_spec_repository = FileSystemTaskSpecRepository::new(paths.clone());
     let service = SubmitTask::new(SubmitTaskDependencies {
         run_state_repository: &run_state_repository,
         task_spec_repository: &task_spec_repository,
     });
+    let task_id = TaskId::new(spec.task_id)?;
     let request = SubmitTaskRequest {
         spec_json,
         run_state: RunStateDraft {
-            task_id: TaskId::new(spec.task_id)?,
+            task_id: task_id.clone(),
             attempt_limit: AttemptLimit::new(spec.max_attempts)?,
             timeout_seconds: TimeoutSeconds::new(spec.timeout_seconds)?,
             placement: spec.placement.into_domain(),
         },
+        submitted_at: clock.now_text()?,
+        source_spec: spec_path.to_string_lossy().to_string(),
+        queue_path: paths
+            .queued_dir()
+            .join(format!("{}.json", task_id.value()))
+            .to_string_lossy()
+            .to_string(),
     };
     let run_state = service.execute(request)?;
     println!("{}", run_state.task_id().value());
@@ -131,6 +142,7 @@ fn status(paths: RepositoryPaths) -> Result<(), String> {
 
 fn run_next(paths: RepositoryPaths, repo_root: PathBuf) -> Result<(), String> {
     let state_root = paths.root().to_path_buf();
+    let clock = UtcDateCommandClock;
     let execution_queue_repository = FileSystemExecutionQueueRepository::new(paths.clone());
     let lease_repository = FileSystemLeaseRepository::new(paths.clone());
     let run_state_repository = FileSystemRunStateRepository::new(paths.clone());
@@ -138,6 +150,7 @@ fn run_next(paths: RepositoryPaths, repo_root: PathBuf) -> Result<(), String> {
     let worker_catalog = FileSystemWorkerCatalog::new(RegistryPaths::new(repo_root.clone()));
     let task_executor = PythonRackTaskExecutor::new(repo_root, state_root);
     let service = RunNextTask::new(RunNextTaskDependencies {
+        clock: &clock,
         execution_queue_repository: &execution_queue_repository,
         lease_repository: &lease_repository,
         run_state_repository: &run_state_repository,

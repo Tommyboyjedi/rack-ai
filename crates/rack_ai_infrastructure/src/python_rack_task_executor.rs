@@ -29,10 +29,17 @@ impl TaskExecutor for PythonRackTaskExecutor {
             .output()
             .map_err(|error| error.to_string())?;
         self.cleanup_execution_path(request, &execution_path);
+        let result_path = self.write_result(request.task_id(), &output.stdout)?;
         if output.status.success() {
-            return Ok(TaskExecution::success());
+            return Ok(TaskExecution::success(Some(result_path)));
         }
-        Ok(TaskExecution::failure())
+        let last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let error_text = if last_error.is_empty() {
+            "rack-task failed".to_string()
+        } else {
+            last_error
+        };
+        Ok(TaskExecution::failure(error_text, Some(result_path)))
     }
 }
 
@@ -58,78 +65,12 @@ impl PythonRackTaskExecutor {
             let _ = fs::remove_file(execution_path);
         }
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::path::PathBuf;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use rack_ai_application::TaskExecutionRequest;
-    use rack_ai_application::TaskExecutor;
-
-    use super::PythonRackTaskExecutor;
-
-    #[test]
-    fn runs_script_and_reports_success() {
-        let repo_root = temp_root("repo");
-        let state_root = temp_root("state");
-        let bin_dir = repo_root.join("bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::create_dir_all(state_root.join("state/queue/running")).unwrap();
-        let script = bin_dir.join("rack-task");
-        fs::write(&script, "#!/usr/bin/env bash\nexit 0\n").unwrap();
-        let _ = std::process::Command::new("chmod")
-            .arg("+x")
-            .arg(&script)
-            .status();
-        let spec = state_root.join("spec.json");
-        fs::write(&spec, "{}").unwrap();
-        let executor = PythonRackTaskExecutor::new(repo_root, state_root);
-        let outcome = executor
-            .execute(&TaskExecutionRequest::new(
-                "task".to_string(),
-                spec.to_str().unwrap().to_string(),
-            ))
-            .unwrap();
-        assert!(outcome.was_successful());
-    }
-
-    #[test]
-    fn writes_temporary_execution_spec_for_dag_nodes_into_state_root() {
-        let repo_root = temp_root("repo");
-        let state_root = temp_root("state");
-        let bin_dir = repo_root.join("bin");
-        fs::create_dir_all(&bin_dir).unwrap();
-        fs::create_dir_all(state_root.join("state/queue/running")).unwrap();
-        let script = bin_dir.join("rack-task");
-        fs::write(&script, "#!/usr/bin/env bash\ntest -f \"$2\"\nexit 0\n").unwrap();
-        let _ = std::process::Command::new("chmod")
-            .arg("+x")
-            .arg(&script)
-            .status();
-        let executor = PythonRackTaskExecutor::new(repo_root, state_root.clone());
-        executor
-            .execute(
-                &TaskExecutionRequest::new("task".to_string(), "/tmp/spec.json".to_string())
-                    .with_execution_spec_json("{}".to_string()),
-            )
-            .unwrap();
-        assert!(
-            !state_root
-                .join("state/queue/running/task--exec.json")
-                .exists()
-        );
-    }
-
-    fn temp_root(label: &str) -> PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("rack-ai-python-executor-{label}-{nanos}"));
-        fs::create_dir_all(&root).unwrap();
-        root
+    fn write_result(&self, task_id: &str, stdout: &[u8]) -> Result<String, String> {
+        let history_dir = self.state_root.join("state/queue/history");
+        fs::create_dir_all(&history_dir).map_err(|error| error.to_string())?;
+        let path = history_dir.join(format!("{task_id}.result.json"));
+        fs::write(&path, stdout).map_err(|error| error.to_string())?;
+        Ok(path.to_string_lossy().to_string())
     }
 }

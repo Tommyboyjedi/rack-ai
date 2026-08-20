@@ -16,6 +16,7 @@ pub mod registry_paths;
 pub mod repository_paths;
 pub mod resource_record;
 pub mod resources_document;
+pub mod utc_date_command_clock;
 pub mod worker_record;
 pub mod workers_document;
 
@@ -38,5 +39,6 @@ pub use registry_paths::RegistryPaths;
 pub use repository_paths::RepositoryPaths;
 pub use resource_record::ResourceRecord;
 pub use resources_document::ResourcesDocument;
+pub use utc_date_command_clock::UtcDateCommandClock;
 pub use worker_record::WorkerRecord;
 pub use workers_document::WorkersDocument;

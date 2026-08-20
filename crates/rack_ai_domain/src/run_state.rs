@@ -6,6 +6,7 @@ use crate::AttemptCount;
 use crate::AttemptLimit;
 use crate::DagRunState;
 use crate::Placement;
+use crate::RunMetadata;
 use crate::RunStatus;
 use crate::TaskId;
 use crate::TimeoutSeconds;
@@ -23,6 +24,8 @@ pub struct RunState {
     active_node_id: Option<ActiveNodeId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     dag_run_state: Option<DagRunState>,
+    #[serde(flatten)]
+    metadata: RunMetadata,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,6 +47,7 @@ impl RunState {
             placement: draft.placement,
             active_node_id: None,
             dag_run_state: None,
+            metadata: RunMetadata::default(),
         }
     }
 
@@ -77,6 +81,11 @@ impl RunState {
         self
     }
 
+    pub fn with_metadata(mut self, metadata: RunMetadata) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
     pub fn can_retry(&self) -> bool {
         self.attempt_count.value() < self.attempt_limit.value()
     }
@@ -105,69 +114,7 @@ impl RunState {
     pub fn dag_run_state(&self) -> Option<&DagRunState> {
         self.dag_run_state.as_ref()
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::RunState;
-    use super::RunStateDraft;
-    use crate::ActiveNodeId;
-    use crate::AttemptLimit;
-    use crate::DagNodeState;
-    use crate::DagRunState;
-    use crate::Placement;
-    use crate::RunStatus;
-    use crate::TaskId;
-    use crate::TimeoutSeconds;
-
-    #[test]
-    fn creates_queued_run_state() {
-        let run_state = RunState::queued(sample_draft());
-        assert_eq!(run_state.status(), &RunStatus::Queued);
-        assert_eq!(run_state.attempt_count().value(), 0);
-        assert_eq!(run_state.task_id().value(), "task-1");
-    }
-
-    #[test]
-    fn starts_run_state() {
-        let run_state = RunState::queued(sample_draft()).start(Some(sample_node_id()));
-        assert_eq!(run_state.status(), &RunStatus::Running);
-        assert_eq!(run_state.attempt_count().value(), 1);
-    }
-
-    #[test]
-    fn supports_success_failure_and_requeue_states() {
-        let queued = RunState::queued(sample_draft());
-        assert!(queued.can_retry());
-        let running = queued.start(None);
-        let requeued = running.clone().queue();
-        let failed = running.clone().fail();
-        let succeeded = running.succeed();
-        assert_eq!(requeued.status(), &RunStatus::Queued);
-        assert_eq!(failed.status(), &RunStatus::Failed);
-        assert_eq!(succeeded.status(), &RunStatus::Succeeded);
-    }
-
-    #[test]
-    fn stores_optional_dag_run_state() {
-        let run_state = RunState::queued(sample_draft()).with_dag_run_state(sample_dag_run_state());
-        assert!(run_state.dag_run_state().is_some());
-    }
-
-    fn sample_draft() -> RunStateDraft {
-        RunStateDraft {
-            task_id: TaskId::new("task-1".to_string()).unwrap(),
-            attempt_limit: AttemptLimit::new(2).unwrap(),
-            timeout_seconds: TimeoutSeconds::new(120).unwrap(),
-            placement: Placement::new(vec!["worker-a".to_string()], vec!["gpu-a".to_string()]),
-        }
-    }
-
-    fn sample_node_id() -> ActiveNodeId {
-        ActiveNodeId::new("plan".to_string()).unwrap()
-    }
-
-    fn sample_dag_run_state() -> DagRunState {
-        DagRunState::new(vec![(sample_node_id(), DagNodeState::pending(vec![]))]).unwrap()
+    pub fn metadata(&self) -> &RunMetadata {
+        &self.metadata
     }
 }

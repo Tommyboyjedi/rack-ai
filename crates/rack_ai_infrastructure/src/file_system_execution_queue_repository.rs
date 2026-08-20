@@ -51,13 +51,17 @@ impl ExecutionQueueRepository for FileSystemExecutionQueueRepository {
         fs::rename(current, target).map_err(|error| error.to_string())
     }
 
-    fn requeue(&self, task: &QueuedTask) -> Result<(), String> {
+    fn requeue(&self, task: &QueuedTask) -> Result<QueuedTask, String> {
         let current = PathBuf::from(task.spec_path());
         let target = self
             .paths
             .queued_dir()
             .join(format!("{}.json", task.task_id()));
-        fs::rename(current, target).map_err(|error| error.to_string())
+        fs::rename(current, &target).map_err(|error| error.to_string())?;
+        Ok(QueuedTask::new(
+            task.task_id().to_string(),
+            path_text(&target)?,
+        ))
     }
 }
 
@@ -119,8 +123,9 @@ mod tests {
             FileSystemExecutionQueueRepository::new(RepositoryPaths::new(root.clone()));
         let queued = repository.list().unwrap();
         let running = repository.claim(&queued[0]).unwrap();
-        repository.requeue(&running).unwrap();
+        let requeued = repository.requeue(&running).unwrap();
         assert!(root.join("state/queue/queued/task-b.json").exists());
+        assert!(requeued.spec_path().ends_with("task-b.json"));
     }
 
     fn temp_root() -> PathBuf {

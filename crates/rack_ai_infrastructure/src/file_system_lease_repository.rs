@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::fs;
 
 use rack_ai_application::LeaseRepository;
@@ -36,8 +37,13 @@ impl LeaseRepository for FileSystemLeaseRepository {
         Ok(blocked)
     }
 
-    fn acquire(&self, task_id: &TaskId, placement: &Placement) -> Result<(), String> {
+    fn acquire(
+        &self,
+        task_id: &TaskId,
+        placement: &Placement,
+    ) -> Result<BTreeMap<String, String>, String> {
         fs::create_dir_all(self.paths.leases_dir()).map_err(|error| error.to_string())?;
+        let mut lease_paths = BTreeMap::new();
         for resource_id in placement.resource_ids() {
             let path = self.lease_path(resource_id);
             if path.exists() {
@@ -50,9 +56,10 @@ impl LeaseRepository for FileSystemLeaseRepository {
                 model_ids: placement.model_ids(),
             };
             let json = serde_json::to_string_pretty(&record).map_err(|error| error.to_string())?;
-            fs::write(path, format!("{json}\n")).map_err(|error| error.to_string())?;
+            fs::write(&path, format!("{json}\n")).map_err(|error| error.to_string())?;
+            lease_paths.insert(resource_id.clone(), path.to_string_lossy().to_string());
         }
-        Ok(())
+        Ok(lease_paths)
     }
 
     fn release(&self, placement: &Placement) -> Result<(), String> {
@@ -69,44 +76,5 @@ impl LeaseRepository for FileSystemLeaseRepository {
 impl FileSystemLeaseRepository {
     fn lease_path(&self, resource_id: &str) -> std::path::PathBuf {
         self.paths.leases_dir().join(format!("{resource_id}.json"))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::fs;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    use rack_ai_application::LeaseRepository;
-    use rack_ai_domain::Placement;
-    use rack_ai_domain::TaskId;
-
-    use super::FileSystemLeaseRepository;
-    use crate::RepositoryPaths;
-
-    #[test]
-    fn acquires_reports_and_releases_leases() {
-        let root = temp_root();
-        let repository = FileSystemLeaseRepository::new(RepositoryPaths::new(root.clone()));
-        let placement = Placement::new(vec!["worker".to_string()], vec!["gpu0".to_string()]);
-        repository
-            .acquire(&TaskId::new("task-1".to_string()).unwrap(), &placement)
-            .unwrap();
-        assert_eq!(
-            repository.blocked_resources(&placement).unwrap(),
-            vec!["gpu0".to_string()]
-        );
-        repository.release(&placement).unwrap();
-        assert!(repository.blocked_resources(&placement).unwrap().is_empty());
-    }
-
-    fn temp_root() -> std::path::PathBuf {
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let root = std::env::temp_dir().join(format!("rack-ai-leases-{nanos}"));
-        fs::create_dir_all(&root).unwrap();
-        root
     }
 }

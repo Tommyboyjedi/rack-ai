@@ -479,3 +479,30 @@ What remains for the next Rust slice:
 - port richer Python run-state metadata such as timestamps, waiting resources, lease paths, and result paths into the Rust path
 - decide whether executor errors should remain normalized to generic failure or carry structured error text into durable run state
 - continue shrinking the Python queue surface now that DAG placement, lease admission, and root separation are working in Rust
+
+### 2026-08-20: Rust run-state metadata parity slice
+
+Completed in this slice:
+- extended the Rust domain run state with durable metadata for `queue_path`, `result_path`, `last_error`, `submitted_at`, `source_spec`, `admission_state`, `waiting_on_resources`, `lease_paths`, `started_at`, and `finished_at`
+- extended Rust DAG node state to persist per-node `started_at`, `finished_at`, `result_path`, and `last_error`
+- updated the Rust queue runner to record waiting, ready, running, requeued, completed, and failed metadata transitions as work moves through lease admission and execution
+- updated the Rust queue repository requeue path to return the new queued location so persisted metadata records the real queue file path instead of an inferred one
+- updated the Rust CLI to stamp submission time and source spec metadata and to inject the durable clock into `run-next`
+- updated the Rust Python-backed executor to persist result JSON paths into run metadata
+
+What is now true:
+- the Rust control-plane path now persists materially the same operator-facing run metadata as the Python path
+- lease admission state is visible in Rust-backed run records instead of being implicit in queue behavior alone
+- successful and retried executions preserve authoritative result and queue file locations
+- DAG node progress now carries enough timestamp and artifact data for later operator inspection and retry tooling
+
+Verification completed in this slice:
+- `cargo test`
+- `cargo run -q -p rack_ai_cli -- submit ... --repo-root /srv/rack-ai --state-root <tmp>`
+- `cargo run -q -p rack_ai_cli -- run-next ... --repo-root /srv/rack-ai --state-root <tmp>`
+- isolated smoke verified persisted Rust run metadata includes `submitted_at`, `result_path`, `admission_state`, `started_at`, and `finished_at`
+
+What remains for the next Rust slice:
+- restore and expand Rust test coverage around the new metadata transitions instead of relying mainly on cross-crate smoke coverage
+- add Rust status surface parity for richer DAG node inspection if more operator detail is needed
+- continue moving the durable execution core from Python wrappers into typed Rust services without forking away from the current rack behavior

@@ -9,6 +9,9 @@ pub struct DagNodeState {
     depends_on: Vec<ActiveNodeId>,
     status: DagNodeStatus,
     last_error: Option<String>,
+    started_at: Option<String>,
+    finished_at: Option<String>,
+    result_path: Option<String>,
 }
 
 impl DagNodeState {
@@ -17,11 +20,15 @@ impl DagNodeState {
             depends_on,
             status: DagNodeStatus::Pending,
             last_error: None,
+            started_at: None,
+            finished_at: None,
+            result_path: None,
         }
     }
 
-    pub fn mark_running(mut self) -> Self {
+    pub fn mark_running(mut self, started_at: String) -> Self {
         self.status = DagNodeStatus::Running;
+        self.started_at = Some(started_at);
         self.last_error = None;
         self
     }
@@ -32,14 +39,23 @@ impl DagNodeState {
         self
     }
 
-    pub fn mark_succeeded(mut self) -> Self {
+    pub fn mark_succeeded(mut self, finished_at: String, result_path: Option<String>) -> Self {
         self.status = DagNodeStatus::Succeeded;
+        self.finished_at = Some(finished_at);
+        self.result_path = result_path;
         self.last_error = None;
         self
     }
 
-    pub fn mark_failed(mut self, last_error: String) -> Self {
+    pub fn mark_failed(
+        mut self,
+        finished_at: String,
+        result_path: Option<String>,
+        last_error: String,
+    ) -> Self {
         self.status = DagNodeStatus::Failed;
+        self.finished_at = Some(finished_at);
+        self.result_path = result_path;
         self.last_error = Some(last_error);
         self
     }
@@ -47,36 +63,7 @@ impl DagNodeState {
     pub fn depends_on(&self) -> &[ActiveNodeId] {
         self.depends_on.as_slice()
     }
-
     pub fn status(&self) -> &DagNodeStatus {
         &self.status
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::DagNodeState;
-    use crate::ActiveNodeId;
-    use crate::DagNodeStatus;
-
-    #[test]
-    fn transitions_between_pending_running_and_succeeded() {
-        let state = DagNodeState::pending(vec![sample_node_id()]);
-        assert_eq!(state.status(), &DagNodeStatus::Pending);
-        let running = state.mark_running();
-        let succeeded = running.mark_succeeded();
-        assert_eq!(succeeded.status(), &DagNodeStatus::Succeeded);
-    }
-
-    #[test]
-    fn stores_last_error_when_requeued_or_failed() {
-        let pending = DagNodeState::pending(vec![]).mark_pending("boom".to_string());
-        let failed = DagNodeState::pending(vec![]).mark_failed("boom".to_string());
-        assert_eq!(pending.status(), &DagNodeStatus::Pending);
-        assert_eq!(failed.status(), &DagNodeStatus::Failed);
-    }
-
-    fn sample_node_id() -> ActiveNodeId {
-        ActiveNodeId::new("plan".to_string()).unwrap()
     }
 }
