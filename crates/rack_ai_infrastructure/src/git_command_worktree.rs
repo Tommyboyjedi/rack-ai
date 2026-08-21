@@ -1,5 +1,8 @@
 use std::fs;
+use std::path::Path;
 
+use rack_ai_application::assert_campaign_git_args;
+use rack_ai_application::CampaignCommitRequest;
 use rack_ai_application::ChangeWorkspace;
 use rack_ai_application::CreateChangeWorktreeRequest;
 use rack_ai_application::GitEvidence;
@@ -44,10 +47,7 @@ impl GitWorktree for GitCommandWorktree {
                 request.base_sha().value(),
             ],
         )?;
-        let change_id = request
-            .branch_name()
-            .strip_prefix("rack/change-")
-            .unwrap_or(request.branch_name());
+        let change_id = branch_change_id(request.branch_name());
         Ok(ChangeWorkspace::new(
             ChangeId::new(change_id.to_string())?,
             request.worktree_path().to_path_buf(),
@@ -78,10 +78,82 @@ impl GitWorktree for GitCommandWorktree {
             .with_diff_stat(diff_stat)
             .with_changed_paths(ChangedPaths::from_porcelain(&status)))
     }
+
+    fn snapshot(&self, worktree_path: &Path) -> Result<GitEvidence, String> {
+        if !worktree_path.exists() {
+            return Err(format!(
+                "worktree does not exist: {}",
+                worktree_path.display()
+            ));
+        }
+        run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?;
+        let head = GitSha::new(run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?)?;
+        let status = run_campaign_git(worktree_path, &["status", "--porcelain"])?;
+        let diff = run_campaign_git(worktree_path, &["diff"])?;
+        let diff_stat = run_campaign_git(worktree_path, &["diff", "--stat"])?;
+        Ok(GitEvidence::new(head, status.clone())
+            .with_diff(diff)
+            .with_diff_stat(diff_stat)
+            .with_changed_paths(ChangedPaths::from_porcelain(&status)))
+    }
+
+    fn current_branch(&self, worktree_path: &Path) -> Result<String, String> {
+        run_campaign_git(worktree_path, &["branch", "--show-current"])
+    }
+
+    fn current_head(&self, worktree_path: &Path) -> Result<GitSha, String> {
+        GitSha::new(run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?)
+    }
+
+    fn commit_local(&self, request: &CampaignCommitRequest) -> Result<GitSha, String> {
+        if request.paths().is_empty() {
+            return Err("cannot commit an empty source diff".to_string());
+        }
+        let mut add_args = vec!["add", "--"];
+        let path_refs: Vec<&str> = request.paths().iter().map(|path| path.as_str()).collect();
+        add_args.extend(path_refs.iter().copied());
+        run_campaign_git(request.worktree_path(), &add_args)?;
+        let name = format!("user.name={}", request.author_name());
+        let email = format!("user.email={}", request.author_email());
+        run_campaign_git(
+            request.worktree_path(),
+            &[
+                "-c",
+                name.as_str(),
+                "-c",
+                email.as_str(),
+                "commit",
+                "-m",
+                request.message(),
+                "--",
+            ]
+            .into_iter()
+            .chain(path_refs.iter().copied())
+            .collect::<Vec<_>>()
+            .as_slice(),
+        )?;
+        GitSha::new(run_campaign_git(
+            request.worktree_path(),
+            &["rev-parse", "HEAD"],
+        )?)
+    }
+}
+
+fn run_campaign_git(repo: &Path, args: &[&str]) -> Result<String, String> {
+    assert_campaign_git_args(args)?;
+    GitCommand::run(repo, args)
+}
+
+fn branch_change_id(branch_name: &str) -> &str {
+    branch_name
+        .strip_prefix("rack/change-")
+        .or_else(|| branch_name.strip_prefix("rack/campaign-"))
+        .unwrap_or(branch_name)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::branch_change_id;
     use super::GitCommandWorktree;
     use crate::GitCommand;
     use rack_ai_application::CreateChangeWorktreeRequest;
@@ -138,15 +210,24 @@ mod tests {
                 sha.clone(),
             ))
             .unwrap();
-        let allowed = rack_ai_domain::AllowedPaths::new(vec![
-            rack_ai_domain::AllowedPath::new("src".to_string()).unwrap(),
-        ])
+        let allowed = rack_ai_domain::AllowedPaths::new(vec![rack_ai_domain::AllowedPath::new(
+            "src".to_string(),
+        )
+        .unwrap()])
         .unwrap();
         let rejected = allowed.reject_disallowed(escaped.changed_paths());
         assert!(rejected.iter().any(|path| path.as_str() == "README.md"));
         let main_file = fs::read_to_string(fixture.join("src/lib.rs")).unwrap();
         assert_eq!(main_file, "original\n");
         assert_eq!(workspace.branch_name(), "rack/change-job-1");
+    }
+
+    #[test]
+    fn keeps_campaign_branch_ids_filesystem_safe() {
+        assert_eq!(
+            branch_change_id("rack/campaign-adaptos-foundation-20260821"),
+            "adaptos-foundation-20260821"
+        );
     }
 
     fn init_fixture() -> PathBuf {

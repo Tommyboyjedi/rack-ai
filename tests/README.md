@@ -15,5 +15,6 @@ End-to-end and boundary tests for the rack integration live here.
 - `rack_change_executor_smoke.sh`: live rootless Podman acceptance-check test; exits 2 when rootless Podman or the executor image is missing
 - `rack_change_implement_smoke.sh`: live coder-through-Podman change; requires rootless Podman, the executor image, and local-coder on :8018
 - `rack_change_path_policy_smoke.sh`: live Podman bash write outside `allowed_paths`, then the Git/path gate must reject; exits 2 when rootless Podman or the executor image is missing
+- `rack_campaign_smoke.sh`: disposable Git fixture campaign with two local commits, no-op/path-policy rejection, JSON status/events, and restart-without-duplicate-commit; uses `cargo run -p rack_ai_cli --features campaign-test-seams` so fixture implementer and live-health bypass stay out of the operator `bin/rack-campaign` path; exits 2 when rootless Podman or the executor image is missing
 
 Python-only ad hoc harnesses were removed once the Rust-owned live path became the authoritative verification surface.

@@ -14,3 +14,5 @@ It can also auto-select a template from the request text and preview the generat
 External-repository work is specified by `docs/external-repository-change-workflow.md` and executed by `bin/rack-change`.
 The current change command is a Milestone 1–2 pilot: isolated worktree, Podman-backed coder, deterministic Git/path/acceptance gates, and an `acceptance_verdict`. It does not yet run the local-primary planner/implementer/verifier DAG.
 The target repository is the workload; Rack AI remains the control plane and does not self-modify as part of a normal change job.
+
+`docs/autonomous-campaign-runner-contract.md` is the implementation contract for the next feature: a bounded, restartable, operator-controlled, local-only campaign runner for unattended external-repository work.

@@ -11,6 +11,7 @@ use crate::HostCoderToolRunner;
 
 pub struct DirectCoderWorker {
     endpoint: String,
+    model_id: String,
     system_prompt: String,
 }
 
@@ -18,9 +19,21 @@ impl DirectCoderWorker {
     pub fn local_default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:8018/v1/chat/completions".to_string(),
-            system_prompt: ("You are a coding worker. Use tools when needed. ".to_string()
-                + "When the task is complete, stop calling tools and reply exactly as requested."),
+            model_id: "local-coder".to_string(),
+            system_prompt: Self::default_system_prompt(),
         }
+    }
+
+    pub fn new(endpoint: String, model_id: String, system_prompt: String) -> Self {
+        Self {
+            endpoint: normalize_endpoint(endpoint),
+            model_id,
+            system_prompt,
+        }
+    }
+
+    pub fn default_system_prompt() -> String {
+        "You are a coding worker. Use tools when needed. When the task is complete, stop calling tools and reply exactly as requested.".to_string()
     }
 
     pub fn execute(&self, task: &str, cwd: &Path, max_turns: usize) -> Result<String, String> {
@@ -114,7 +127,7 @@ impl DirectCoderWorker {
 
     fn call_api(&self, messages: &[Value]) -> Result<Value, String> {
         let payload = json!({
-            "model": "local-coder",
+            "model": self.model_id,
             "messages": messages,
             "tools": self.tool_definitions(),
             "tool_choice": "auto",
@@ -186,6 +199,14 @@ impl DirectCoderWorker {
     #[cfg(test)]
     fn run_tool(&self, name: &str, arguments: &Value, cwd: &Path) -> Result<String, String> {
         HostCoderToolRunner::new(cwd.to_path_buf()).run(name, arguments)
+    }
+}
+
+fn normalize_endpoint(endpoint: String) -> String {
+    if endpoint.ends_with("/chat/completions") {
+        endpoint
+    } else {
+        format!("{}/chat/completions", endpoint.trim_end_matches('/'))
     }
 }
 

@@ -1,5 +1,5 @@
 {
-  "workspace_root": "/srv/rack-workspaces",
+  "workspace_root": "/srv/rack-ai/state/workspaces",
   "approved_programs": [
     "cargo",
     "rustc",
@@ -18,5 +18,12 @@
     "memory": "2g",
     "pids_limit": 256
   },
-  "repositories": []
+  "repositories": [
+    {
+      "id": "adaptos",
+      "root": "/home/tomp/projects/adaptos",
+      "default_base_ref": "main",
+      "enabled": true
+    }
+  ]
 }
