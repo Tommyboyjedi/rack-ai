@@ -1085,6 +1085,30 @@ impl<'a> CampaignRunner<'a> {
                     review = pre_commit_review;
                     last_review = Some(review.clone());
                 } else {
+                    if let Some(stopped) = self.checkpoint(
+                        campaign,
+                        state,
+                        step,
+                        Some(attempt_number),
+                    )? {
+                        self.persist_attempt(
+                            state,
+                            step,
+                            attempt_number,
+                            kind,
+                            runtime.worker_id.as_str(),
+                            &start,
+                            repair_of,
+                            fallback_of,
+                            Some(&implement_result),
+                            &commands,
+                            &pre_commit,
+                            &review,
+                            None,
+                        )?;
+                        return Ok(stopped_from(stopped));
+                    }
+
                     let sha = self.git.commit_local(&CampaignCommitRequest::new(
                         PathBuf::from(&state.worktree_path),
                         &campaign.campaign_id,
