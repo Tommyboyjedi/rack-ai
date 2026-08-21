@@ -1,5 +1,4 @@
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
 
 use rack_ai_domain::AcceptanceCommand;
@@ -12,6 +11,8 @@ use serde::Serialize;
 
 use crate::assert_step_paths_permitted;
 use crate::campaign_digest;
+use crate::durable_file::append_line;
+use crate::atomic_write;
 use crate::repair_instruction;
 use crate::review_attempt;
 use crate::source_paths;
@@ -153,25 +154,16 @@ impl<'a> CampaignRunner<'a> {
     }
 
     pub fn save_state(&self, state: &CampaignStatus) -> Result<(), String> {
-        let dir = self.campaign_dir(&state.campaign_id);
-        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let json = serde_json::to_string_pretty(state).map_err(|error| error.to_string())?;
-        fs::write(self.state_path(&state.campaign_id), format!("{json}\n"))
-            .map_err(|error| error.to_string())
+        atomic_write(
+            &self.state_path(&state.campaign_id),
+            &format!("{json}\n"),
+        )
     }
 
     pub fn log_event(&self, event: CampaignEvent) -> Result<(), String> {
-        let path = self.events_path(&event.campaign_id);
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .map_err(|error| error.to_string())?;
         let line = serde_json::to_string(&event).map_err(|error| error.to_string())?;
-        writeln!(file, "{line}").map_err(|error| error.to_string())
+        append_line(&self.events_path(&event.campaign_id), &line)
     }
 
     pub fn validate(&self, campaign: &Campaign) -> Result<(), String> {
@@ -319,8 +311,10 @@ impl<'a> CampaignRunner<'a> {
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let campaign_json =
             serde_json::to_string_pretty(campaign).map_err(|error| error.to_string())?;
-        fs::write(dir.join("campaign.json"), format!("{campaign_json}\n"))
-            .map_err(|error| error.to_string())?;
+        atomic_write(
+            &dir.join("campaign.json"),
+            &format!("{campaign_json}\n"),
+        )?;
         let now = self.now_text();
         let state = CampaignStatus {
             schema_version: "rack-ai/campaign/v1".to_string(),
@@ -471,17 +465,9 @@ impl<'a> CampaignRunner<'a> {
             .map(|step| step.id.clone())
             .collect::<Vec<_>>();
         let revision_path = self.campaign_dir(campaign_id).join("revisions.jsonl");
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(revision_path)
-            .map_err(|error| error.to_string())?;
-        writeln!(
-            file,
-            "{}",
-            serde_json::to_string(&revision).map_err(|error| error.to_string())?
-        )
-        .map_err(|error| error.to_string())?;
+        let revision_json =
+            serde_json::to_string(&revision).map_err(|error| error.to_string())?;
+        append_line(&revision_path, &revision_json)?;
         for step in revision.steps {
             state.steps.push(pending_step(&step));
         }
