@@ -23,6 +23,7 @@ use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
+use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
 use rack_ai_infrastructure::PodmanChangeImplementer;
 use rack_ai_infrastructure::PodmanWorkspaceExecutor;
@@ -565,6 +566,8 @@ where
     let permissive = PermissiveHealth;
     let health: &dyn CampaignHealth = if skip_live { &permissive } else { &live_health };
     let clock = SystemUnixClock;
+    let reviewer = LocalPrimaryReviewer::local_default();
+
     let runner = CampaignRunner::new(CampaignRunnerDependencies {
         registry: &registry,
         command_policy: &policy,
@@ -576,6 +579,13 @@ where
         clock: &clock,
         state_root,
     });
+
+    let runner = if fixture_document.is_none() && !skip_live {
+        runner.with_reviewer(&reviewer)
+    } else {
+        runner
+    };
+
     body(&runner)
 }
 
