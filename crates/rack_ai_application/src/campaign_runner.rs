@@ -524,15 +524,42 @@ impl<'a> CampaignRunner<'a> {
     }
 
     pub fn run(&self, campaign_id: &str) -> Result<CampaignStatus, String> {
-        let campaign = self.load_campaign(campaign_id)?;
-        let mut state = self.require_state(campaign_id)?;
-        let now = self.now_text();
-        let action_timeout = campaign
-            .steps
+        self.run_internal(campaign_id, false)
+    }
+
+    pub fn resume(&self, campaign_id: &str) -> Result<CampaignStatus, String> {
+        let state = self.require_state(campaign_id)?;
+        if !matches!(
+            state.state,
+            CampaignState::Paused | CampaignState::Blocked | CampaignState::Running
+        ) {
+            return Err(format!("resume is not valid from {:?}", state.state));
+        }
+        self.run_internal(campaign_id, true)
+    }
+
+    pub fn lease_action_timeout(&self, campaign: &Campaign) -> Result<u64, String> {
+        Ok(self
+            .effective_steps(campaign)?
             .iter()
             .map(|step| step.limits.timeout_seconds)
             .max()
-            .unwrap_or(900);
+            .unwrap_or(900))
+    }
+
+    fn run_internal(&self, campaign_id: &str, resume: bool) -> Result<CampaignStatus, String> {
+        let campaign = self.load_campaign(campaign_id)?;
+        let mut state = self.require_state(campaign_id)?;
+        if resume
+            && !matches!(
+                state.state,
+                CampaignState::Paused | CampaignState::Blocked | CampaignState::Running
+            )
+        {
+            return Err(format!("resume is not valid from {:?}", state.state));
+        }
+        let now = self.now_text();
+        let action_timeout = self.lease_action_timeout(&campaign)?;
         let lease = self.leases.acquire(
             campaign_id,
             &state.repository_id,
@@ -540,17 +567,47 @@ impl<'a> CampaignRunner<'a> {
             campaign.limits.heartbeat_seconds,
             action_timeout,
         )?;
+        if resume {
+            state.pause_requested = false;
+        }
         state.active_lease_id = Some(format!("{}:{}", lease.pid, lease.acquired_at));
         self.save_state(&state)?;
-        let result = self.run_with_lease(&campaign, state);
+        let result = self.run_with_lease(&campaign, state, resume);
         let _ = self.leases.release(campaign_id, &campaign.repository.id);
-        result
+        self.clear_active_lease(campaign_id, result)
+    }
+
+    fn clear_active_lease(
+        &self,
+        campaign_id: &str,
+        result: Result<CampaignStatus, String>,
+    ) -> Result<CampaignStatus, String> {
+        let persist = |state: &mut CampaignStatus| -> Result<(), String> {
+            if state.active_lease_id.is_some() {
+                state.active_lease_id = None;
+                self.save_state(state)?;
+            }
+            Ok(())
+        };
+        match result {
+            Ok(mut state) => {
+                persist(&mut state)?;
+                Ok(state)
+            }
+            Err(error) => {
+                if let Ok(Some(mut state)) = self.load_state(campaign_id) {
+                    let _ = persist(&mut state);
+                }
+                Err(error)
+            }
+        }
     }
 
     fn run_with_lease(
         &self,
         campaign: &Campaign,
         mut state: CampaignStatus,
+        resume: bool,
     ) -> Result<CampaignStatus, String> {
         state = self.recover(campaign, state)?;
         if matches!(
@@ -559,8 +616,10 @@ impl<'a> CampaignRunner<'a> {
                 | CampaignState::Cancelled
                 | CampaignState::Expired
                 | CampaignState::Failed
-                | CampaignState::Blocked
         ) {
+            return Ok(state);
+        }
+        if state.state == CampaignState::Blocked && !resume {
             return Ok(state);
         }
         if state.cancel_requested {

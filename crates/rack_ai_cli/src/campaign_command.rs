@@ -237,30 +237,15 @@ fn resume_command(
     let campaign_id = arguments.first().ok_or("expected campaign id")?;
     let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
     let fixture = flag_value(arguments, "--fixture-implementer");
-    with_runner(
-        repo_root.clone(),
-        state_root.clone(),
-        fixture.as_deref(),
-        skip_live,
-        |runner| {
-            let mut state = runner
-                .load_state(campaign_id)?
-                .ok_or_else(|| format!("campaign state not found: {campaign_id}"))?;
-            if !matches!(
-                state.state,
-                rack_ai_application::CampaignState::Paused
-                    | rack_ai_application::CampaignState::Blocked
-                    | rack_ai_application::CampaignState::Running
-            ) {
-                return Err(format!("resume is not valid from {:?}", state.state));
-            }
-            state.pause_requested = false;
-            state.state = rack_ai_application::CampaignState::Running;
-            runner.save_state(&state)?;
-            Ok(0)
-        },
-    )?;
-    runner_command(repo_root, state_root, arguments)
+    with_runner(repo_root, state_root, fixture.as_deref(), skip_live, |runner| {
+        let state = runner.resume(campaign_id)?;
+        println!("campaign_id: {}", state.campaign_id);
+        println!("state: {:?}", state.state);
+        Ok(match state.state {
+            rack_ai_application::CampaignState::Completed => 0,
+            _ => 1,
+        })
+    })
 }
 
 fn control_command(

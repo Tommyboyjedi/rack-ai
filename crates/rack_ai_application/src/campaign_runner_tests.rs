@@ -482,6 +482,7 @@ fn two_step_campaign_creates_two_local_commits() {
     );
     let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
     assert_eq!(state.state, CampaignState::Completed);
+    assert!(state.active_lease_id.is_none());
     let first = state.steps[0].accepted_commit.clone().unwrap();
     let second = state.steps[1].accepted_commit.clone().unwrap();
     assert_ne!(first, second);
@@ -584,6 +585,7 @@ fn artifact_executor_failure_fails_closed_without_repair_or_fallback() {
     );
     let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
     assert_eq!(state.state, CampaignState::Blocked);
+    assert!(state.active_lease_id.is_none());
     assert_eq!(
         state.blocked_reason.as_deref(),
         Some("executor_unavailable")
@@ -872,12 +874,89 @@ fn pause_blocks_next_action_and_resume_continues() {
     let paused = runner.run("pause").unwrap();
     assert_eq!(paused.state, CampaignState::Paused);
     assert!(paused.steps.iter().all(|step| step.attempts.is_empty()));
-    let mut state = runner.load_state("pause").unwrap().unwrap();
-    state.pause_requested = false;
-    state.state = CampaignState::Running;
-    runner.save_state(&state).unwrap();
-    let resumed = runner.run("pause").unwrap();
+    assert!(paused.active_lease_id.is_none());
+    let resumed = runner.resume("pause").unwrap();
     assert_eq!(resumed.state, CampaignState::Completed);
+    assert!(resumed.active_lease_id.is_none());
+}
+
+#[test]
+fn resume_does_not_persist_running_if_lease_acquire_fails() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "resume-lease",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    runner.pause("resume-lease").unwrap();
+    runner.run("resume-lease").unwrap();
+    let paused = runner.load_state("resume-lease").unwrap().unwrap();
+    assert_eq!(paused.state, CampaignState::Paused);
+    assert!(paused.pause_requested);
+    let lease_dir = runner.campaign_dir("resume-lease");
+    fs::create_dir_all(&lease_dir).unwrap();
+    fs::write(
+        lease_dir.join("lease.json"),
+        r#"{
+  "campaign_id": "resume-lease",
+  "repository_id": "fixture",
+  "pid": 1,
+  "acquired_at": "1000",
+  "heartbeat": "1000",
+  "heartbeat_seconds": 10,
+  "action_timeout_seconds": 60
+}
+"#,
+    )
+    .unwrap();
+    let error = runner.resume("resume-lease").unwrap_err();
+    assert!(error.contains("live pid"), "{error}");
+    let after = runner.load_state("resume-lease").unwrap().unwrap();
+    assert_eq!(after.state, CampaignState::Paused);
+    assert!(after.pause_requested);
+    assert!(after.active_lease_id.is_none());
+}
+
+#[test]
+fn lease_action_timeout_includes_revision_steps() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "lease-timeout",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    assert_eq!(runner.lease_action_timeout(&campaign).unwrap(), 60);
+    let mut state = runner.load_state("lease-timeout").unwrap().unwrap();
+    state.state = CampaignState::Paused;
+    runner.save_state(&state).unwrap();
+    let mut long_step = sample_step("add-beta", "src/beta.rs", "Add beta.");
+    long_step.limits.timeout_seconds = 900;
+    runner
+        .revise(
+            "lease-timeout",
+            CampaignRevisionDocument {
+                instruction: "Add a longer bounded step.".to_string(),
+                steps: vec![long_step],
+            },
+        )
+        .unwrap();
+    assert_eq!(runner.lease_action_timeout(&campaign).unwrap(), 900);
 }
 
 #[test]
@@ -941,6 +1020,7 @@ fn cancel_prevents_commit_and_retains_evidence() {
     runner.cancel("cancel", Some("stop")).unwrap();
     let state = runner.run("cancel").unwrap();
     assert_eq!(state.state, CampaignState::Cancelled);
+    assert!(state.active_lease_id.is_none());
     assert!(state.steps[0].accepted_commit.is_none());
     assert!(runner.campaign_dir("cancel").join("campaign.json").exists());
 }
