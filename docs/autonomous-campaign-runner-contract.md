@@ -16,6 +16,8 @@ The campaign runner replaces manual coordination duties that previously required
 
 - detect that an implementer claimed completion without changing files;
 - reject apparently passing checks when the requested implementation did not occur;
+- independently review each implementation attempt against its requested outcome and evidence;
+- reject inadequate work with a recorded, bounded repair instruction;
 - choose the configured fallback worker after a bounded failure;
 - carry accepted work forward to the next step;
 - keep running after a process restart;
@@ -82,6 +84,8 @@ These are acceptance conditions, not aspirations.
 12. A verification-only step may have an empty diff, but must declare `kind: "verification"`; it may never create a commit.
 13. No automatic retry may broaden `allowed_paths`, acceptance commands, resource limits, or the overall campaign duration.
 14. A campaign that reaches its duration, retry, safety, health, or evidence limit stops and retains its worktree and records.
+15. An implementation attempt is accepted only after an independent coordinator review records an explicit `accepted` disposition. Model self-reports and a passing test command are never a review disposition.
+16. A retryable rejected attempt receives a persisted, scope-bounded repair instruction derived from the coordinator review. The runner never silently advances past a rejected attempt.
 
 ## Campaign schema
 
@@ -205,8 +209,8 @@ state/campaigns/<campaign-id>/
 - immutable campaign digest;
 - repository ID, initial base SHA, branch, worktree, and current HEAD SHA;
 - overall state, current step, current attempt, pause/cancel flags;
-- every step's disposition and accepted commit SHA where applicable;
-- selected worker and fallback reason for each attempt;
+- every step's disposition, coordinator-review disposition and rationale, and accepted commit SHA where applicable;
+- selected worker, fallback reason, repair instruction, and repair attempt linkage for each attempt;
 - timestamps, elapsed duration, remaining duration, and last heartbeat;
 - active lease/container identifiers where applicable;
 - final error and blocked reason.
@@ -253,8 +257,9 @@ For each step:
 6. If the final source diff is empty, classify the attempt as `no_change`. Do not run or accept a misleading implementation success.
 7. Run declared deterministic acceptance commands in Podman.
 8. Re-inspect Git after all checks and artifact reads. Enforce path policy again.
-9. If all gates pass, create one local commit using the campaign branch only. Record its immutable SHA and emit `step_accepted`.
-10. The next step begins from that accepted commit.
+9. Run the independent coordinator review described below. It must emit an explicit disposition and rationale.
+10. Only if every deterministic gate and the coordinator review pass, create one local commit using the campaign branch only. Record its immutable SHA and emit `step_accepted`.
+11. The next step begins from that accepted commit.
 
 A local commit message must be deterministic and attributable:
 
@@ -263,6 +268,28 @@ rack(<campaign-id>): <step-id>
 ```
 
 The commit author must be explicitly configured as a non-user automation identity. It must not reuse personal credentials.
+
+### Independent coordinator review and repair loop
+
+The runner, not the operator, is responsible for the coordinating review loop. This is a separate decision from the implementer's claim of completion and from the raw acceptance-command exit status.
+
+For every implementation attempt that reaches evidence collection, the runner must create a coordinator-review record before it can accept, repair, fall back, or block. The record must examine:
+
+- the step's requested outcome, allowed paths, required changed paths, and declared artifacts;
+- the final diff and post-check Git status;
+- parsed tool transcript and any tool-protocol failure;
+- deterministic acceptance-command and artifact evidence;
+- relevant prior attempt and repair context.
+
+The record must contain one of `accepted`, `rejected_retryable`, or `rejected_terminal`, a machine-readable failure classification, a concise human-readable rationale, and references to the evidence it considered. It is persisted in the attempt packet and surfaced by `status`, `events`, and `inspect`.
+
+An `accepted` disposition is required before a local commit. A test suite passing alone is insufficient: the review must reject a missing or inadequate requested implementation even when old tests pass.
+
+For `rejected_retryable`, the runner must construct and persist one bounded repair instruction for the configured worker. The instruction contains the original step, the exact rejection reason, relevant diff summary, required changed paths, and deterministic failing evidence. It may not introduce new tasks, broaden paths, acceptance commands, duration, resource limits, or promotion authority. The repair result receives a new full review.
+
+For `rejected_terminal`, or when the configured repair/fallback budget is exhausted, the runner records the reason and blocks the step/campaign. It must not turn a rejection into success because a worker says `COMPLETE` or exits successfully.
+
+A model-backed coordinator review may be added as supplementary evidence only if it uses the same local, Podman-isolated workspace boundary. It may not replace the deterministic review gates above, and it is not required for the first implementation.
 
 ### Failure and fallback policy
 
@@ -338,6 +365,7 @@ Emit an event at least on:
 
 - campaign created, started, resumed, paused, cancelled, blocked, completed, expired;
 - step/attempt started, completed, failed, accepted;
+- coordinator review started, accepted, rejected, and repair instruction recorded;
 - worker selected, repair selected, fallback selected;
 - model request started/completed;
 - tool invocation started/completed;
@@ -366,12 +394,13 @@ The implementation is complete only when all unit, integration, and live tests b
 5. A required changed path missing from an otherwise allowed diff is rejected.
 6. A failed primary worker performs only the configured repair/fallback attempts and then stops.
 7. The local-primary fallback is exercised through a fake/instrumented `WorkspaceExecutor`; no host-shell/JCode executor may be used.
-8. State recovery after a simulated process restart resumes at a safe checkpoint and never repeats an accepted commit.
-9. A pause at a checkpoint prevents the next action; resume continues correctly.
-10. A revision appends immutable new steps and does not alter an accepted step record.
-11. A cancellation prevents commit/promotion and retains evidence.
-12. Expiry, stale lease, base-SHA mismatch, dirty/unprovable worktree, missing Podman, and unavailable worker endpoint all fail closed.
-13. No production campaign path exposes a Git remote operation.
+8. A passing pre-existing test suite with an inadequate requested change receives a persisted `rejected_retryable` coordinator-review disposition, no commit, and a repair instruction that remains inside the original step scope.
+9. State recovery after a simulated process restart resumes at a safe checkpoint and never repeats an accepted commit.
+10. A pause at a checkpoint prevents the next action; resume continues correctly.
+11. A revision appends immutable new steps and does not alter an accepted step record.
+12. A cancellation prevents commit/promotion and retains evidence.
+13. Expiry, stale lease, base-SHA mismatch, dirty/unprovable worktree, missing Podman, and unavailable worker endpoint all fail closed.
+14. No production campaign path exposes a Git remote operation.
 
 ### Rack live smoke
 
