@@ -939,10 +939,18 @@ impl<'a> CampaignRunner<'a> {
                 "calling model-backed implementer",
                 Some(state),
             )?;
+            let _heartbeat_guard = self.leases.start_background_heartbeat(
+                &state.campaign_id,
+                &state.repository_id,
+                campaign.limits.heartbeat_seconds,
+            );
+
             let implement_result = match self.implementer.implement(&implement_request) {
                 Ok(result) => result,
                 Err(error) => implementer_error_result(error),
             };
+
+            drop(_heartbeat_guard);
             self.emit(
                 &state.campaign_id,
                 Some(&step.id),
