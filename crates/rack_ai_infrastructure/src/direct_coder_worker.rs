@@ -127,16 +127,28 @@ impl DirectCoderWorker {
 
     fn call_api(&self, messages: &[Value]) -> Result<Value, String> {
         let payload = json!({
-            "model": self.model_id,
-            "messages": messages,
-            "tools": self.tool_definitions(),
-            "tool_choice": "auto",
-            "stream": false,
-            "temperature": 0,
-        });
-        let mut response = ureq::post(&self.endpoint)
+        "model": self.model_id,
+        "messages": messages,
+        "tools": self.tool_definitions(),
+        "tool_choice": "auto",
+        "stream": false,
+        "temperature": 0,
+    });
+
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .timeout_send_request(Some(Duration::from_secs(30)))
+            .timeout_recv_response(Some(Duration::from_secs(300)))
+            .timeout_global(Some(Duration::from_secs(330)))
+            .build();
+
+        let agent = config.new_agent();
+
+        let mut response = agent
+            .post(&self.endpoint)
             .send_json(&payload)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("model request failed or timed out: {error}"))?;
+
         response
             .body_mut()
             .read_json::<Value>()
