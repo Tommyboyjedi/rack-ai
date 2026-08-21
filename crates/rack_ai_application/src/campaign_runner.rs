@@ -1062,6 +1062,31 @@ impl<'a> CampaignRunner<'a> {
 
                     let model_review = reviewer.review(&model_request)?;
 
+                    let review_dir =
+                        self.attempt_dir(&state.campaign_id, &step.id, attempt_number);
+                    fs::create_dir_all(&review_dir).map_err(|error| error.to_string())?;
+
+                    let model_review_packet = serde_json::json!({
+                        "request": {
+                            "prompt": model_review.prompt,
+                            "isolated_context": model_request.isolated_context,
+                            "worker_id": model_request.worker_id,
+                            "previous_rejection": model_request.previous_rejection,
+                        },
+                        "result": {
+                            "disposition": model_review.disposition,
+                            "classification": model_review.classification,
+                            "rationale": model_review.rationale,
+                            "raw_output": model_review.raw_output,
+                            "used_host_shell": model_review.used_host_shell,
+                        }
+                    });
+
+                    write_json(
+                        review_dir.join("model-review.json"),
+                        &model_review_packet,
+                    )?;
+
                     review.disposition = model_review.disposition;
                     review.classification = model_review.classification;
                     review.rationale = model_review.rationale;
