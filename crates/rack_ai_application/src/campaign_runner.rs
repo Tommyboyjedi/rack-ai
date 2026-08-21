@@ -364,6 +364,19 @@ impl<'a> CampaignRunner<'a> {
         Ok(state)
     }
 
+    pub fn mark_detach_setup_failed(
+        &self,
+        campaign_id: &str,
+        reason: &str,
+    ) -> Result<CampaignStatus, String> {
+        let state = self.require_state(campaign_id)?;
+        self.block(
+            state,
+            FailureClassification::ExecutorUnavailable,
+            format!("detached runner setup failed: {reason}"),
+        )
+    }
+
     pub fn pause(&self, campaign_id: &str) -> Result<CampaignStatus, String> {
         let mut state = self.require_state(campaign_id)?;
         state.pause_requested = true;
@@ -514,9 +527,19 @@ impl<'a> CampaignRunner<'a> {
         let campaign = self.load_campaign(campaign_id)?;
         let mut state = self.require_state(campaign_id)?;
         let now = self.now_text();
-        let lease = self
-            .leases
-            .acquire(campaign_id, &state.repository_id, &now)?;
+        let action_timeout = campaign
+            .steps
+            .iter()
+            .map(|step| step.limits.timeout_seconds)
+            .max()
+            .unwrap_or(900);
+        let lease = self.leases.acquire(
+            campaign_id,
+            &state.repository_id,
+            &now,
+            campaign.limits.heartbeat_seconds,
+            action_timeout,
+        )?;
         state.active_lease_id = Some(format!("{}:{}", lease.pid, lease.acquired_at));
         self.save_state(&state)?;
         let result = self.run_with_lease(&campaign, state);
@@ -608,7 +631,12 @@ impl<'a> CampaignRunner<'a> {
                 }
                 Ok(StepOutcome::Stopped) => return Ok(state),
                 Err(error) => {
-                    return self.block(state, FailureClassification::ContinuityFailed, error)
+                    let classification = if is_executor_error(&error) {
+                        FailureClassification::ExecutorUnavailable
+                    } else {
+                        FailureClassification::ContinuityFailed
+                    };
+                    return self.block(state, classification, error);
                 }
             }
         }
@@ -666,7 +694,19 @@ impl<'a> CampaignRunner<'a> {
         state.current_worker = Some(campaign.worker_policy.primary.clone());
         state.current_action = Some("acceptance_command".to_string());
         self.heartbeat(state)?;
-        let (commands, missing_artifacts, commands_succeeded) = self.run_acceptance(state, step)?;
+        let (commands, missing_artifacts, commands_succeeded) =
+            match self.run_acceptance(state, step) {
+                Ok(value) => value,
+                Err(error) if is_executor_error(&error) => {
+                    self.block_in_place(
+                        state,
+                        FailureClassification::ExecutorUnavailable,
+                        error,
+                    )?;
+                    return Ok(StepOutcome::Stopped);
+                }
+                Err(error) => return Err(error),
+            };
         let evidence = self.snapshot_checked(state)?;
         let review = review_attempt(ReviewInput {
             step,
@@ -888,7 +928,18 @@ impl<'a> CampaignRunner<'a> {
                         "running acceptance commands",
                         Some(state),
                     )?;
-                    let result = self.run_acceptance(state, step)?;
+                    let result = match self.run_acceptance(state, step) {
+                        Ok(value) => value,
+                        Err(error) if is_executor_error(&error) => {
+                            self.block_in_place(
+                                state,
+                                FailureClassification::ExecutorUnavailable,
+                                error,
+                            )?;
+                            return Ok(StepOutcome::Stopped);
+                        }
+                        Err(error) => return Err(error),
+                    };
                     self.emit(
                         &state.campaign_id,
                         Some(&step.id),
@@ -1224,7 +1275,7 @@ impl<'a> CampaignRunner<'a> {
                     commands.push(execution.evidence().clone());
                 }
                 Err(error) => {
-                    if error.contains("podman") || error.contains("executor") {
+                    if is_executor_error(&error) {
                         return Err(error);
                     }
                     succeeded = false;
@@ -1234,15 +1285,13 @@ impl<'a> CampaignRunner<'a> {
         }
         let mut missing = Vec::new();
         for artifact in &step.acceptance.required_artifacts {
-            if self
-                .executor
-                .read_file(&ReadFileRequest::new(
-                    PathBuf::from(&state.worktree_path),
-                    WorkspacePath::parse(artifact)?,
-                ))
-                .is_err()
-            {
-                missing.push(artifact.clone());
+            match self.executor.read_file(&ReadFileRequest::new(
+                PathBuf::from(&state.worktree_path),
+                WorkspacePath::parse(artifact)?,
+            )) {
+                Ok(_) => {}
+                Err(error) if is_executor_error(&error) => return Err(error),
+                Err(_) => missing.push(artifact.clone()),
             }
         }
         let succeeded = succeeded && missing.is_empty();
@@ -1627,6 +1676,11 @@ fn allowed_paths(values: &[String]) -> Result<AllowedPaths, String> {
 
 fn looks_protocol(result: &ImplementChangeResult) -> bool {
     result.protocol_error().is_some() || crate::looks_like_markdown_tool_call(result.output())
+}
+
+fn is_executor_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("podman") || lower.contains("executor")
 }
 
 fn implementer_error_result(error: String) -> ImplementChangeResult {

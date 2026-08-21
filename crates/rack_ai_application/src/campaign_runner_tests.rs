@@ -243,6 +243,7 @@ impl GitWorktree for ProcessGit {
 struct HostExecutor {
     writes: Mutex<Vec<String>>,
     poison_path: Option<String>,
+    read_error: Option<String>,
 }
 
 impl HostExecutor {
@@ -250,12 +251,21 @@ impl HostExecutor {
         Self {
             writes: Mutex::new(Vec::new()),
             poison_path: None,
+            read_error: None,
         }
     }
     fn with_poison(path: &str) -> Self {
         Self {
             writes: Mutex::new(Vec::new()),
             poison_path: Some(path.to_string()),
+            read_error: None,
+        }
+    }
+    fn with_read_error(error: &str) -> Self {
+        Self {
+            writes: Mutex::new(Vec::new()),
+            poison_path: None,
+            read_error: Some(error.to_string()),
         }
     }
 }
@@ -277,6 +287,9 @@ impl WorkspaceExecutor for HostExecutor {
         )))
     }
     fn read_file(&self, request: &ReadFileRequest) -> Result<WorkspaceExecutionResult, String> {
+        if let Some(error) = &self.read_error {
+            return Err(error.clone());
+        }
         let path = request.worktree_path().join(request.path().relative());
         let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
         Ok(
@@ -550,6 +563,40 @@ fn markdown_tool_call_is_protocol_violation() {
 }
 
 #[test]
+fn artifact_executor_failure_fails_closed_without_repair_or_fallback() {
+    let fx = fixture();
+    let executor = HostExecutor::with_read_error(
+        "podman is not available; rootless Podman is required for external-repository command execution",
+    );
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+            write_attempt("src/alpha.rs", "should not run"),
+            write_attempt("src/alpha.rs", "should not run either"),
+        ],
+    );
+    let campaign = make_campaign(
+        "artifact-executor",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.blocked_reason.as_deref(),
+        Some("executor_unavailable")
+    );
+    assert!(
+        state.steps[0].attempts.len() <= 1,
+        "executor failure must not burn repair/fallback attempts: {:?}",
+        state.steps[0].attempts
+    );
+    assert_eq!(implementer.seen_workers(), ["local-coder"]);
+}
+
+#[test]
 fn post_check_out_of_policy_write_rejects_without_commit() {
     let fx = fixture();
     let executor = HostExecutor::with_poison("README.md");
@@ -770,6 +817,33 @@ fn recovery_after_accepted_step_does_not_repeat_commit() {
     );
     assert_eq!(again.steps[0].attempts.len(), 1);
     assert_eq!(again.state, CampaignState::Completed);
+}
+
+#[test]
+fn detach_setup_failure_blocks_created_campaign() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "detach-fail",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let blocked = runner
+        .mark_detach_setup_failed("detach-fail", "user-level systemd is required")
+        .unwrap();
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(
+        blocked.blocked_reason.as_deref(),
+        Some("executor_unavailable")
+    );
+    assert!(blocked
+        .error_message
+        .unwrap()
+        .contains("detached runner setup failed"));
 }
 
 #[test]

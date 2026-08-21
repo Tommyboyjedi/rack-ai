@@ -151,6 +151,9 @@ fn start_command(
     let detach = arguments.iter().any(|value| value == "--detach");
     let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
     let fixture = flag_value(arguments, "--fixture-implementer");
+    if detach {
+        ensure_detach_preflight()?;
+    }
     with_runner(
         repo_root.clone(),
         state_root.clone(),
@@ -162,7 +165,27 @@ fn start_command(
         },
     )?;
     if detach {
-        return detach_runner(&repo_root, &state_root, &campaign.campaign_id);
+        return match spawn_detached_runner(&repo_root, &state_root, &campaign.campaign_id) {
+            Ok(()) => {
+                println!("campaign_id: {}", campaign.campaign_id);
+                println!("status: detached");
+                println!("unit: rack-ai-campaign-{}", campaign.campaign_id);
+                Ok(0)
+            }
+            Err(error) => {
+                let _ = with_runner(
+                    repo_root.clone(),
+                    state_root.clone(),
+                    fixture.as_deref(),
+                    true,
+                    |runner| {
+                        runner.mark_detach_setup_failed(&campaign.campaign_id, &error)?;
+                        Ok(1)
+                    },
+                );
+                Err(error)
+            }
+        };
     }
     let mut runner_args = vec![campaign.campaign_id.clone()];
     runner_args.extend(fixture_args(arguments));
@@ -437,7 +460,7 @@ fn inspect_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, Str
     Ok(0)
 }
 
-fn detach_runner(repo_root: &Path, state_root: &Path, campaign_id: &str) -> Result<i32, String> {
+fn ensure_detach_preflight() -> Result<(), String> {
     let systemd = Command::new("systemd-run")
         .arg("--help")
         .output()
@@ -452,6 +475,15 @@ fn detach_runner(repo_root: &Path, state_root: &Path, campaign_id: &str) -> Resu
     if !user.status.success() {
         return Err(missing_systemd_message());
     }
+    Ok(())
+}
+
+fn spawn_detached_runner(
+    repo_root: &Path,
+    state_root: &Path,
+    campaign_id: &str,
+) -> Result<(), String> {
+    ensure_detach_preflight()?;
     let unit = format!("rack-ai-campaign-{campaign_id}");
     let wrapper = repo_root.join("bin/rack-campaign");
     let status = Command::new("systemd-run")
@@ -478,10 +510,18 @@ fn detach_runner(repo_root: &Path, state_root: &Path, campaign_id: &str) -> Resu
             missing_systemd_message()
         ));
     }
-    println!("campaign_id: {campaign_id}");
-    println!("status: detached");
-    println!("unit: {unit}");
-    Ok(0)
+    Ok(())
+}
+
+fn create_campaign_after_detach_preflight(
+    detach: bool,
+    preflight: impl FnOnce() -> Result<(), String>,
+    create: impl FnOnce() -> Result<(), String>,
+) -> Result<(), String> {
+    if detach {
+        preflight()?;
+    }
+    create()
 }
 
 fn missing_systemd_message() -> String {
@@ -562,4 +602,44 @@ fn flag_value(arguments: &[String], flag: &str) -> Option<String> {
         .position(|value| value == flag)
         .and_then(|index| arguments.get(index + 1))
         .cloned()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::create_campaign_after_detach_preflight;
+    use std::cell::Cell;
+
+    #[test]
+    fn detach_preflight_runs_before_campaign_creation() {
+        let created = Cell::new(false);
+        let error = create_campaign_after_detach_preflight(
+            true,
+            || Err("user-level systemd is required for --detach".to_string()),
+            || {
+                created.set(true);
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("systemd"));
+        assert!(
+            !created.get(),
+            "campaign state must not be created when detach preflight fails"
+        );
+    }
+
+    #[test]
+    fn foreground_start_skips_detach_preflight() {
+        let created = Cell::new(false);
+        create_campaign_after_detach_preflight(
+            false,
+            || Err("should not run".to_string()),
+            || {
+                created.set(true);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(created.get());
+    }
 }

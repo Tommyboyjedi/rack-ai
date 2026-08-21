@@ -12,6 +12,10 @@ pub struct CampaignLeaseRecord {
     pub pid: u32,
     pub acquired_at: String,
     pub heartbeat: String,
+    #[serde(default)]
+    pub heartbeat_seconds: u64,
+    #[serde(default)]
+    pub action_timeout_seconds: u64,
 }
 
 pub struct CampaignLeaseStore {
@@ -44,15 +48,31 @@ impl CampaignLeaseStore {
         campaign_id: &str,
         repository_id: &str,
         now: &str,
+        heartbeat_seconds: u64,
+        action_timeout_seconds: u64,
     ) -> Result<CampaignLeaseRecord, String> {
-        self.fail_if_held(&self.campaign_lease_path(campaign_id), campaign_id)?;
-        self.fail_if_repository_held(repository_id, campaign_id)?;
+        self.fail_if_held(
+            &self.campaign_lease_path(campaign_id),
+            campaign_id,
+            now,
+            heartbeat_seconds,
+            action_timeout_seconds,
+        )?;
+        self.fail_if_repository_held(
+            repository_id,
+            campaign_id,
+            now,
+            heartbeat_seconds,
+            action_timeout_seconds,
+        )?;
         let record = CampaignLeaseRecord {
             campaign_id: campaign_id.to_string(),
             repository_id: repository_id.to_string(),
             pid: std::process::id(),
             acquired_at: now.to_string(),
             heartbeat: now.to_string(),
+            heartbeat_seconds,
+            action_timeout_seconds,
         };
         self.write_record(&self.campaign_lease_path(campaign_id), &record)?;
         self.write_record(&self.repository_lease_path(repository_id), &record)?;
@@ -99,6 +119,9 @@ impl CampaignLeaseStore {
         &self,
         repository_id: &str,
         campaign_id: &str,
+        now: &str,
+        heartbeat_seconds: u64,
+        action_timeout_seconds: u64,
     ) -> Result<(), String> {
         let path = self.repository_lease_path(repository_id);
         if !path.exists() {
@@ -106,9 +129,15 @@ impl CampaignLeaseStore {
         }
         let record = self.read_record(&path)?;
         if record.campaign_id == campaign_id {
-            return self.fail_if_held(&path, campaign_id);
+            return self.fail_if_held(
+                &path,
+                campaign_id,
+                now,
+                heartbeat_seconds,
+                action_timeout_seconds,
+            );
         }
-        if process_is_alive(record.pid) {
+        if lease_is_active(&record, now, heartbeat_seconds, action_timeout_seconds) {
             return Err(format!(
                 "repository {} already has an active campaign lease held by {}",
                 repository_id, record.campaign_id
@@ -117,7 +146,14 @@ impl CampaignLeaseStore {
         fs::remove_file(&path).map_err(|error| error.to_string())
     }
 
-    fn fail_if_held(&self, path: &Path, campaign_id: &str) -> Result<(), String> {
+    fn fail_if_held(
+        &self,
+        path: &Path,
+        campaign_id: &str,
+        now: &str,
+        heartbeat_seconds: u64,
+        action_timeout_seconds: u64,
+    ) -> Result<(), String> {
         if !path.exists() {
             return Ok(());
         }
@@ -125,7 +161,7 @@ impl CampaignLeaseStore {
         if record.pid == std::process::id() {
             return Ok(());
         }
-        if process_is_alive(record.pid) {
+        if lease_is_active(&record, now, heartbeat_seconds, action_timeout_seconds) {
             return Err(format!(
                 "campaign {campaign_id} lease is held by live pid {}",
                 record.pid
@@ -152,17 +188,59 @@ fn process_is_alive(pid: u32) -> bool {
     if pid == 0 {
         return false;
     }
+    if std::path::Path::new(&format!("/proc/{pid}")).exists() {
+        return true;
+    }
     match std::process::Command::new("kill")
         .args(["-0", &pid.to_string()])
-        .status()
+        .output()
     {
-        Ok(status) => status.success(),
+        Ok(output) if output.status.success() => true,
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
+            stderr.contains("not permitted") || stderr.contains("permission denied")
+        }
         Err(_) => false,
     }
 }
 
+pub fn lease_is_stale(
+    record: &CampaignLeaseRecord,
+    now: &str,
+    heartbeat_seconds: u64,
+    action_timeout_seconds: u64,
+) -> bool {
+    let now_unix = now.parse::<u64>().unwrap_or(0);
+    let heartbeat_unix = record.heartbeat.parse::<u64>().unwrap_or(0);
+    let interval = if record.heartbeat_seconds == 0 {
+        heartbeat_seconds
+    } else {
+        record.heartbeat_seconds
+    };
+    let action_timeout = if record.action_timeout_seconds == 0 {
+        action_timeout_seconds
+    } else {
+        record.action_timeout_seconds
+    };
+    let deadline = heartbeat_unix
+        .saturating_add(interval.saturating_mul(2))
+        .saturating_add(action_timeout);
+    now_unix > deadline
+}
+
+fn lease_is_active(
+    record: &CampaignLeaseRecord,
+    now: &str,
+    heartbeat_seconds: u64,
+    action_timeout_seconds: u64,
+) -> bool {
+    process_is_alive(record.pid)
+        && !lease_is_stale(record, now, heartbeat_seconds, action_timeout_seconds)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::CampaignLeaseRecord;
     use super::CampaignLeaseStore;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -171,10 +249,54 @@ mod tests {
     fn acquires_and_releases_campaign_lease() {
         let root = temp_root();
         let store = CampaignLeaseStore::new(root);
-        let record = store.acquire("c1", "repo", "1").unwrap();
+        let record = store.acquire("c1", "repo", "1", 10, 60).unwrap();
         assert_eq!(record.campaign_id, "c1");
         store.release("c1", "repo").unwrap();
         assert!(!store.campaign_lease_path("c1").exists());
+    }
+
+    #[test]
+    fn refuses_fresh_lease_held_by_live_pid() {
+        let root = temp_root();
+        let store = CampaignLeaseStore::new(root);
+        let foreign = CampaignLeaseRecord {
+            campaign_id: "c1".to_string(),
+            repository_id: "repo".to_string(),
+            pid: 1,
+            acquired_at: "1000".to_string(),
+            heartbeat: "1000".to_string(),
+            heartbeat_seconds: 10,
+            action_timeout_seconds: 60,
+        };
+        store
+            .write_record(&store.campaign_lease_path("c1"), &foreign)
+            .unwrap();
+        let error = store.acquire("c1", "repo", "1000", 10, 60).unwrap_err();
+        assert!(error.contains("live pid"));
+    }
+
+    #[test]
+    fn reclaims_stale_lease_even_if_pid_is_still_alive() {
+        let root = temp_root();
+        let store = CampaignLeaseStore::new(root);
+        let foreign = CampaignLeaseRecord {
+            campaign_id: "c1".to_string(),
+            repository_id: "repo".to_string(),
+            pid: 1,
+            acquired_at: "1".to_string(),
+            heartbeat: "1".to_string(),
+            heartbeat_seconds: 10,
+            action_timeout_seconds: 60,
+        };
+        store
+            .write_record(&store.campaign_lease_path("c1"), &foreign)
+            .unwrap();
+        store
+            .write_record(&store.repository_lease_path("repo"), &foreign)
+            .unwrap();
+        let record = store.acquire("c1", "repo", "1000", 10, 60).unwrap();
+        assert_eq!(record.pid, std::process::id());
+        assert_eq!(record.heartbeat, "1000");
     }
 
     fn temp_root() -> std::path::PathBuf {
