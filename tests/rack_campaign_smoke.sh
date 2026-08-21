@@ -67,6 +67,10 @@ cat > "$rack/config/repositories.json" <<EOF
 EOF
 
 cli() {
+  cargo run -q -p rack_ai_cli --features campaign-test-seams --manifest-path "$repo_root/Cargo.toml" -- campaign "$@" --repo-root "$rack" --state-root "$rack"
+}
+
+operator_cli() {
   cargo run -q -p rack_ai_cli --manifest-path "$repo_root/Cargo.toml" -- campaign "$@" --repo-root "$rack" --state-root "$rack"
 }
 
@@ -111,6 +115,13 @@ cat > "$tmp/two-step-script.json" <<'EOF'
   ]
 }
 EOF
+
+set +e
+operator_out="$(operator_cli start "$tmp/two-step.json" --skip-live-health --fixture-implementer "$tmp/two-step-script.json" 2>&1)"
+operator_rc=$?
+set -e
+test "$operator_rc" -ne 0
+echo "$operator_out" | grep -q "unsupported campaign flag"
 
 cli start "$tmp/two-step.json" --skip-live-health --fixture-implementer "$tmp/two-step-script.json"
 worktree="$tmp/workspaces/campaign-fixture-two-step/repo"

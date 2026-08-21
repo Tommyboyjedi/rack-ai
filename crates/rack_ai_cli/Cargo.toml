@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
+[features]
+default = []
+campaign-test-seams = []
+
 [dependencies]
 rack_ai_application = { path = "../rack_ai_application" }
 rack_ai_domain = { path = "../rack_ai_domain" }

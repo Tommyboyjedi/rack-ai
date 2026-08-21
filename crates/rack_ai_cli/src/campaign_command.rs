@@ -6,6 +6,7 @@ use std::thread;
 use std::time::Duration;
 
 use rack_ai_application::Campaign;
+use rack_ai_application::CampaignEvent;
 use rack_ai_application::CampaignHealth;
 use rack_ai_application::CampaignRevisionDocument;
 use rack_ai_application::CampaignRunner;
@@ -132,8 +133,8 @@ fn validate_command(
     arguments: &[String],
 ) -> Result<i32, String> {
     let campaign = load_campaign_file(arguments.first().ok_or("expected campaign path")?)?;
-    let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
-    with_runner(repo_root, state_root, None, skip_live, |runner| {
+    let seams = test_seams_from_arguments(arguments)?;
+    with_runner(repo_root, state_root, seams.fixture.as_deref(), seams.skip_live, |runner| {
         runner.validate(&campaign)?;
         println!("campaign_id: {}", campaign.campaign_id);
         println!("status: valid");
@@ -149,16 +150,15 @@ fn start_command(
     let campaign_path = arguments.first().ok_or("expected campaign path")?;
     let campaign = load_campaign_file(campaign_path)?;
     let detach = arguments.iter().any(|value| value == "--detach");
-    let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
-    let fixture = flag_value(arguments, "--fixture-implementer");
+    let seams = test_seams_from_arguments(arguments)?;
     if detach {
         ensure_detach_preflight()?;
     }
     with_runner(
         repo_root.clone(),
         state_root.clone(),
-        fixture.as_deref(),
-        skip_live,
+        seams.fixture.as_deref(),
+        seams.skip_live,
         |runner| {
             runner.start(&campaign)?;
             Ok(0)
@@ -176,7 +176,7 @@ fn start_command(
                 let _ = with_runner(
                     repo_root.clone(),
                     state_root.clone(),
-                    fixture.as_deref(),
+                    None,
                     true,
                     |runner| {
                         runner.mark_detach_setup_failed(&campaign.campaign_id, &error)?;
@@ -188,20 +188,8 @@ fn start_command(
         };
     }
     let mut runner_args = vec![campaign.campaign_id.clone()];
-    runner_args.extend(fixture_args(arguments));
+    runner_args.extend(seams.to_args());
     runner_command(repo_root, state_root, &runner_args)
-}
-
-fn fixture_args(arguments: &[String]) -> Vec<String> {
-    let mut extra = Vec::new();
-    if let Some(path) = flag_value(arguments, "--fixture-implementer") {
-        extra.push("--fixture-implementer".to_string());
-        extra.push(path);
-    }
-    if arguments.iter().any(|value| value == "--skip-live-health") {
-        extra.push("--skip-live-health".to_string());
-    }
-    extra
 }
 
 fn runner_command(
@@ -210,13 +198,12 @@ fn runner_command(
     arguments: &[String],
 ) -> Result<i32, String> {
     let campaign_id = arguments.first().ok_or("expected campaign id")?;
-    let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
-    let fixture = flag_value(arguments, "--fixture-implementer");
+    let seams = test_seams_from_arguments(arguments)?;
     with_runner(
         repo_root,
         state_root,
-        fixture.as_deref(),
-        skip_live,
+        seams.fixture.as_deref(),
+        seams.skip_live,
         |runner| {
             let state = runner.run(campaign_id)?;
             println!("campaign_id: {}", state.campaign_id);
@@ -235,9 +222,8 @@ fn resume_command(
     arguments: &[String],
 ) -> Result<i32, String> {
     let campaign_id = arguments.first().ok_or("expected campaign id")?;
-    let skip_live = arguments.iter().any(|value| value == "--skip-live-health");
-    let fixture = flag_value(arguments, "--fixture-implementer");
-    with_runner(repo_root, state_root, fixture.as_deref(), skip_live, |runner| {
+    let seams = test_seams_from_arguments(arguments)?;
+    with_runner(repo_root, state_root, seams.fixture.as_deref(), seams.skip_live, |runner| {
         let state = runner.resume(campaign_id)?;
         println!("campaign_id: {}", state.campaign_id);
         println!("state: {:?}", state.state);
@@ -351,7 +337,7 @@ fn status_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, Stri
 fn events_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
     let campaign_id = arguments.first().ok_or("expected campaign id")?;
     let follow = arguments.iter().any(|value| value == "--follow");
-    let emit_json = arguments.iter().any(|value| value == "--emit-json") || true;
+    let emit_json = arguments.iter().any(|value| value == "--emit-json");
     let path = state_root
         .join("state")
         .join("campaigns")
@@ -359,8 +345,7 @@ fn events_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, Stri
         .join("events.jsonl");
     if !follow {
         let content = fs::read_to_string(&path).map_err(|error| error.to_string())?;
-        print!("{content}");
-        let _ = emit_json;
+        print!("{}", format_events(&content, emit_json)?);
         return Ok(0);
     }
     let mut file = fs::OpenOptions::new()
@@ -370,7 +355,7 @@ fn events_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, Stri
     let mut buf = String::new();
     file.read_to_string(&mut buf)
         .map_err(|error| error.to_string())?;
-    print!("{buf}");
+    print!("{}", format_events(&buf, emit_json)?);
     loop {
         thread::sleep(Duration::from_millis(200));
         let mut extra = String::new();
@@ -384,9 +369,41 @@ fn events_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, Stri
             }
             continue;
         }
-        print!("{extra}");
+        print!("{}", format_events(&extra, emit_json)?);
         buf.push_str(&extra);
     }
+}
+
+fn format_events(content: &str, emit_json: bool) -> Result<String, String> {
+    if emit_json {
+        return Ok(content.to_string());
+    }
+    let mut output = String::new();
+    for line in content.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: CampaignEvent =
+            serde_json::from_str(line).map_err(|error| error.to_string())?;
+        output.push_str(&format_event_human(&event));
+        output.push('\n');
+    }
+    Ok(output)
+}
+
+fn format_event_human(event: &CampaignEvent) -> String {
+    let mut line = format!("{} {}", event.timestamp, event.event_type);
+    if let Some(step_id) = &event.step_id {
+        line.push_str(&format!(" step={step_id}"));
+    }
+    if let Some(attempt) = event.attempt {
+        line.push_str(&format!(" attempt={attempt}"));
+    }
+    if let Some(worker_id) = &event.worker_id {
+        line.push_str(&format!(" worker={worker_id}"));
+    }
+    line.push_str(&format!(": {}", event.message));
+    line
 }
 
 fn inspect_command(state_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
@@ -530,16 +547,7 @@ where
     let executor = PodmanWorkspaceExecutor::new(executor_config.clone());
     let live_implementer =
         PodmanChangeImplementer::new(PodmanWorkspaceExecutor::new(executor_config));
-    let fixture_document = match fixture {
-        Some(path) => {
-            let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
-            Some(
-                serde_json::from_str::<ScriptedImplementerDocument>(&content)
-                    .map_err(|error| error.to_string())?,
-            )
-        }
-        None => None,
-    };
+    let fixture_document = load_fixture_document(fixture)?;
     let scripted = fixture_document
         .as_ref()
         .map(|document| ScriptedChangeImplementer::from_document(&executor, document.clone()));
@@ -589,9 +597,71 @@ fn flag_value(arguments: &[String], flag: &str) -> Option<String> {
         .cloned()
 }
 
+#[derive(Debug)]
+struct TestSeams {
+    skip_live: bool,
+    fixture: Option<String>,
+}
+
+impl TestSeams {
+    fn to_args(&self) -> Vec<String> {
+        let mut extra = Vec::new();
+        if let Some(path) = &self.fixture {
+            extra.push("--fixture-implementer".to_string());
+            extra.push(path.clone());
+        }
+        if self.skip_live {
+            extra.push("--skip-live-health".to_string());
+        }
+        extra
+    }
+}
+
+fn test_seams_from_arguments(arguments: &[String]) -> Result<TestSeams, String> {
+    let requested_skip = arguments.iter().any(|value| value == "--skip-live-health");
+    let requested_fixture = flag_value(arguments, "--fixture-implementer");
+    if (requested_skip || requested_fixture.is_some()) && !cfg!(feature = "campaign-test-seams") {
+        let flag = if requested_skip {
+            "--skip-live-health"
+        } else {
+            "--fixture-implementer"
+        };
+        return Err(format!(
+            "unsupported campaign flag: {flag} (test-only; rebuild with --features campaign-test-seams)"
+        ));
+    }
+    Ok(TestSeams {
+        skip_live: requested_skip && cfg!(feature = "campaign-test-seams"),
+        fixture: if cfg!(feature = "campaign-test-seams") {
+            requested_fixture
+        } else {
+            None
+        },
+    })
+}
+
+fn load_fixture_document(
+    fixture: Option<&str>,
+) -> Result<Option<ScriptedImplementerDocument>, String> {
+    let Some(path) = fixture else {
+        return Ok(None);
+    };
+    if !cfg!(feature = "campaign-test-seams") {
+        return Err(
+            "unsupported campaign flag: --fixture-implementer (test-only; rebuild with --features campaign-test-seams)"
+                .to_string(),
+        );
+    }
+    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    serde_json::from_str(&content).map_err(|error| error.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::create_campaign_after_detach_preflight;
+    use super::format_events;
+    use super::test_seams_from_arguments;
+    use rack_ai_application::CampaignEvent;
     use std::cell::Cell;
 
     #[test]
@@ -626,5 +696,52 @@ mod tests {
         )
         .unwrap();
         assert!(created.get());
+    }
+
+    #[test]
+    fn events_emit_json_is_opt_in() {
+        let event = CampaignEvent {
+            timestamp: "1".to_string(),
+            campaign_id: "c1".to_string(),
+            step_id: Some("add-alpha".to_string()),
+            attempt: Some(1),
+            worker_id: Some("local-coder".to_string()),
+            action: None,
+            state: None,
+            event_type: "step_accepted".to_string(),
+            message: "accepted step add-alpha".to_string(),
+            details: serde_json::Map::new(),
+        };
+        let json = format!("{}\n", serde_json::to_string(&event).unwrap());
+        let as_json = format_events(&json, true).unwrap();
+        assert_eq!(as_json, json);
+        let human = format_events(&json, false).unwrap();
+        assert!(human.contains("step_accepted"));
+        assert!(human.contains("step=add-alpha"));
+        assert!(human.contains("accepted step add-alpha"));
+        assert!(!human.trim_start().starts_with('{'));
+    }
+
+    #[test]
+    fn operator_cli_rejects_test_only_bypass_flags() {
+        if cfg!(feature = "campaign-test-seams") {
+            let seams = test_seams_from_arguments(&[
+                "--skip-live-health".to_string(),
+                "--fixture-implementer".to_string(),
+                "script.json".to_string(),
+            ])
+            .unwrap();
+            assert!(seams.skip_live);
+            assert_eq!(seams.fixture.as_deref(), Some("script.json"));
+            return;
+        }
+        let skip = test_seams_from_arguments(&["--skip-live-health".to_string()]).unwrap_err();
+        assert!(skip.contains("--skip-live-health"));
+        let fixture = test_seams_from_arguments(&[
+            "--fixture-implementer".to_string(),
+            "script.json".to_string(),
+        ])
+        .unwrap_err();
+        assert!(fixture.contains("--fixture-implementer"));
     }
 }
