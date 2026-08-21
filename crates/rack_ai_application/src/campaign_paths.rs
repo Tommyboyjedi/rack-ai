@@ -1,12 +1,42 @@
+use std::path::Component;
+use std::path::Path;
+
 use rack_ai_domain::AllowedPath;
 use rack_ai_domain::AllowedPaths;
 
 use crate::WorkspacePath;
 
 pub fn parse_campaign_path(raw: &str) -> Result<String, String> {
-    let parsed = WorkspacePath::parse(raw).map_err(|error| {
-        format!("invalid campaign path '{raw}': {error}")
-    })?;
+    let trimmed = raw.trim();
+
+    if trimmed.is_empty() {
+        return Err("campaign path cannot be empty".to_string());
+    }
+
+    if raw.contains('\0') {
+        return Err(format!("invalid campaign path '{raw}': contains NUL"));
+    }
+
+    if Path::new(trimmed).is_absolute() {
+        return Err(format!(
+            "invalid campaign path '{raw}': absolute paths are not allowed"
+        ));
+    }
+
+    for component in Path::new(trimmed).components() {
+        match component {
+            Component::CurDir | Component::ParentDir => {
+                return Err(format!(
+                    "invalid campaign path '{raw}': traversal components are not allowed"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    let parsed = WorkspacePath::parse(trimmed)
+        .map_err(|error| format!("invalid campaign path '{raw}': {error}"))?;
+
     let allowed = AllowedPath::new(parsed.relative().to_string())?;
     Ok(allowed.value().to_string())
 }

@@ -441,19 +441,17 @@ impl<'a> CampaignRunner<'a> {
         if revision.steps.is_empty() {
             return Err("revision must append at least one step".to_string());
         }
-        let permitted = campaign
-            .permitted_paths
-            .iter()
-            .map(|value| value.as_str())
-            .collect();
+        let permitted = &campaign.permitted_paths;
+
         for step in &revision.steps {
             self.validate_step(step)?;
             assert_step_paths_permitted(
                 &step.id,
                 &step.allowed_paths,
                 &step.required_changed_paths,
-                &permitted,
+                permitted,
             )?;
+
             if state
                 .steps
                 .iter()
