@@ -22,3 +22,6 @@ state/resources/leases/*.json
 !state/resources/leases/.gitkeep
 state/changes/**
 !state/changes/.gitkeep
+state/campaigns/**
+!state/campaigns/.gitkeep
+state/workspaces/**

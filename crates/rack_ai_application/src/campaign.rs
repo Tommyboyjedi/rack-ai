@@ -74,6 +74,12 @@ pub struct Campaign {
     pub steps: Vec<CampaignStep>,
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CampaignRevisionDocument {
+    pub instruction: String,
+    pub steps: Vec<CampaignStep>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CampaignState {
@@ -86,17 +92,101 @@ pub enum CampaignState {
     Expired,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoordinatorReviewDisposition {
+    Accepted,
+    RejectedRetryable,
+    RejectedTerminal,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FailureClassification {
+    ToolProtocolViolation,
+    NoChange,
+    PathPolicyFailed,
+    AcceptanceFailed,
+    ArtifactMissing,
+    WorkerTimeout,
+    ExecutorUnavailable,
+    ModelUnavailable,
+    CampaignExpired,
+    OperatorPaused,
+    OperatorCancelled,
+    ContinuityFailed,
+    InadequateImplementation,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptKind {
+    Primary,
+    Repair,
+    Fallback,
+    Verification,
+}
+
+impl FailureClassification {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::ToolProtocolViolation => "tool_protocol_violation",
+            Self::NoChange => "no_change",
+            Self::PathPolicyFailed => "path_policy_failed",
+            Self::AcceptanceFailed => "acceptance_failed",
+            Self::ArtifactMissing => "artifact_missing",
+            Self::WorkerTimeout => "worker_timeout",
+            Self::ExecutorUnavailable => "executor_unavailable",
+            Self::ModelUnavailable => "model_unavailable",
+            Self::CampaignExpired => "campaign_expired",
+            Self::OperatorPaused => "operator_paused",
+            Self::OperatorCancelled => "operator_cancelled",
+            Self::ContinuityFailed => "continuity_failed",
+            Self::InadequateImplementation => "inadequate_implementation",
+        }
+    }
+
+    pub fn retryable(self) -> bool {
+        matches!(
+            self,
+            Self::ToolProtocolViolation
+                | Self::NoChange
+                | Self::AcceptanceFailed
+                | Self::ArtifactMissing
+                | Self::WorkerTimeout
+                | Self::ModelUnavailable
+                | Self::InadequateImplementation
+        )
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct CoordinatorReview {
+    pub disposition: CoordinatorReviewDisposition,
+    pub classification: Option<FailureClassification>,
+    pub rationale: String,
+    pub evidence_refs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repair_instruction: Option<String>,
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct StepAttemptRecord {
     pub attempt: usize,
     pub worker_id: String,
+    pub kind: AttemptKind,
     pub start_time: String,
     pub end_time: String,
-    pub disposition: String,
+    pub disposition: CoordinatorReviewDisposition,
+    pub classification: Option<FailureClassification>,
     pub rationale: String,
     pub commit_sha: Option<String>,
     #[serde(default)]
     pub repair_instruction: Option<String>,
+    #[serde(default)]
+    pub repair_of: Option<usize>,
+    #[serde(default)]
+    pub fallback_of: Option<usize>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -104,8 +194,19 @@ pub struct StepStatusRecord {
     pub step_id: String,
     pub kind: String,
     pub disposition: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_disposition: Option<CoordinatorReviewDisposition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_rationale: Option<String>,
     pub attempts: Vec<StepAttemptRecord>,
     pub accepted_commit: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct RevisionRecord {
+    pub instruction: String,
+    pub added_step_ids: Vec<String>,
+    pub recorded_at: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -121,6 +222,10 @@ pub struct CampaignStatus {
     pub state: CampaignState,
     pub current_step_id: Option<String>,
     pub current_attempt: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_worker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_action: Option<String>,
     pub pause_requested: bool,
     pub cancel_requested: bool,
     pub start_time: String,
@@ -128,7 +233,13 @@ pub struct CampaignStatus {
     pub duration_seconds: u64,
     pub remaining_seconds: u64,
     pub last_heartbeat: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_progress_time: Option<String>,
     pub steps: Vec<StepStatusRecord>,
+    #[serde(default)]
+    pub revisions: Vec<RevisionRecord>,
+    #[serde(default)]
+    pub active_lease_id: Option<String>,
     #[serde(default)]
     pub active_container_id: Option<String>,
     pub error_message: Option<String>,
@@ -143,13 +254,54 @@ pub struct CampaignEvent {
     pub step_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attempt: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
     pub event_type: String,
     pub message: String,
     #[serde(default, skip_serializing_if = "serde_json::Map::is_empty")]
     pub details: serde_json::Map<String, Value>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CampaignWorkerRuntime {
+    pub worker_id: String,
+    pub endpoint: String,
+    pub api_model_id: String,
+}
+
+pub trait CampaignWorkerCatalog {
+    fn runtime(&self, worker_id: &str) -> Result<CampaignWorkerRuntime, String>;
+}
+
+pub trait CampaignHealth {
+    fn assert_workers(&self, primary: &str, fallback: &str) -> Result<(), String>;
+    fn assert_executor(&self) -> Result<(), String>;
+}
+
+pub trait UnixClock {
+    fn now_unix(&self) -> u64;
+}
+
+pub struct SystemUnixClock;
+
+impl UnixClock for SystemUnixClock {
+    fn now_unix(&self) -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+    }
+}
+
 impl Campaign {
+    pub fn expected_branch(campaign_id: &str) -> String {
+        format!("rack/campaign-{campaign_id}")
+    }
+
     pub fn validate_permitted_paths(&self) -> Result<(), String> {
         let permitted = self
             .permitted_paths
@@ -157,29 +309,64 @@ impl Campaign {
             .map(|value| value.as_str())
             .collect::<HashSet<_>>();
         for step in &self.steps {
-            for path in &step.allowed_paths {
-                if !is_permitted_path(path, &permitted) {
-                    return Err(format!(
-                        "step {} allowed_path '{}' violates campaign permitted_paths",
-                        step.id, path
-                    ));
-                }
-            }
-            for path in &step.required_changed_paths {
-                if !is_permitted_path(path, &permitted) {
-                    return Err(format!(
-                        "step {} required_changed_path '{}' violates campaign permitted_paths",
-                        step.id, path
-                    ));
-                }
-            }
+            assert_step_paths_permitted(
+                &step.id,
+                &step.allowed_paths,
+                &step.required_changed_paths,
+                &permitted,
+            )?;
         }
         Ok(())
     }
 }
 
-fn is_permitted_path(path: &str, permitted: &HashSet<&str>) -> bool {
+pub fn assert_step_paths_permitted(
+    step_id: &str,
+    allowed_paths: &[String],
+    required_changed_paths: &[String],
+    permitted: &HashSet<&str>,
+) -> Result<(), String> {
+    for path in allowed_paths {
+        if !is_permitted_path(path, permitted) {
+            return Err(format!(
+                "step {step_id} allowed_path '{path}' violates campaign permitted_paths"
+            ));
+        }
+    }
+    for path in required_changed_paths {
+        if !is_permitted_path(path, permitted) {
+            return Err(format!(
+                "step {step_id} required_changed_path '{path}' violates campaign permitted_paths"
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub fn is_permitted_path(path: &str, permitted: &HashSet<&str>) -> bool {
     permitted.iter().any(|prefix| path.starts_with(prefix))
+}
+
+pub fn campaign_digest(campaign: &Campaign) -> Result<String, String> {
+    let json = serde_json::to_string(campaign).map_err(|error| error.to_string())?;
+    Ok(format!("{:016x}", fnv1a64(json.as_bytes())))
+}
+
+pub fn fnv1a64(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+pub fn source_paths(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !crate::ChangeLayout::is_ephemeral_path(path))
+        .cloned()
+        .collect()
 }
 
 #[cfg(test)]
@@ -189,13 +376,14 @@ mod tests {
     use super::CampaignRepository;
     use super::CampaignStep;
     use super::CampaignStepKind;
+    use super::FailureClassification;
     use super::StepAcceptance;
     use super::StepLimits;
     use super::WorkerPolicy;
 
     #[test]
     fn rejects_step_paths_outside_campaign_allowlist() {
-        let campaign = sample_campaign("src/domain/", "README.md");
+        let campaign = sample_campaign("README.md", "src/domain/entity.rs");
         let error = campaign.validate_permitted_paths().unwrap_err();
         assert!(error.contains("allowed_path"));
     }
@@ -204,6 +392,15 @@ mod tests {
     fn accepts_required_changed_paths_within_allowlist() {
         let campaign = sample_campaign("src/domain/", "src/domain/entity.rs");
         assert!(campaign.validate_permitted_paths().is_ok());
+    }
+
+    #[test]
+    fn path_policy_and_expiry_are_not_retryable() {
+        assert!(!FailureClassification::PathPolicyFailed.retryable());
+        assert!(!FailureClassification::ContinuityFailed.retryable());
+        assert!(!FailureClassification::ExecutorUnavailable.retryable());
+        assert!(!FailureClassification::CampaignExpired.retryable());
+        assert!(FailureClassification::NoChange.retryable());
     }
 
     fn sample_campaign(allowed_path: &str, required_changed_path: &str) -> Campaign {

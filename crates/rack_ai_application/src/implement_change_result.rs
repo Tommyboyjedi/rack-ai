@@ -1,15 +1,72 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ToolCallRecord {
+    pub name: String,
+    pub arguments: String,
+    pub result: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementChangeResult {
     output: String,
+    tool_calls: Vec<ToolCallRecord>,
+    protocol_error: Option<String>,
+    worker_error: Option<String>,
+    executor_kind: String,
 }
 
 impl ImplementChangeResult {
     pub fn new(output: String) -> Self {
-        Self { output }
+        Self {
+            output,
+            tool_calls: Vec::new(),
+            protocol_error: None,
+            worker_error: None,
+            executor_kind: "workspace".to_string(),
+        }
+    }
+
+    pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallRecord>) -> Self {
+        self.tool_calls = tool_calls;
+        self
+    }
+
+    pub fn with_protocol_error(mut self, protocol_error: String) -> Self {
+        self.protocol_error = Some(protocol_error);
+        self
+    }
+
+    pub fn with_worker_error(mut self, worker_error: String) -> Self {
+        self.worker_error = Some(worker_error);
+        self
+    }
+
+    pub fn with_executor_kind(mut self, executor_kind: String) -> Self {
+        self.executor_kind = executor_kind;
+        self
     }
 
     pub fn output(&self) -> &str {
         self.output.as_str()
+    }
+
+    pub fn tool_calls(&self) -> &[ToolCallRecord] {
+        self.tool_calls.as_slice()
+    }
+
+    pub fn protocol_error(&self) -> Option<&str> {
+        self.protocol_error.as_deref()
+    }
+
+    pub fn worker_error(&self) -> Option<&str> {
+        self.worker_error.as_deref()
+    }
+
+    pub fn executor_kind(&self) -> &str {
+        self.executor_kind.as_str()
+    }
+
+    pub fn used_host_shell(&self) -> bool {
+        self.executor_kind == "host" || self.executor_kind == "jcode"
     }
 }
 

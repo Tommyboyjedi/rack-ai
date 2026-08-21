@@ -197,6 +197,17 @@ rack-campaign inspect <campaign-id> [--step <step-id>]
 
 No command may accept an unbounded free-form instruction that runs immediately against a worktree. Human instructions always become a persisted, validated revision step.
 
+### User linger for detached 48-hour runs
+
+`--detach` uses `systemd-run --user --collect`. A 48-hour unattended campaign requires the operator session to outlive SSH:
+
+```text
+loginctl enable-linger "$USER"
+systemctl --user is-system-running
+```
+
+If user-level systemd is unavailable, `rack-campaign start --detach` fails with these instructions. It must not fall back to `nohup`, an orphan process, or a shell background job.
+
 ## Durable state and recovery
 
 Store state under:
