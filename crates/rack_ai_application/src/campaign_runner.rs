@@ -13,6 +13,7 @@ use crate::assert_step_paths_permitted;
 use crate::campaign_digest;
 use crate::durable_file::append_line;
 use crate::atomic_write;
+use crate::CampaignLock;
 use crate::repair_instruction;
 use crate::review_attempt;
 use crate::source_paths;
@@ -154,6 +155,11 @@ impl<'a> CampaignRunner<'a> {
     }
 
     pub fn save_state(&self, state: &CampaignStatus) -> Result<(), String> {
+        let _lock = CampaignLock::acquire(&self.campaign_dir(&state.campaign_id))?;
+        self.save_state_unlocked(state)
+    }
+
+    fn save_state_unlocked(&self, state: &CampaignStatus) -> Result<(), String> {
         let json = serde_json::to_string_pretty(state).map_err(|error| error.to_string())?;
         atomic_write(
             &self.state_path(&state.campaign_id),
@@ -372,9 +378,12 @@ impl<'a> CampaignRunner<'a> {
     }
 
     pub fn pause(&self, campaign_id: &str) -> Result<CampaignStatus, String> {
+        let _lock = CampaignLock::acquire(&self.campaign_dir(campaign_id))?;
         let mut state = self.require_state(campaign_id)?;
+
         state.pause_requested = true;
-        self.save_state(&state)?;
+
+        self.save_state_unlocked(&state)?;
         self.emit(
             campaign_id,
             None,
@@ -384,6 +393,7 @@ impl<'a> CampaignRunner<'a> {
             "pause requested",
             Some(&state),
         )?;
+
         Ok(state)
     }
 
@@ -392,21 +402,26 @@ impl<'a> CampaignRunner<'a> {
         campaign_id: &str,
         reason: Option<&str>,
     ) -> Result<CampaignStatus, String> {
+        let _lock = CampaignLock::acquire(&self.campaign_dir(campaign_id))?;
         let mut state = self.require_state(campaign_id)?;
+
         state.cancel_requested = true;
         state.pause_requested = false;
+
         if let Some(reason) = reason {
             state.error_message = Some(reason.to_string());
         }
+
         if !matches!(
-            state.state,
-            CampaignState::Completed | CampaignState::Cancelled | CampaignState::Expired
-        ) {
+        state.state,
+        CampaignState::Completed | CampaignState::Cancelled | CampaignState::Expired
+    ) {
             state.state = CampaignState::Cancelled;
             state.end_time = Some(self.now_text());
             state.blocked_reason = Some("operator_cancelled".to_string());
         }
-        self.save_state(&state)?;
+
+        self.save_state_unlocked(&state)?;
         self.emit(
             campaign_id,
             None,
@@ -416,6 +431,7 @@ impl<'a> CampaignRunner<'a> {
             reason.unwrap_or("cancelled by operator"),
             Some(&state),
         )?;
+
         Ok(state)
     }
 
@@ -424,6 +440,7 @@ impl<'a> CampaignRunner<'a> {
         campaign_id: &str,
         revision: CampaignRevisionDocument,
     ) -> Result<CampaignStatus, String> {
+        let _lock = CampaignLock::acquire(&self.campaign_dir(campaign_id))?;
         let campaign = self.load_campaign(campaign_id)?;
         let mut state = self.require_state(campaign_id)?;
         if !matches!(state.state, CampaignState::Paused | CampaignState::Blocked) {
@@ -477,7 +494,7 @@ impl<'a> CampaignRunner<'a> {
             added_step_ids: added_step_ids.clone(),
             recorded_at: now,
         });
-        self.save_state(&state)?;
+        self.save_state_unlocked(&state)?;
         self.emit(
             campaign_id,
             None,
