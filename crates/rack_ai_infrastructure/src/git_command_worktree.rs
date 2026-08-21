@@ -44,10 +44,7 @@ impl GitWorktree for GitCommandWorktree {
                 request.base_sha().value(),
             ],
         )?;
-        let change_id = request
-            .branch_name()
-            .strip_prefix("rack/change-")
-            .unwrap_or(request.branch_name());
+        let change_id = branch_change_id(request.branch_name());
         Ok(ChangeWorkspace::new(
             ChangeId::new(change_id.to_string())?,
             request.worktree_path().to_path_buf(),
@@ -80,9 +77,17 @@ impl GitWorktree for GitCommandWorktree {
     }
 }
 
+fn branch_change_id(branch_name: &str) -> &str {
+    branch_name
+        .strip_prefix("rack/change-")
+        .or_else(|| branch_name.strip_prefix("rack/campaign-"))
+        .unwrap_or(branch_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::GitCommandWorktree;
+    use super::branch_change_id;
     use crate::GitCommand;
     use rack_ai_application::CreateChangeWorktreeRequest;
     use rack_ai_application::GitWorktree;
@@ -147,6 +152,14 @@ mod tests {
         let main_file = fs::read_to_string(fixture.join("src/lib.rs")).unwrap();
         assert_eq!(main_file, "original\n");
         assert_eq!(workspace.branch_name(), "rack/change-job-1");
+    }
+
+    #[test]
+    fn keeps_campaign_branch_ids_filesystem_safe() {
+        assert_eq!(
+            branch_change_id("rack/campaign-adaptos-foundation-20260821"),
+            "adaptos-foundation-20260821"
+        );
     }
 
     fn init_fixture() -> PathBuf {

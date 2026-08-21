@@ -28,7 +28,18 @@ impl ChangeImplementer for PodmanChangeImplementer {
             )
             .with_timeout_seconds(request.timeout_seconds()),
         );
-        let output = DirectCoderWorker::local_default().execute_with_runner(
+        let worker = if let (Some(endpoint), Some(model_id)) =
+            (request.worker_endpoint(), request.worker_model_id())
+        {
+            DirectCoderWorker::new(
+                endpoint.to_string(),
+                model_id.to_string(),
+                DirectCoderWorker::default_system_prompt(),
+            )
+        } else {
+            DirectCoderWorker::local_default()
+        };
+        let output = worker.execute_with_runner(
             &CoderRunRequest::new(request.task().to_string(), request.max_turns())?
                 .with_timeout_seconds(request.timeout_seconds()),
             &runner,

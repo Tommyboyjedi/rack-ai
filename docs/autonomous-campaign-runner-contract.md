@@ -4,6 +4,14 @@
 
 **Implementation contract for the next Rack AI feature.** This document is intentionally precise because the resulting runner will be trusted to make bounded, unattended progress in a separate product repository for up to 48 hours.
 
+Current implementation checkpoint as of August 21, 2026:
+
+- Rust campaign schema, validation, durable state, event log, attempt review packet, worker transcript packet, and command-evidence packet are implemented.
+- `rack-campaign validate`, `start`, `runner`, `status`, `events`, and `inspect` are wired into the Rust CLI and exposed through `bin/rack-campaign`.
+- Campaign worktrees now use the configured writable workspace root and the shared Git worktree adapter accepts both `rack/change-*` and `rack/campaign-*` branch families.
+- Live rack proof completed on August 21, 2026 with a verification-only AdaptOS campaign against branch `rack/change-adaptos-20260821-005-cli`, producing `completed` state, persisted events, and per-attempt evidence under `state/campaigns/adaptos-verify-20260821/`.
+- Full contract coverage is not complete yet: pause/resume/cancel/revise controls, detached runner lifecycle, bounded lease recovery, and the full implementation-step repair/fallback loop still need to be finished and hardened.
+
 It does **not** describe a generic autonomous-agent platform. It describes one controlled capability built on the existing external-repository change workflow.
 
 ## Decision
