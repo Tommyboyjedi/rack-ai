@@ -1,3 +1,5 @@
+use crate::campaign_paths::assert_authorized_paths;
+use crate::campaign_paths::required_prefix_satisfied;
 use crate::source_paths;
 use crate::CampaignStep;
 use crate::CampaignStepKind;
@@ -210,32 +212,12 @@ fn review_verification(input: ReviewInput<'_>, evidence_refs: Vec<String>) -> Co
 }
 
 fn assert_allowed_paths(step: &CampaignStep, changed: &[String]) -> Result<(), String> {
-    let disallowed: Vec<&String> = changed
-        .iter()
-        .filter(|path| {
-            !step
-                .allowed_paths
-                .iter()
-                .any(|prefix| path.starts_with(prefix))
-        })
-        .collect();
-    if disallowed.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "changed paths outside allowed_paths: {}",
-            disallowed
-                .iter()
-                .map(|path| path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    }
+    assert_authorized_paths(changed, &step.allowed_paths)
 }
 
 fn assert_required_changed_paths(step: &CampaignStep, changed: &[String]) -> Result<(), String> {
     for required in &step.required_changed_paths {
-        if !changed.iter().any(|path| path.starts_with(required)) {
+        if !required_prefix_satisfied(changed, required)? {
             return Err(format!(
                 "required changed path not satisfied: {required}; a passing test suite is not sufficient"
             ));
@@ -249,9 +231,7 @@ fn required_artifacts_changed(step: &CampaignStep, changed: &[String]) -> bool {
         return true;
     }
     step.acceptance.required_artifacts.iter().any(|artifact| {
-        changed
-            .iter()
-            .any(|path| path == artifact || path.starts_with(artifact))
+        required_prefix_satisfied(changed, artifact).unwrap_or(false)
     })
 }
 

@@ -1,8 +1,9 @@
-use std::collections::HashSet;
-
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
+
+use crate::campaign_paths::parse_campaign_path;
+use crate::campaign_paths::path_is_under_prefix;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CampaignRepository {
@@ -303,17 +304,15 @@ impl Campaign {
     }
 
     pub fn validate_permitted_paths(&self) -> Result<(), String> {
-        let permitted = self
-            .permitted_paths
-            .iter()
-            .map(|value| value.as_str())
-            .collect::<HashSet<_>>();
+        for path in &self.permitted_paths {
+            parse_campaign_path(path)?;
+        }
         for step in &self.steps {
             assert_step_paths_permitted(
                 &step.id,
                 &step.allowed_paths,
                 &step.required_changed_paths,
-                &permitted,
+                &self.permitted_paths,
             )?;
         }
         Ok(())
@@ -324,17 +323,19 @@ pub fn assert_step_paths_permitted(
     step_id: &str,
     allowed_paths: &[String],
     required_changed_paths: &[String],
-    permitted: &HashSet<&str>,
+    permitted: &[String],
 ) -> Result<(), String> {
     for path in allowed_paths {
-        if !is_permitted_path(path, permitted) {
+        parse_campaign_path(path)?;
+        if !path_covered_by_permitted(path, permitted)? {
             return Err(format!(
                 "step {step_id} allowed_path '{path}' violates campaign permitted_paths"
             ));
         }
     }
     for path in required_changed_paths {
-        if !is_permitted_path(path, permitted) {
+        parse_campaign_path(path)?;
+        if !path_covered_by_permitted(path, permitted)? {
             return Err(format!(
                 "step {step_id} required_changed_path '{path}' violates campaign permitted_paths"
             ));
@@ -343,8 +344,13 @@ pub fn assert_step_paths_permitted(
     Ok(())
 }
 
-pub fn is_permitted_path(path: &str, permitted: &HashSet<&str>) -> bool {
-    permitted.iter().any(|prefix| path.starts_with(prefix))
+fn path_covered_by_permitted(path: &str, permitted: &[String]) -> Result<bool, String> {
+    for prefix in permitted {
+        if path_is_under_prefix(path, prefix)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 pub fn campaign_digest(campaign: &Campaign) -> Result<String, String> {
@@ -384,6 +390,14 @@ mod tests {
     #[test]
     fn rejects_step_paths_outside_campaign_allowlist() {
         let campaign = sample_campaign("README.md", "src/domain/entity.rs");
+        let error = campaign.validate_permitted_paths().unwrap_err();
+        assert!(error.contains("allowed_path"));
+    }
+
+    #[test]
+    fn rejects_ambiguous_prefix_that_raw_starts_with_would_allow() {
+        let mut campaign = sample_campaign("srcfoo/", "srcfoo/lib.rs");
+        campaign.permitted_paths = vec!["src/".to_string()];
         let error = campaign.validate_permitted_paths().unwrap_err();
         assert!(error.contains("allowed_path"));
     }
