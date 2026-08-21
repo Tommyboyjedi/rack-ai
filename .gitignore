@@ -20,3 +20,5 @@ state/runs/*.json
 !state/runs/.gitkeep
 state/resources/leases/*.json
 !state/resources/leases/.gitkeep
+state/changes/**
+!state/changes/.gitkeep
