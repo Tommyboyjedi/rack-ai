@@ -27,7 +27,7 @@ impl LocalPrimaryReviewer {
         }
     }
 
-    fn call_api(&self, prompt: &str) -> Result<String, String> {
+    fn call_api(&self, prompt: &str, timeout_seconds: u32) -> Result<String, String> {
         let payload = json!({
             "model": self.model_id,
             "messages": [
@@ -40,11 +40,12 @@ impl LocalPrimaryReviewer {
             "temperature": 0,
         });
 
+        let global = Duration::from_secs(u64::from(timeout_seconds.max(1)));
         let config = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(5)))
-            .timeout_send_request(Some(Duration::from_secs(30)))
-            .timeout_recv_response(Some(Duration::from_secs(300)))
-            .timeout_global(Some(Duration::from_secs(330)))
+            .timeout_send_request(Some(global))
+            .timeout_recv_response(Some(global))
+            .timeout_global(Some(global))
             .build();
 
         let agent = config.new_agent();
@@ -74,7 +75,7 @@ impl LocalPrimaryReviewer {
 impl ImplementationReviewer for LocalPrimaryReviewer {
     fn review(&self, request: &ModelReviewRequest) -> Result<ModelReviewResult, String> {
         let prompt = request.prompt();
-        let raw_output = self.call_api(&prompt)?;
+        let raw_output = self.call_api(&prompt, request.timeout_seconds)?;
 
         let (disposition, classification, rationale) =
             parse_model_review_output(&raw_output)?;

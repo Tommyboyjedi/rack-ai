@@ -34,6 +34,9 @@ use crate::FailureClassification;
 use crate::GitEvidence;
 use crate::GitWorktree;
 use crate::InspectChangeWorktreeRequest;
+use crate::ImplementationReviewer;
+use crate::ModelReviewRequest;
+use crate::ModelReviewResult;
 use crate::ReadFileRequest;
 use crate::RegisteredRepository;
 use crate::RepositoryRegistry;
@@ -155,6 +158,15 @@ struct ProcessGit;
 static PROCESS_GIT: ProcessGit = ProcessGit;
 static ALLOW_ALL: AllowAllPolicy = AllowAllPolicy;
 static WORKERS: StaticWorkers = StaticWorkers;
+
+struct FailingReviewer;
+static FAILING_REVIEWER: FailingReviewer = FailingReviewer;
+
+impl ImplementationReviewer for FailingReviewer {
+    fn review(&self, _request: &ModelReviewRequest) -> Result<ModelReviewResult, String> {
+        Err("review endpoint timed out".to_string())
+    }
+}
 
 impl GitWorktree for ProcessGit {
     fn resolve_sha(&self, request: &ResolveGitShaRequest) -> Result<GitSha, String> {
@@ -735,6 +747,46 @@ fn fallback_uses_workspace_executor_not_host_jcode() {
 }
 
 #[test]
+fn reviewer_failure_fails_closed_and_persists_request_evidence() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n")],
+    );
+    let campaign = make_campaign(
+        "review-fail-closed",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&FAILING_REVIEWER);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::ModelUnavailable)
+    );
+    let packet = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "add-alpha", 1)
+            .join("model-review.json"),
+    )
+    .unwrap();
+    assert!(packet.contains("review endpoint timed out"));
+    assert!(packet.contains("allowed_paths"));
+    assert!(packet.contains("command_summary"));
+    assert!(packet.contains("changed_paths"));
+}
+
+#[test]
 fn inadequate_change_with_passing_tests_is_retryable_review() {
     let fx = fixture();
     let executor = HostExecutor::new();
@@ -996,6 +1048,61 @@ fn revision_appends_steps_without_rewriting_accepted_history() {
     assert_eq!(after.steps[0].accepted_commit, accepted.accepted_commit);
     assert_eq!(after.steps[0].attempts.len(), accepted.attempts.len());
     assert_eq!(after.steps[1].disposition, "accepted");
+}
+
+#[test]
+fn stale_runner_save_cannot_erase_operator_cancel_pause_or_revision() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "state-merge",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let stale = runner.start(&campaign).unwrap();
+
+    runner.pause("state-merge").unwrap();
+    let mut paused = runner.load_state("state-merge").unwrap().unwrap();
+    paused.state = CampaignState::Paused;
+    runner.save_state(&paused).unwrap();
+    runner
+        .revise(
+            "state-merge",
+            CampaignRevisionDocument {
+                instruction: "append beta".to_string(),
+                steps: vec![sample_step("add-beta", "src/beta.rs", "Add beta.")],
+            },
+        )
+        .unwrap();
+    runner.cancel("state-merge", Some("operator stop")).unwrap();
+
+    runner.save_state(&stale).unwrap();
+    let saved = runner.load_state("state-merge").unwrap().unwrap();
+    assert!(saved.cancel_requested);
+    assert_eq!(saved.state, CampaignState::Cancelled);
+    assert_eq!(saved.revisions.len(), 1);
+    assert!(saved.steps.iter().any(|step| step.step_id == "add-beta"));
+}
+
+#[test]
+fn stale_runner_save_preserves_pause_until_intentional_resume() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "pause-merge",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let stale = runner.start(&campaign).unwrap();
+    runner.pause("pause-merge").unwrap();
+    runner.save_state(&stale).unwrap();
+    assert!(runner.load_state("pause-merge").unwrap().unwrap().pause_requested);
 }
 
 #[test]

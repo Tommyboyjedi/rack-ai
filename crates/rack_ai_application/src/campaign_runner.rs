@@ -165,7 +165,50 @@ impl<'a> CampaignRunner<'a> {
 
     pub fn save_state(&self, state: &CampaignStatus) -> Result<(), String> {
         let _lock = CampaignLock::acquire(&self.campaign_dir(&state.campaign_id))?;
-        self.save_state_unlocked(state)
+        let merged = self.merge_runner_state_unlocked(state, false)?;
+        self.save_state_unlocked(&merged)
+    }
+
+    fn save_resumed_state(&self, state: &CampaignStatus) -> Result<(), String> {
+        let _lock = CampaignLock::acquire(&self.campaign_dir(&state.campaign_id))?;
+        let merged = self.merge_runner_state_unlocked(state, true)?;
+        self.save_state_unlocked(&merged)
+    }
+
+    /// Runner snapshots are necessarily stale while operator commands run. Preserve all
+    /// operator-owned fields and append-only revision state while holding CampaignLock.
+    fn merge_runner_state_unlocked(
+        &self,
+        proposed: &CampaignStatus,
+        intentional_resume: bool,
+    ) -> Result<CampaignStatus, String> {
+        let Some(disk) = self.load_state(&proposed.campaign_id)? else {
+            return Ok(proposed.clone());
+        };
+        let mut merged = proposed.clone();
+        merged.cancel_requested |= disk.cancel_requested;
+        merged.pause_requested = if intentional_resume {
+            false
+        } else {
+            proposed.pause_requested || disk.pause_requested
+        };
+        for revision in disk.revisions {
+            if !merged.revisions.contains(&revision) {
+                merged.revisions.push(revision);
+            }
+        }
+        for step in disk.steps {
+            if !merged.steps.iter().any(|candidate| candidate.step_id == step.step_id) {
+                merged.steps.push(step);
+            }
+        }
+        if disk.cancel_requested {
+            merged.state = CampaignState::Cancelled;
+            merged.end_time = disk.end_time;
+            merged.blocked_reason = disk.blocked_reason;
+            merged.error_message = disk.error_message;
+        }
+        Ok(merged)
     }
 
     fn save_state_unlocked(&self, state: &CampaignStatus) -> Result<(), String> {
@@ -581,7 +624,11 @@ impl<'a> CampaignRunner<'a> {
             state.pause_requested = false;
         }
         state.active_lease_id = Some(format!("{}:{}", lease.pid, lease.acquired_at));
-        self.save_state(&state)?;
+        if resume {
+            self.save_resumed_state(&state)?;
+        } else {
+            self.save_state(&state)?;
+        }
         let result = self.run_with_lease(&campaign, state, resume);
         let _ = self.leases.release(campaign_id, &campaign.repository.id);
         self.clear_active_lease(campaign_id, result)
@@ -602,7 +649,7 @@ impl<'a> CampaignRunner<'a> {
         match result {
             Ok(mut state) => {
                 persist(&mut state)?;
-                Ok(state)
+                Ok(self.load_state(campaign_id)?.unwrap_or(state))
             }
             Err(error) => {
                 if let Ok(Some(mut state)) = self.load_state(campaign_id) {
@@ -764,7 +811,7 @@ impl<'a> CampaignRunner<'a> {
         state.current_action = Some("acceptance_command".to_string());
         self.heartbeat(state)?;
         let (commands, missing_artifacts, commands_succeeded) =
-            match self.run_acceptance(state, step) {
+            match self.run_acceptance(campaign, state, step) {
                 Ok(value) => value,
                 Err(error) if is_executor_error(&error) => {
                     self.block_in_place(
@@ -923,7 +970,7 @@ impl<'a> CampaignRunner<'a> {
             let allowed = allowed_paths(&step.allowed_paths)?;
             let implement_request =
                 ImplementChangeRequest::new(PathBuf::from(&state.worktree_path), task)
-                    .with_policy(allowed, step.limits.timeout_seconds as u32)
+                    .with_policy(allowed, self.action_timeout_seconds(state, step))
                     .with_max_turns(ChangeLayout::coder_max_turns())
                     .with_worker(
                         runtime.worker_id.clone(),
@@ -1005,7 +1052,7 @@ impl<'a> CampaignRunner<'a> {
                         "running acceptance commands",
                         Some(state),
                     )?;
-                    let result = match self.run_acceptance(state, step) {
+                    let result = match self.run_acceptance(campaign, state, step) {
                         Ok(value) => value,
                         Err(error) if is_executor_error(&error) => {
                             self.block_in_place(
@@ -1058,7 +1105,12 @@ impl<'a> CampaignRunner<'a> {
                         .as_ref()
                         .map(|previous| previous.rationale.as_str());
 
-                    let model_request = ModelReviewRequest::from_step(
+                    let _review_heartbeat = self.leases.start_background_heartbeat(
+                        &state.campaign_id,
+                        &state.repository_id,
+                        campaign.limits.heartbeat_seconds,
+                    );
+                    let mut model_request = ModelReviewRequest::from_step(
                         &campaign.campaign_id,
                         step,
                         runtime.worker_id.as_str(),
@@ -1066,38 +1118,58 @@ impl<'a> CampaignRunner<'a> {
                         &evidence,
                         &commands,
                         previous_rejection,
+                        self.action_timeout_seconds(state, step),
                     );
-
-                    let model_review = reviewer.review(&model_request)?;
+                    self.add_untracked_review_evidence(state, &mut model_request);
+                    let model_review = reviewer.review(&model_request);
+                    drop(_review_heartbeat);
 
                     let review_dir =
                         self.attempt_dir(&state.campaign_id, &step.id, attempt_number);
                     fs::create_dir_all(&review_dir).map_err(|error| error.to_string())?;
 
-                    let model_review_packet = serde_json::json!({
-                        "request": {
-                            "prompt": model_review.prompt,
-                            "isolated_context": model_request.isolated_context,
-                            "worker_id": model_request.worker_id,
-                            "previous_rejection": model_request.previous_rejection,
-                        },
-                        "result": {
-                            "disposition": model_review.disposition,
-                            "classification": model_review.classification,
-                            "rationale": model_review.rationale,
-                            "raw_output": model_review.raw_output,
-                            "used_host_shell": model_review.used_host_shell,
-                        }
-                    });
+                    let model_review_packet = match &model_review {
+                        Ok(result) => serde_json::json!({
+                            "request": model_request,
+                            "prompt": result.prompt,
+                            "result": {
+                                "disposition": result.disposition,
+                                "classification": result.classification,
+                                "rationale": result.rationale,
+                                "raw_output": result.raw_output,
+                                "used_host_shell": result.used_host_shell,
+                            }
+                        }),
+                        Err(error) => serde_json::json!({
+                            "request": model_request,
+                            "prompt": model_request.prompt(),
+                            "result": {
+                                "disposition": CoordinatorReviewDisposition::RejectedRetryable,
+                                "classification": FailureClassification::ModelUnavailable,
+                                "rationale": format!("model reviewer failed closed: {error}"),
+                                "raw_output": null,
+                                "used_host_shell": false,
+                            }
+                        }),
+                    };
 
                     write_json(
                         review_dir.join("model-review.json"),
                         &model_review_packet,
                     )?;
 
-                    review.disposition = model_review.disposition;
-                    review.classification = model_review.classification;
-                    review.rationale = model_review.rationale;
+                    match model_review {
+                        Ok(result) => {
+                            review.disposition = result.disposition;
+                            review.classification = result.classification;
+                            review.rationale = result.rationale;
+                        }
+                        Err(error) => {
+                            review.disposition = CoordinatorReviewDisposition::RejectedRetryable;
+                            review.classification = Some(FailureClassification::ModelUnavailable);
+                            review.rationale = format!("model reviewer failed closed: {error}");
+                        }
+                    }
                     review.evidence_refs.push("model-review.json".to_string());
                 }
             }
@@ -1325,6 +1397,7 @@ impl<'a> CampaignRunner<'a> {
             "output": implement_result.map(|item| item.output().to_string()),
             "protocol_error": implement_result.and_then(|item| item.protocol_error().map(|value| value.to_string())),
             "executor_kind": implement_result.map(|item| item.executor_kind().to_string()),
+            "used_host_shell": implement_result.map(|item| item.used_host_shell()).unwrap_or(false),
             "tool_calls": implement_result.map(|item| item.tool_calls().iter().map(|call| serde_json::json!({
                 "name": call.name,
                 "arguments": call.arguments,
@@ -1402,10 +1475,16 @@ impl<'a> CampaignRunner<'a> {
 
     fn run_acceptance(
         &self,
+        campaign: &Campaign,
         state: &CampaignStatus,
         step: &CampaignStep,
     ) -> Result<(Vec<CommandEvidence>, Vec<String>, bool), String> {
-        let timeout = step.limits.timeout_seconds as u32;
+        let timeout = self.action_timeout_seconds(state, step);
+        let _heartbeat_guard = self.leases.start_background_heartbeat(
+            &state.campaign_id,
+            &state.repository_id,
+            campaign.limits.heartbeat_seconds,
+        );
         let mut commands = Vec::new();
         let mut succeeded = true;
         for argv in &step.acceptance.commands {
@@ -1446,6 +1525,40 @@ impl<'a> CampaignRunner<'a> {
         }
         let succeeded = succeeded && missing.is_empty();
         Ok((commands, missing, succeeded))
+    }
+
+    fn action_timeout_seconds(&self, state: &CampaignStatus, step: &CampaignStep) -> u32 {
+        step.limits
+            .timeout_seconds
+            .min(state.remaining_seconds.max(1))
+            .min(u64::from(u32::MAX)) as u32
+    }
+
+    /// `git diff` omits untracked files. Read them through the workspace executor so the
+    /// read-only reviewer sees the actual implementation without gaining host filesystem tools.
+    fn add_untracked_review_evidence(
+        &self,
+        state: &CampaignStatus,
+        request: &mut ModelReviewRequest,
+    ) {
+        let untracked = request
+            .git_status
+            .lines()
+            .filter_map(|line| line.strip_prefix("?? "))
+            .collect::<Vec<_>>();
+        for path in untracked {
+            let Ok(workspace_path) = WorkspacePath::parse(path) else {
+                continue;
+            };
+            let read = ReadFileRequest::new(PathBuf::from(&state.worktree_path), workspace_path)
+                .with_timeout_seconds(request.timeout_seconds);
+            if let Ok(result) = self.executor.read_file(&read) {
+                request
+                    .diff
+                    .push_str(&format!("\n--- /dev/null\n+++ b/{path}\n{}", result.content()));
+                request.diff_stat.push_str(&format!("\n{path} | new file"));
+            }
+        }
     }
 
     fn snapshot_checked(&self, state: &CampaignStatus) -> Result<GitEvidence, String> {

@@ -1,4 +1,5 @@
 use rack_ai_domain::AllowedPaths;
+use serde::Serialize;
 
 use crate::CampaignStep;
 use crate::CommandEvidence;
@@ -6,7 +7,7 @@ use crate::CoordinatorReviewDisposition;
 use crate::FailureClassification;
 use crate::GitEvidence;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelReviewRequest {
     pub campaign_id: String,
     pub step_id: String,
@@ -21,6 +22,7 @@ pub struct ModelReviewRequest {
     pub changed_paths: Vec<String>,
     pub command_summary: String,
     pub previous_rejection: Option<String>,
+    pub timeout_seconds: u32,
 }
 
 impl ModelReviewRequest {
@@ -32,6 +34,7 @@ impl ModelReviewRequest {
         evidence: &GitEvidence,
         commands: &[CommandEvidence],
         previous_rejection: Option<&str>,
+        timeout_seconds: u32,
     ) -> Self {
         let command_summary = commands
             .iter()
@@ -59,6 +62,7 @@ impl ModelReviewRequest {
             changed_paths: evidence.changed_paths().to_vec(),
             command_summary,
             previous_rejection: previous_rejection.map(|value| value.to_string()),
+            timeout_seconds: timeout_seconds.max(1),
         }
     }
 

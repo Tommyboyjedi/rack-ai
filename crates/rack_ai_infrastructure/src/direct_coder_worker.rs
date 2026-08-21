@@ -59,7 +59,13 @@ impl DirectCoderWorker {
                     return Err("coder wall-clock timeout exceeded".to_string());
                 }
             }
-            let response = self.call_api(&messages)?;
+            let request_timeout = deadline
+                .map(|limit| limit.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_secs(330));
+            if request_timeout.is_zero() {
+                return Err("coder wall-clock timeout exceeded".to_string());
+            }
+            let response = self.call_api(&messages, request_timeout)?;
             let choice = response
                 .get("choices")
                 .and_then(Value::as_array)
@@ -125,7 +131,7 @@ impl DirectCoderWorker {
         )
     }
 
-    fn call_api(&self, messages: &[Value]) -> Result<Value, String> {
+    fn call_api(&self, messages: &[Value], request_timeout: Duration) -> Result<Value, String> {
         let payload = json!({
         "model": self.model_id,
         "messages": messages,
@@ -137,9 +143,9 @@ impl DirectCoderWorker {
 
         let config = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(5)))
-            .timeout_send_request(Some(Duration::from_secs(30)))
-            .timeout_recv_response(Some(Duration::from_secs(300)))
-            .timeout_global(Some(Duration::from_secs(330)))
+            .timeout_send_request(Some(request_timeout))
+            .timeout_recv_response(Some(request_timeout))
+            .timeout_global(Some(request_timeout))
             .build();
 
         let agent = config.new_agent();
