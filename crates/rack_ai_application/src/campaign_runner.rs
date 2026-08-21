@@ -41,6 +41,8 @@ use crate::GitEvidence;
 use crate::GitWorktree;
 use crate::ImplementChangeRequest;
 use crate::ImplementChangeResult;
+use crate::ImplementationReviewer;
+use crate::ModelReviewRequest;
 use crate::ReadFileRequest;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
@@ -76,6 +78,7 @@ pub struct CampaignRunner<'a> {
     clock: &'a dyn UnixClock,
     state_root: PathBuf,
     leases: CampaignLeaseStore,
+    reviewer: Option<&'a dyn ImplementationReviewer>,
 }
 
 #[derive(Serialize)]
@@ -112,7 +115,13 @@ impl<'a> CampaignRunner<'a> {
             clock: dependencies.clock,
             state_root: dependencies.state_root,
             leases,
+            reviewer: None,
         }
+    }
+
+    pub fn with_reviewer(mut self, reviewer: &'a dyn ImplementationReviewer) -> Self {
+        self.reviewer = Some(reviewer);
+        self
     }
 
     pub fn campaign_dir(&self, campaign_id: &str) -> PathBuf {
@@ -1035,6 +1044,30 @@ impl<'a> CampaignRunner<'a> {
                 tool_calls: implement_result.tool_calls().len(),
                 used_host_shell: implement_result.used_host_shell(),
             });
+            if review.disposition == CoordinatorReviewDisposition::Accepted {
+                if let Some(reviewer) = self.reviewer {
+                    let previous_rejection = last_review
+                        .as_ref()
+                        .map(|previous| previous.rationale.as_str());
+
+                    let model_request = ModelReviewRequest::from_step(
+                        &campaign.campaign_id,
+                        step,
+                        runtime.worker_id.as_str(),
+                        kind == AttemptKind::Fallback,
+                        &evidence,
+                        &commands,
+                        previous_rejection,
+                    );
+
+                    let model_review = reviewer.review(&model_request)?;
+
+                    review.disposition = model_review.disposition;
+                    review.classification = model_review.classification;
+                    review.rationale = model_review.rationale;
+                    review.evidence_refs.push("model-review.json".to_string());
+                }
+            }
             if review.disposition == CoordinatorReviewDisposition::RejectedRetryable {
                 review.repair_instruction =
                     Some(repair_instruction(step, &review, evidence.diff_stat()));
