@@ -18,6 +18,7 @@ pub mod healthcheck_entry;
 pub mod healthcheck_service;
 pub mod healthcheck_snapshot;
 pub mod host_coder_tool_runner;
+pub mod local_primary_reviewer;
 pub mod model_record;
 pub mod models_document;
 pub mod podman_availability;
@@ -43,6 +44,7 @@ pub mod workspace_coder_tool_runner;
 #[cfg(test)]
 mod live_path_policy;
 
+
 pub use changed_paths::ChangedPaths;
 pub use cli_rack_task_executor::CliRackTaskExecutor;
 pub use direct_coder_worker::DirectCoderWorker;
@@ -64,6 +66,7 @@ pub use healthcheck_service::HealthcheckService;
 pub use healthcheck_service::HealthcheckServiceDependencies;
 pub use healthcheck_snapshot::HealthcheckSnapshot;
 pub use host_coder_tool_runner::HostCoderToolRunner;
+pub use local_primary_reviewer::LocalPrimaryReviewer;
 pub use model_record::ModelRecord;
 pub use models_document::ModelsDocument;
 pub use podman_availability::PodmanAvailability;
