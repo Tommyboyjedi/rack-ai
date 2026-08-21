@@ -99,6 +99,7 @@ The first supported version is `rack-ai/campaign/v1`.
     "base_sha": "0123456789abcdef0123456789abcdef01234567"
   },
   "branch": "rack/campaign-adaptos-foundation-20260821",
+  "permitted_paths": ["src/domain/", "tests/domain/", "Cargo.toml"],
   "allow_local_commits": true,
   "limits": {
     "max_runtime_seconds": 172800,
@@ -140,6 +141,7 @@ The first supported version is `rack-ai/campaign/v1`.
 - `repository.id` must identify an enabled registered repository.
 - `repository.base_sha` is mandatory for `v1`; the runner rejects a mismatch instead of resolving a later moving ref.
 - `branch` must exactly equal `rack/campaign-<campaign_id>` in `v1`.
+- `permitted_paths` is a non-empty, immutable campaign-wide path-prefix allowlist. Every step's `allowed_paths`, `required_changed_paths`, and every later revision path must be a subset of it.
 - `allow_local_commits` is mandatory and must be `true` for an implementation campaign. It is the only campaign-specific promotion privilege.
 - `max_runtime_seconds` is between 60 and 172800 inclusive.
 - `max_steps` is between 1 and 16 inclusive.
@@ -159,6 +161,7 @@ Provide a thin `bin/rack-campaign` wrapper for the Rust CLI. Commands must work 
 ```text
 rack-campaign validate <campaign.json>
 rack-campaign start <campaign.json> [--detach]
+rack-campaign runner <campaign-id>
 rack-campaign status <campaign-id> [--emit-json]
 rack-campaign events <campaign-id> [--follow] [--emit-json]
 rack-campaign pause <campaign-id>
@@ -171,13 +174,13 @@ rack-campaign inspect <campaign-id> [--step <step-id>]
 ### Operator semantics
 
 - `validate` is read-only. It validates schema, registered repository identity, base SHA, worker availability, Podman rootless availability, required local image, and acceptance command policy.
-- `start` creates state, branch, and worktree only after a successful preflight. `--detach` starts the restartable runner under the documented user-level service mechanism.
+- `start` creates state, branch, and worktree only after a successful preflight. Without `--detach`, it runs `runner <campaign-id>` in the foreground. With `--detach`, it must start `runner <campaign-id>` through `systemd-run --user --unit rack-ai-campaign-<campaign-id> --collect`. If user-level systemd is unavailable, it fails with setup instructions; it must not fall back to `nohup`, an orphan process, or a shell background job. The deployment guide must document the required user-linger setup for a 48-hour run.
 - `status` reports campaign/step/attempt state, current worker, current action, last progress time, last error, worktree, branch, HEAD SHA, elapsed and remaining budget, and packet paths.
 - `events --follow` streams append-only JSON Lines events. It is the primary way to watch a live unattended run.
 - `pause` sets `pause_requested`. The runner does not begin another model call, tool call, test command, or commit after the current bounded action completes. It becomes `paused` at the next safe checkpoint.
 - `cancel` immediately prevents a commit and prevents further actions. It may terminate an active Podman command using the existing container cleanup path. It retains dirty worktree state and evidence for inspection.
 - `resume` is valid only from `paused`, `blocked`, or a recoverable interrupted state. It re-runs preflight and resumes from the durable checkpoint. It does not silently discard a dirty worktree.
-- `revise` is the controlled answer to “revisit this work.” It is valid only while paused or blocked. The revision file contains one or more new bounded campaign steps and a human instruction. It cannot rewrite accepted history, expand an existing step's policy, or modify the original campaign document. It appends a revision record and new step IDs to campaign state. Each revision remains subject to the same limits and total-duration budget.
+- `revise` is the controlled answer to “revisit this work.” It is valid only while paused or blocked. The revision file contains one or more new bounded campaign steps and a human instruction. It cannot rewrite accepted history, modify the original campaign document, or use any path outside the immutable campaign-wide `permitted_paths`. It appends a revision record and new step IDs to campaign state. Each revision remains subject to the same limits and total-duration budget.
 - `inspect` prints the final diff, changed paths, tool transcript summary, command evidence, model/worker identity, and the exact reason for the last disposition.
 
 No command may accept an unbounded free-form instruction that runs immediately against a worktree. Human instructions always become a persisted, validated revision step.
