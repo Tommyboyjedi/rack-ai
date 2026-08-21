@@ -2,6 +2,8 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 
+use crate::atomic_write;
+
 use serde::Deserialize;
 use serde::Serialize;
 
@@ -179,8 +181,13 @@ impl CampaignLeaseStore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
+
         let json = serde_json::to_string_pretty(record).map_err(|error| error.to_string())?;
-        fs::write(path, format!("{json}\n")).map_err(|error| error.to_string())
+
+        atomic_write(
+            path,
+            &format!("{json}\n"),
+        )
     }
 }
 
