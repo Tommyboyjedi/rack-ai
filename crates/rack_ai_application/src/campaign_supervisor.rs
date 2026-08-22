@@ -1,7 +1,9 @@
 use std::fs;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::CampaignCleanupAction;
+use crate::CampaignContainerTracker;
 use crate::CampaignLeaseRecord;
 use crate::CampaignLeaseStore;
 use crate::CampaignRunner;
@@ -9,6 +11,7 @@ use crate::CampaignState;
 use crate::CampaignStatus;
 use crate::CampaignSupervisionAction;
 use crate::CampaignSupervisionReport;
+use crate::FailureClassification;
 use crate::OperationsConfig;
 use crate::UnixClock;
 use crate::campaign_lease::lease_is_stale;
@@ -47,43 +50,47 @@ impl<'a> CampaignSupervisor<'a> {
         report.scanned_campaigns = states.len();
         for state in &states {
             let previous = state.state;
-            if previous == CampaignState::Running
-                && self.operations.supervisor.resume_running_campaigns
-            {
-                match self.runner.resume(&state.campaign_id) {
-                    Ok(updated) => {
-                        report.resumed_campaigns += 1;
-                        report.actions.push(CampaignSupervisionAction {
-                            campaign_id: state.campaign_id.clone(),
-                            previous_state: previous,
-                            action: "resume".to_string(),
-                            outcome_state: Some(updated.state),
-                            message: format!("resume completed with {:?}", updated.state),
-                        });
-                    }
-                    Err(error) => {
-                        report.actions.push(CampaignSupervisionAction {
-                            campaign_id: state.campaign_id.clone(),
-                            previous_state: previous,
-                            action: "resume_failed".to_string(),
-                            outcome_state: None,
-                            message: error,
-                        });
-                    }
+            if previous == CampaignState::Running {
+                if !self.cleanup_stale_campaign_container(state, &mut report)? {
+                    continue;
                 }
-            } else {
-                report.actions.push(CampaignSupervisionAction {
-                    campaign_id: state.campaign_id.clone(),
-                    previous_state: previous,
-                    action: "observe".to_string(),
-                    outcome_state: Some(previous),
-                    message: format!("campaign left in {:?}", previous),
-                });
+                if self.operations.supervisor.resume_running_campaigns {
+                    match self.runner.resume(&state.campaign_id) {
+                        Ok(updated) => {
+                            report.resumed_campaigns += 1;
+                            report.actions.push(CampaignSupervisionAction {
+                                campaign_id: state.campaign_id.clone(),
+                                previous_state: previous,
+                                action: "resume".to_string(),
+                                outcome_state: Some(updated.state),
+                                message: format!("resume completed with {:?}", updated.state),
+                            });
+                        }
+                        Err(error) => {
+                            report.actions.push(CampaignSupervisionAction {
+                                campaign_id: state.campaign_id.clone(),
+                                previous_state: previous,
+                                action: "resume_failed".to_string(),
+                                outcome_state: None,
+                                message: error,
+                            });
+                        }
+                    }
+                    continue;
+                }
             }
+            report.actions.push(CampaignSupervisionAction {
+                campaign_id: state.campaign_id.clone(),
+                previous_state: previous,
+                action: "observe".to_string(),
+                outcome_state: Some(previous),
+                message: format!("campaign left in {:?}", previous),
+            });
         }
         report
             .cleanup
             .extend(self.prune_terminal_campaigns(&states)?);
+        report.cleanup.extend(self.prune_auxiliary_artifacts()?);
         report
             .cleanup
             .extend(self.cleanup_orphan_repository_leases()?);
@@ -113,6 +120,50 @@ impl<'a> CampaignSupervisor<'a> {
         }
         states.sort_by(|left, right| left.campaign_id.cmp(&right.campaign_id));
         Ok(states)
+    }
+
+    fn cleanup_stale_campaign_container(
+        &self,
+        state: &CampaignStatus,
+        report: &mut CampaignSupervisionReport,
+    ) -> Result<bool, String> {
+        let active_path = self
+            .runner
+            .campaign_dir(&state.campaign_id)
+            .join("active-container.json");
+        if state.active_container_id.is_none() && !active_path.exists() {
+            return Ok(true);
+        }
+        let tracker = CampaignContainerTracker::new(self.state_root.clone());
+        match tracker.cleanup_campaign_container(
+            &state.campaign_id,
+            &self.operations.supervisor.podman_command,
+        ) {
+            Ok(Some(container_id)) => {
+                report.cleanup.push(CampaignCleanupAction {
+                    campaign_id: state.campaign_id.clone(),
+                    action: "cleanup_stale_campaign_container".to_string(),
+                    message: format!("removed stale campaign container {container_id}"),
+                });
+                Ok(true)
+            }
+            Ok(None) => Ok(true),
+            Err(error) => {
+                let blocked = self.runner.mark_supervisor_blocked(
+                    &state.campaign_id,
+                    FailureClassification::ExecutorUnavailable,
+                    format!("supervisor container cleanup failed: {error}"),
+                )?;
+                report.actions.push(CampaignSupervisionAction {
+                    campaign_id: state.campaign_id.clone(),
+                    previous_state: state.state,
+                    action: "container_cleanup_failed".to_string(),
+                    outcome_state: Some(blocked.state),
+                    message: error,
+                });
+                Ok(false)
+            }
+        }
     }
 
     fn prune_terminal_campaigns(
@@ -161,6 +212,78 @@ impl<'a> CampaignSupervisor<'a> {
             action: "prune_terminal_campaign".to_string(),
             message: removed.join(", "),
         })
+    }
+
+    fn prune_auxiliary_artifacts(&self) -> Result<Vec<CampaignCleanupAction>, String> {
+        let mut actions = Vec::new();
+        let retain = self.operations.retention.retain_auxiliary_artifacts;
+        let age = self.operations.retention.max_auxiliary_artifact_age_seconds;
+        let targets = [
+            self.state_root.join("logs").join("runs"),
+            self.state_root.join("logs").join("specs"),
+            self.state_root.join("state").join("runs"),
+            self.state_root.join("state").join("queue").join("history"),
+            self.state_root.join("state").join("changes"),
+        ];
+        for dir in targets {
+            actions.extend(self.prune_directory_entries(&dir, age, retain)?);
+        }
+        Ok(actions)
+    }
+
+    fn prune_directory_entries(
+        &self,
+        dir: &PathBuf,
+        max_age_seconds: u64,
+        retain_count: usize,
+    ) -> Result<Vec<CampaignCleanupAction>, String> {
+        let mut actions = Vec::new();
+        if !dir.exists() {
+            return Ok(actions);
+        }
+        let mut entries = Vec::new();
+        for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
+            let path = entry.map_err(|error| error.to_string())?.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.starts_with('.') {
+                continue;
+            }
+            let modified = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+            entries.push((path, modified));
+        }
+        entries.sort_by(|left, right| right.1.cmp(&left.1));
+        let now = self.clock.now_unix();
+        for (index, (path, modified)) in entries.into_iter().enumerate() {
+            if index < retain_count {
+                continue;
+            }
+            let modified_unix = modified
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            if now.saturating_sub(modified_unix) < max_age_seconds {
+                continue;
+            }
+            if path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+            } else {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+            actions.push(CampaignCleanupAction {
+                campaign_id: path
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("auxiliary")
+                    .to_string(),
+                action: "prune_auxiliary_artifact".to_string(),
+                message: format!("removed {}", path.display()),
+            });
+        }
+        Ok(actions)
     }
 
     fn cleanup_orphan_repository_leases(&self) -> Result<Vec<CampaignCleanupAction>, String> {

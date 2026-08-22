@@ -9,4 +9,4 @@ Change jobs run with network disabled. The executor image must already be presen
 `bin/rack-change` records a deterministic `acceptance_verdict` from Git/path/acceptance gates. It does not yet run the local-primary planner/verifier DAG.
 
 
-`operations.json` defines unattended supervision and retention policy for `bin/rack-campaign supervise`. It is versioned, validated at load time, and controls restart scan interval plus terminal campaign retention bounds.
+`operations.json` defines unattended supervision and retention policy for `bin/rack-campaign supervise`. It is versioned, validated at load time, and controls restart scan interval, stale-container cleanup command, terminal campaign retention bounds, and auxiliary artifact retention bounds.

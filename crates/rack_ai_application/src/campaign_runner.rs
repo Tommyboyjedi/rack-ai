@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -15,6 +16,7 @@ use serde::Serialize;
 use crate::AttemptKind;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
+use crate::CampaignContainerTracker;
 use crate::CampaignEvent;
 use crate::CampaignHealth;
 use crate::CampaignLeaseStore;
@@ -68,6 +70,7 @@ pub struct CampaignRunnerDependencies<'a> {
     pub health: &'a dyn CampaignHealth,
     pub clock: &'a dyn UnixClock,
     pub state_root: PathBuf,
+    pub container_tracker: Option<Arc<CampaignContainerTracker>>,
 }
 
 pub struct CampaignRunner<'a> {
@@ -81,6 +84,7 @@ pub struct CampaignRunner<'a> {
     clock: &'a dyn UnixClock,
     state_root: PathBuf,
     leases: CampaignLeaseStore,
+    container_tracker: Option<Arc<CampaignContainerTracker>>,
     reviewer: Option<&'a dyn ImplementationReviewer>,
 }
 
@@ -134,6 +138,7 @@ impl<'a> CampaignRunner<'a> {
             clock: dependencies.clock,
             state_root: dependencies.state_root,
             leases,
+            container_tracker: dependencies.container_tracker,
             reviewer: None,
         }
     }
@@ -141,6 +146,27 @@ impl<'a> CampaignRunner<'a> {
     pub fn with_reviewer(mut self, reviewer: &'a dyn ImplementationReviewer) -> Self {
         self.reviewer = Some(reviewer);
         self
+    }
+
+    pub(crate) fn mark_supervisor_blocked(
+        &self,
+        campaign_id: &str,
+        classification: FailureClassification,
+        reason: impl Into<String>,
+    ) -> Result<CampaignStatus, String> {
+        let state = self.require_state(campaign_id)?;
+        self.block(state, classification, reason)
+    }
+
+    fn bind_container_scope(
+        &self,
+        campaign_id: &str,
+        step_id: Option<&str>,
+        action: &str,
+    ) -> Option<crate::campaign_container_tracker::CampaignContainerScopeGuard<'_>> {
+        self.container_tracker
+            .as_ref()
+            .map(|tracker| tracker.bind(campaign_id, step_id, action))
     }
 
     pub fn campaign_dir(&self, campaign_id: &str) -> PathBuf {
@@ -1011,6 +1037,8 @@ impl<'a> CampaignRunner<'a> {
                 campaign.limits.heartbeat_seconds,
             );
 
+            let _container_scope =
+                self.bind_container_scope(&state.campaign_id, Some(&step.id), "model_request");
             let implement_result = match self.implementer.implement(&implement_request) {
                 Ok(result) => result,
                 Err(error) => implementer_error_result(error),
@@ -1511,6 +1539,8 @@ impl<'a> CampaignRunner<'a> {
             "acceptance_command",
             campaign.limits.heartbeat_seconds,
         );
+        let _container_scope =
+            self.bind_container_scope(&state.campaign_id, Some(&step.id), "acceptance_command");
         let mut commands = Vec::new();
         let mut succeeded = true;
         for argv in &step.acceptance.commands {

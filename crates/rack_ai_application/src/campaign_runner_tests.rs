@@ -872,6 +872,7 @@ fn recovery_after_accepted_step_does_not_repeat_commit() {
         health: &Healthy,
         clock: &clock,
         state_root: fx.root.clone(),
+        container_tracker: None,
     });
     runner.start(&campaign).unwrap();
     runner.run("recover").unwrap();
@@ -1252,10 +1253,13 @@ fn supervisor_resumes_running_campaigns() {
             supervisor: SupervisorConfig {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
+                podman_command: "true".to_string(),
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
                 retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
             },
         },
     })
@@ -1319,10 +1323,13 @@ fn supervisor_prunes_old_terminal_campaigns_beyond_retention() {
             supervisor: SupervisorConfig {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
+                podman_command: "true".to_string(),
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
                 retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
             },
         },
     })
@@ -1382,10 +1389,13 @@ fn supervisor_removes_stale_orphan_repository_leases() {
             supervisor: SupervisorConfig {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
+                podman_command: "true".to_string(),
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
                 retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
             },
         },
     })
@@ -1395,6 +1405,161 @@ fn supervisor_removes_stale_orphan_repository_leases() {
     assert_eq!(report.cleanup.len(), 1);
     assert_eq!(report.cleanup[0].action, "remove_orphan_repository_lease");
     assert!(!lease_dir.join("fixture.json").exists());
+}
+
+#[test]
+fn supervisor_cleans_stale_campaign_container_before_resume() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "supervise-container",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let mut state = runner.load_state("supervise-container").unwrap().unwrap();
+    state.active_container_id = Some("ghost-container".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        runner
+            .campaign_dir("supervise-container")
+            .join("active-container.json"),
+        r#"{
+  "campaign_id": "supervise-container",
+  "step_id": "add-alpha",
+  "action": "model_request",
+  "container_id": "ghost-container",
+  "recorded_at": "1000"
+}
+"#,
+    )
+    .unwrap();
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert!(
+        report
+            .cleanup
+            .iter()
+            .any(|item| item.action == "cleanup_stale_campaign_container")
+    );
+    let after = runner.load_state("supervise-container").unwrap().unwrap();
+    assert_eq!(after.state, CampaignState::Completed);
+    assert!(after.active_container_id.is_none());
+    assert!(
+        !runner
+            .campaign_dir("supervise-container")
+            .join("active-container.json")
+            .exists()
+    );
+}
+
+#[test]
+fn supervisor_prunes_auxiliary_artifacts_beyond_retention() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "auxiliary-retention",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let logs_dir = fx.root.join("logs/runs");
+    let changes_dir = fx.root.join("state/changes");
+    fs::create_dir_all(&logs_dir).unwrap();
+    fs::create_dir_all(&changes_dir).unwrap();
+    let old_log = logs_dir.join("old.json");
+    let new_log = logs_dir.join("new.json");
+    fs::write(&old_log, "old").unwrap();
+    fs::write(&new_log, "new").unwrap();
+    let old_change = changes_dir.join("old-change");
+    let new_change = changes_dir.join("new-change");
+    fs::create_dir_all(&old_change).unwrap();
+    fs::create_dir_all(&new_change).unwrap();
+    fs::write(
+        old_change.join("review-packet.json"),
+        "{}
+",
+    )
+    .unwrap();
+    fs::write(
+        new_change.join("review-packet.json"),
+        "{}
+",
+    )
+    .unwrap();
+    let clock = TestClock {
+        now: Cell::new(10_000_000_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert!(
+        report
+            .cleanup
+            .iter()
+            .filter(|item| item.action == "prune_auxiliary_artifact")
+            .count()
+            >= 2
+    );
+    assert!(!old_log.exists());
+    assert!(new_log.exists());
+    assert!(!old_change.exists());
+    assert!(new_change.exists());
 }
 
 #[test]
@@ -1425,6 +1590,7 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
         health: &Healthy,
         clock: &clock,
         state_root: fx.root.clone(),
+        container_tracker: None,
     })
     .run("closed")
     .unwrap();
@@ -1559,5 +1725,6 @@ fn make_runner<'a>(
             now: Cell::new(now),
         })),
         state_root: fx.root.clone(),
+        container_tracker: None,
     })
 }

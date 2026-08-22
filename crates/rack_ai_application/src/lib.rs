@@ -1,6 +1,7 @@
 pub mod acceptance_policy;
 pub mod approved_command_policy;
 pub mod campaign;
+pub mod campaign_container_tracker;
 pub mod campaign_git;
 pub mod campaign_lease;
 pub mod campaign_model_review;
@@ -98,6 +99,9 @@ pub use campaign::WorkerPolicy;
 pub use campaign::assert_step_paths_permitted;
 pub use campaign::campaign_digest;
 pub use campaign::source_paths;
+pub use campaign_container_tracker::ActiveContainerRecord;
+pub use campaign_container_tracker::CampaignContainerTracker;
+pub use campaign_container_tracker::ContainerLifecycleObserver;
 pub use campaign_git::CampaignCommitRequest;
 pub use campaign_git::CampaignGit;
 pub use campaign_git::assert_campaign_git_args;

@@ -2,10 +2,12 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use rack_ai_application::Campaign;
+use rack_ai_application::CampaignContainerTracker;
 use rack_ai_application::CampaignEvent;
 use rack_ai_application::CampaignHealth;
 use rack_ai_application::CampaignRevisionDocument;
@@ -599,9 +601,12 @@ where
     let policy = registry.command_policy()?;
     let git = GitCommandWorktree;
     let executor_config = registry.executor_config()?;
-    let executor = PodmanWorkspaceExecutor::new(executor_config.clone());
-    let live_implementer =
-        PodmanChangeImplementer::new(PodmanWorkspaceExecutor::new(executor_config));
+    let container_tracker = Arc::new(CampaignContainerTracker::new(state_root.clone()));
+    let executor = PodmanWorkspaceExecutor::new(executor_config.clone())
+        .with_observer(container_tracker.clone());
+    let live_implementer = PodmanChangeImplementer::new(
+        PodmanWorkspaceExecutor::new(executor_config).with_observer(container_tracker.clone()),
+    );
     let fixture_document = load_fixture_document(fixture)?;
     let scripted = fixture_document
         .as_ref()
@@ -632,6 +637,7 @@ where
         health,
         clock: &clock,
         state_root,
+        container_tracker: Some(container_tracker),
     });
 
     let runner = if fixture_document.is_none() && !skip_live {

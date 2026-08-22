@@ -26,14 +26,15 @@ Implemented in the current `feat/campaign-live-supervision` branch:
 - P0 regression coverage proving a background state heartbeat cannot resurrect paused or cancelled campaign state
 - versioned unattended operations config in `config/operations.json`
 - `campaign supervise` reconciliation loop for campaigns left in `running` state
+- stale campaign-container tracking and cleanup before bounded resume
 - bounded retention pruning for old terminal campaign state/worktrees
+- bounded retention pruning for auxiliary logs/history/change artifacts
 - stale orphan repository-lease cleanup
 - headless operating documentation and supervision smoke coverage
 
 Still outstanding for full unattended confidence:
-- durable tracking and cleanup of orphaned live Podman containers after unclean process/host failure
-- broader disk-usage policy beyond terminal campaign retention
 - longer soak and repeated crash/reboot recovery runs on the live rack
+- more live evidence for extended endpoint degradation and unattended recovery over multi-day operation
 
 # Runtime Architecture
 

@@ -26,10 +26,19 @@ git -C "$fixture" commit -m "init" >/dev/null
 base_sha="$(git -C "$fixture" rev-parse HEAD)"
 
 rack="$tmp/rack"
-mkdir -p "$rack/config" "$rack/state/campaigns"
+mkdir -p "$rack/config" "$rack/state/campaigns" "$rack/logs/runs"
 cp "$repo_root/config/workers.json" "$rack/config/workers.json"
 cp "$repo_root/config/models.json" "$rack/config/models.json"
 cp "$repo_root/config/operations.json" "$rack/config/operations.json"
+python3 - <<PYOPS
+import json
+from pathlib import Path
+path = Path("$rack/config/operations.json")
+data = json.loads(path.read_text())
+data["supervisor"]["podman_command"] = "true"
+data["retention"]["retain_auxiliary_artifacts"] = 1
+path.write_text(json.dumps(data, indent=2) + "\n")
+PYOPS
 cat > "$rack/config/repositories.json" <<JSON
 {
   "workspace_root": "$tmp/workspaces",
@@ -79,6 +88,9 @@ cli validate "$tmp/campaign.json" --skip-live-health --fixture-implementer "$tmp
 cli start "$tmp/campaign.json" --skip-live-health --fixture-implementer "$tmp/script.json" >/dev/null
 worktree="$tmp/workspaces/campaign-fixture-supervision/repo"
 commit_count_before="$(git -C "$worktree" rev-list --count HEAD)"
+printf 'old run\n' > "$rack/logs/runs/old.json"
+touch -d '8 days ago' "$rack/logs/runs/old.json"
+printf 'new run\n' > "$rack/logs/runs/new.json"
 python3 - <<PY2
 import json
 from pathlib import Path
@@ -87,15 +99,34 @@ state = json.loads(state_path.read_text())
 state["state"] = "running"
 state["end_time"] = None
 state["current_action"] = "recovering"
+state["active_container_id"] = "ghost-container"
 state_path.write_text(json.dumps(state, indent=2) + "\n")
+Path("$rack/state/campaigns/fixture-supervision/active-container.json").write_text(
+    json.dumps(
+        {
+            "campaign_id": "fixture-supervision",
+            "step_id": "add-alpha",
+            "action": "model_request",
+            "container_id": "ghost-container",
+            "recorded_at": "1"
+        },
+        indent=2,
+    )
+    + "\n"
+)
 PY2
 status_before="$(cli status fixture-supervision --emit-json)"
 echo "$status_before" | grep -q '"state": "running"'
 report="$(cli supervise --emit-json --skip-live-health --fixture-implementer "$tmp/script.json")"
 echo "$report" | grep -q '"resumed_campaigns": 1'
 echo "$report" | grep -q '"action": "resume"'
+echo "$report" | grep -q '"cleanup_stale_campaign_container"'
+echo "$report" | grep -q '"prune_auxiliary_artifact"'
 status_after="$(cli status fixture-supervision --emit-json)"
 echo "$status_after" | grep -q '"state": "completed"'
 test "$(git -C "$worktree" rev-list --count HEAD)" = "$commit_count_before"
+test ! -f "$rack/state/campaigns/fixture-supervision/active-container.json"
+test ! -f "$rack/logs/runs/old.json"
+test -f "$rack/logs/runs/new.json"
 
 echo "rack_campaign_supervision_smoke: ok"
