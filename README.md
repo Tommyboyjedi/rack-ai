@@ -1,185 +1,300 @@
 # Rack AI
 
-Rack AI is the stable control plane for a heterogeneous local AI rack.
+<p align="center">
+  <strong>Local autonomous software orchestration for a heterogeneous GPU rack.</strong>
+</p>
 
-It is not another coding agent and it is not a replacement for JCode, vLLM, or future model-serving tools. Its job is to know what the rack contains, what each backend is good at, what resources are currently available, and how to run bounded work safely against those backends.
+<p align="center">
+  <img alt="Rust" src="https://img.shields.io/badge/control%20plane-Rust-black?logo=rust" />
+  <img alt="vLLM" src="https://img.shields.io/badge/inference-vLLM-5b5fc7" />
+  <img alt="Podman" src="https://img.shields.io/badge/execution-rootless%20Podman-892CA0?logo=podman" />
+  <img alt="P0" src="https://img.shields.io/badge/P0-autonomous%20execution%20proven-success" />
+  <img alt="P1" src="https://img.shields.io/badge/P1-operational%20hardening-informational" />
+</p>
 
-On `gpurack`, that currently means:
-- coordinating a `local-primary` reasoning endpoint on the RTX 4060 Ti
-- coordinating a `local-coder` coding endpoint on the RTX 2060
-- running bounded local jobs through Rust-owned orchestration
-- executing external-repository work in isolated Git worktrees with rootless Podman
-- recording deterministic evidence, review packets, and run state
+---
 
-## What Rack AI Is
+Rack AI is the control plane for a local AI rack. You give it a software goal, it coordinates the available local models and execution tools, carries the work through bounded implementation and review, and leaves durable evidence of what happened.
 
-Rack AI is the orchestration layer above model servers and execution tools.
+It is designed around one simple idea:
 
-It is responsible for:
+> **Give the rack a goal. Let it work. Keep the boundaries explicit.**
+
+On `gpurack`, Rack AI currently coordinates:
+
+- **`local-primary`** — reasoning, planning, coordination, verification, semantic review, and bounded fallback implementation
+- **`local-coder`** — primary implementation worker
+- **vLLM** — local OpenAI-compatible model serving
+- **rootless Podman** — isolated execution against target repositories
+- **Rust-owned orchestration** — campaigns, queues, leases, state, review, recovery, and control
+
+## How Rack AI Behaves
+
+Rack AI is a **fire-and-forget agentic execution system**, not a self-starting agent.
+
+You give Rack AI an instruction or campaign. It then works autonomously within the boundaries of that request: planning, implementing, checking, reviewing, retrying or falling back where permitted, and recording the outcome.
+
+It does **not** wake up and invent its own goals or begin modifying software without a submitted task.
+
+A normal flow looks like this:
+
+```mermaid
+flowchart LR
+    A[Operator gives goal] --> B[Rack AI plans campaign]
+    B --> C[local-coder implements]
+    C --> D[Deterministic checks]
+    D --> E[local-primary reviews]
+    E -->|accepted| F[Commit + evidence]
+    E -->|retryable| G[Repair / fallback]
+    G --> C
+    F --> H[Next step or complete]
+```
+
+## Purposeful Boundaries
+
+Rack AI is deliberately autonomous **inside** a small set of enforced boundaries:
+
+- **Rack AI cannot modify its own running repository.**
+- You give Rack AI a goal; it executes it autonomously.
+- It does not invent its own goals or start work unprompted.
+- Work is constrained by repository scope, safety policy, review, acceptance rules, retry limits, and operator control.
+
+These are control boundaries, not limits on the kinds of software Rack AI can build.
+
+A separate clone or checkout of Rack AI may be treated as a normal target repository, but the control plane should never modify the repository containing the code currently enforcing its own execution rules.
+
+## What Rack AI Owns
+
+Rack AI sits above model servers and coding tools. It owns:
+
 - repository and workload registration
-- worker and model role mapping
+- model and worker role mapping
 - task and pipeline submission
-- durable queue, DAG, and lease behavior
-- isolated change execution against external repositories
-- bounded autonomous campaigns with pause, resume, cancel, revise, and recovery
-- operator-facing evidence and review artifacts
+- durable queues, DAGs, leases, and campaign state
+- isolated change execution against target repositories
+- pause, resume, cancel, revise, retry, fallback, and recovery
+- deterministic acceptance gates
+- independent semantic review per implementation attempt
+- operator-visible state, evidence, and review artifacts
 
-It treats JCode as one execution backend, vLLM as one inference backend, and future services such as ComfyUI, vision, speech, or audio tools as additional backends.
+The target repository is the workload. Rack AI remains the controller.
 
-## What Rack AI Is Not
+## Architecture
 
-Rack AI is not:
-- the product repository being changed
-- a normal target of its own external-repository workflow
-- a free-running self-modifying agent
-- dependent on JCode swarm for its core control-plane behavior
+```mermaid
+flowchart TB
+    OP[Operator / future interface]
+    RA[Rack AI control plane\nRust]
+    LP[local-primary\nRTX 4060 Ti]
+    LC[local-coder\nRTX 2060]
+    V1[vLLM :8017]
+    V2[vLLM :8018]
+    POD[rootless Podman\nisolated worktree]
+    REPO[Registered target repository]
+    EV[Durable state + evidence]
 
-The control plane owns orchestration. Model-serving and coding tools are plugged into that control plane rather than allowed to define it.
+    OP --> RA
+    RA --> V1 --> LP
+    RA --> V2 --> LC
+    RA --> POD --> REPO
+    RA --> EV
+    LP --> RA
+    LC --> RA
+```
 
-## Current Architecture
+The Rust workspace is split into four main crates:
 
-The repository is a Rust workspace:
-- `crates/rack_ai_domain`: small domain types and invariants
-- `crates/rack_ai_application`: orchestration use cases, campaign logic, change workflow, reviews, and state transitions
-- `crates/rack_ai_infrastructure`: Git, filesystem, Podman, registry, path-policy, and worker integrations
-- `crates/rack_ai_cli`: operator CLI commands
+| Crate | Responsibility |
+| --- | --- |
+| `rack_ai_domain` | Small domain types and invariants |
+| `rack_ai_application` | Campaign logic, orchestration use cases, reviews, state transitions |
+| `rack_ai_infrastructure` | Git, filesystem, Podman, registry, path policy, worker integrations |
+| `rack_ai_cli` | Operator commands and control surfaces |
 
 Supporting areas:
-- `bin/`: operational entry points used on the rack
-- `config/`: worker, model, resource, repository, and template configuration
-- `docs/`: architecture and workflow contracts
-- `tests/`: smoke and boundary coverage for live rack behavior
-- `plugins/`: Python only where an external integration structurally requires it
 
-## Execution Model
+- `bin/` — operational entry points used on the rack
+- `config/` — worker, model, resource, repository, and template configuration
+- `docs/` — architecture, workflow, safety, and engineering contracts
+- `tests/` — unit, smoke, policy-boundary, and live-rack coverage
+- `plugins/` — Python only where an external integration structurally requires it
 
-The current live execution model has three layers.
+## Execution Layers
 
-First, there are direct rack task flows:
+### Direct rack tasks
+
+Entry points such as:
+
 - `bin/rack-primary`
 - `bin/rack-coder`
 - `bin/rack-coordinator`
 - `bin/rack-task`
 
-These provide the current non-swarm path for single-worker and pipeline execution.
+support direct single-worker and explicit pipeline execution.
 
-Second, there is the external-repository change workflow:
-- `bin/rack-change`
+### External-repository change workflow
 
-This is the bounded implementation path for making a change in a registered external repository. It prepares an isolated worktree, runs a coder through rootless Podman, enforces allowed paths, runs deterministic acceptance commands, and produces a final `acceptance_verdict` with evidence.
+`bin/rack-change` is the bounded implementation path for a registered target repository.
 
-Third, there is the autonomous campaign runner:
-- `bin/rack-campaign`
+It prepares an isolated Git worktree, executes the worker through rootless Podman, enforces allowed paths, runs deterministic acceptance commands, and produces review evidence and an acceptance verdict.
 
-This is the control-plane layer for multi-step unattended repository work. A campaign is a bounded, restartable sequence of steps with:
+### Autonomous campaigns
+
+`bin/rack-campaign` runs bounded, restartable, multi-step unattended work with:
+
 - persistent state
-- heartbeats
-- leases
-- operator controls
+- durable heartbeats
+- campaign and repository leases
+- pause / resume / revise / cancel
+- bounded retries and fallback
+- deterministic gates
 - independent coordinator review per attempt
-- scoped repair and fallback behavior
 - fail-closed continuity checks
+- durable evidence
+
+This is the primary path for longer fire-and-forget software work.
 
 ## Safety Model
 
-Rack AI is intentionally conservative.
+Rack AI is intentionally conservative about **how** autonomous work is executed.
 
-Key rules in the current design:
-- external repository work runs in isolated Git worktrees
-- change jobs run with network disabled
-- rootless Podman is required for live executor-backed change work
-- changed files must stay inside declared allowed paths
+Key invariants include:
+
+- target-repository work happens in isolated Git worktrees
+- live implementation uses rootless Podman
+- worker containers run with network disabled for repository mutation work
+- changed files must remain inside declared allowed paths
+- path authorization uses normalized path semantics rather than raw string prefixes
 - required artifacts must exist before a step can pass
 - acceptance commands are explicit and deterministic
-- campaigns can be paused, resumed, revised, or cancelled by the operator
-- continuity failures fail closed rather than silently resetting state
+- every implementation attempt receives independent semantic review
+- retries and fallback are bounded
+- model, command, review, and container operations are time-bounded
+- campaign control state is durable and race-safe
+- pause/cancel are checked before commit
+- safety-sensitive uncertainty fails closed
 
-The target repository is the workload. Rack AI remains the controller.
+See [`AGENTS.md`](AGENTS.md) and [`docs/engineering-contract.md`](docs/engineering-contract.md) for the standing engineering and agent rules.
 
 ## Current Backend Stance
 
-The current rack setup uses two local OpenAI-compatible endpoints:
-- `local-primary` at `http://127.0.0.1:8017/v1`
-- `local-coder` at `http://127.0.0.1:8018/v1`
+The current rack uses two local OpenAI-compatible vLLM endpoints:
 
-JCode remains part of the system, but not as the control plane.
+- `local-primary` — `http://127.0.0.1:8017/v1`
+- `local-coder` — `http://127.0.0.1:8018/v1`
 
-Because JCode swarm has been unreliable in this rack configuration for cross-provider delegation, the current working pattern is:
-- direct JCode coordinator usage where appropriate
-- a repo-local direct coder path for the 2060 worker
-- Rust-owned orchestration above both
+JCode remains available as a tool/backend where useful, but Rack AI does not rely on JCode swarm for core cross-provider orchestration.
 
-That is deliberate temporary glue. The long-term direction is to delete glue as upstream tooling becomes reliable enough to sit cleanly behind Rack AI.
+JCode v0.78.1 demonstrated provider/endpoint rebinding problems on this rack, so the current architecture deliberately keeps orchestration and safety behaviour inside Rack AI. If upstream swarm behaviour becomes reliable in future, the integration can be simplified without changing the control-plane contract.
 
 ## Python Policy
 
 The live control-plane path is Rust-owned.
 
-Python is retained only where a dependency structurally requires it, most notably the temporary vLLM plugin surface. Python is not the primary orchestration language for this repository.
+Python is retained only where an external dependency structurally requires it, currently including the temporary vLLM plugin surface. Python is not the primary orchestration language for this repository.
 
 ## Operator Entry Points
 
-Main operator commands:
-- `bin/rack-healthcheck`: endpoint and registry health
-- `bin/rack-submit`: queue submission
-- `bin/rack-runner`: queue and DAG runner
-- `bin/rack-status`: run-state inspection
-- `bin/rack-task`: explicit task and pipeline execution
-- `bin/rack-coordinator`: template-driven task generation
-- `bin/rack-change`: bounded external-repository change execution
-- `bin/rack-campaign`: bounded autonomous campaign execution
+| Command | Purpose |
+| --- | --- |
+| `bin/rack-healthcheck` | Endpoint and registry health |
+| `bin/rack-submit` | Queue submission |
+| `bin/rack-runner` | Queue and DAG runner |
+| `bin/rack-status` | Run-state inspection |
+| `bin/rack-task` | Explicit task and pipeline execution |
+| `bin/rack-coordinator` | Template-driven task generation |
+| `bin/rack-change` | Bounded external-repository change execution |
+| `bin/rack-campaign` | Autonomous multi-step campaign execution |
+| `bin/rack-campaign supervise` | Unattended supervisor scan and recovery loop |
 
-## Tests
+## Current Project Status
 
-The repository includes smoke coverage for:
+### P0 — autonomous campaign execution
+
+**Proven on the live rack.**
+
+The current P0 contract includes:
+
+- real local-model campaign execution
+- primary coder and bounded fallback implementation
+- rootless Podman mutation boundary
+- deterministic acceptance gates
+- independent semantic review
+- durable state and heartbeats
+- race-safe pause/cancel behaviour
+- normalized path policy
+- bounded retries, model calls, commands, and container execution
+- retained implementation, Git, review, and campaign evidence
+- live smoke coverage using the actual rack endpoints
+
+### P1 — standalone operational hardening
+
+**In progress under PR #4.**
+
+P1 turns proven autonomous execution into a dependable long-running headless service by adding and proving operational concerns such as startup/restart, crash/reboot recovery, stale-resource cleanup, endpoint degradation handling, retention/disk controls, and soak testing.
+
+Front-end and human-interface design are intentionally outside this phase.
+
+## Testing
+
+The repository contains coverage for:
+
 - direct coder execution
 - task and pipeline orchestration
-- queue and DAG behavior
-- resource admission and health checks
+- queue and DAG behaviour
+- health and resource admission
 - external-repository change preparation
-- live Podman-backed implementation
+- rootless Podman-backed implementation
 - path-policy rejection
-- autonomous campaign execution and restart behavior
+- autonomous campaigns
+- pause/cancel/recovery behaviour
+- live local-model campaign execution
 
-Some live tests require:
-- rootless Podman
-- a prepared executor image
-- the local model endpoints to be healthy
+Baseline verification:
 
-See [tests/README.md](/C:/CodexProjects/GpuRackAgent/tests/README.md) for the current smoke inventory.
+```bash
+cargo test --workspace --offline
+bash tests/rack_change_executor_smoke.sh
+bash tests/rack_change_implement_smoke.sh
+bash tests/rack_change_path_policy_smoke.sh
+bash tests/rack_campaign_smoke.sh
+RACK_AI_LIVE_SMOKE=1 bash tests/rack_campaign_live_model_smoke.sh
+```
 
-## Current Status After PR #3
+Some smoke tests require rootless Podman, the prepared executor image, and healthy local model endpoints.
 
-The merged `main` branch now includes:
-- the external-repository change workflow
-- the autonomous campaign runner
-- coordinator review per implementation attempt
-- bounded repair and fallback handling
-- lease, heartbeat, pause, resume, cancel, revise, and recovery behavior
-- operator CLI separation from test-only seams
+See [`tests/README.md`](tests/README.md) for the current smoke inventory.
 
-That means Rack AI is now in a position to build bounded software slices in registered target repositories under operator control.
+## Engineering Standards
 
-It does not mean the rack should be turned loose to build arbitrary software without defined repository scope, allowed paths, acceptance commands, and review checkpoints.
+All human and AI contributors work to the same repository contract.
 
-## Recommended Use
+The short mandatory rules live in [`AGENTS.md`](AGENTS.md). The detailed rationale and safety contract live in [`docs/engineering-contract.md`](docs/engineering-contract.md).
 
-Use Rack AI to run narrowly scoped, reviewable jobs against a specific repository.
+Among other things, the standards require:
 
-Good use:
-- build a small backend slice in a registered Rust repository
-- run a sequenced campaign for a defined feature set
-- validate that the rack can repeatedly make safe, reviewable changes
-
-Bad use:
-- unrestricted autonomous coding without repository policy
-- letting the control plane modify itself as part of normal workload execution
-- relying on implicit model behavior without acceptance gates
+- small, cohesive Rust implementation units
+- composition and explicit typed contracts
+- no unexplained magic values
+- bounded concurrency and external operations
+- regression tests for behavioural and safety changes
+- no weakening of tests to make changes pass
+- no repository-maintained Rust `unsafe` without explicit human approval
 
 ## Key Documents
 
-- [docs/external-repository-change-workflow.md](/C:/CodexProjects/GpuRackAgent/docs/external-repository-change-workflow.md)
-- [docs/autonomous-campaign-runner-contract.md](/C:/CodexProjects/GpuRackAgent/docs/autonomous-campaign-runner-contract.md)
-- [docs/rust-application-architecture.md](/C:/CodexProjects/GpuRackAgent/docs/rust-application-architecture.md)
-- [config/README.md](/C:/CodexProjects/GpuRackAgent/config/README.md)
-- [tests/README.md](/C:/CodexProjects/GpuRackAgent/tests/README.md)
+- [`AGENTS.md`](AGENTS.md) — mandatory coding and agent rules
+- [`docs/engineering-contract.md`](docs/engineering-contract.md) — detailed engineering, safety, and Rust standards
+- [`docs/external-repository-change-workflow.md`](docs/external-repository-change-workflow.md) — isolated repository mutation contract
+- [`docs/autonomous-campaign-runner-contract.md`](docs/autonomous-campaign-runner-contract.md) — autonomous campaign behaviour
+- [`docs/rack-operations.md`](docs/rack-operations.md) — unattended supervision, restart, retention, and upgrade runbook
+- [`docs/rust-application-architecture.md`](docs/rust-application-architecture.md) — application architecture
+- [`config/README.md`](config/README.md) — runtime configuration
+- [`config/operations.json`](config/operations.json) — versioned supervision and retention policy
+- [`tests/README.md`](tests/README.md) — smoke and live-test inventory
+
+---
+
+<p align="center">
+  <strong>Rack AI: bounded autonomy for local hardware.</strong>
+</p>

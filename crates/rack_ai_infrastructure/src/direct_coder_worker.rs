@@ -59,7 +59,13 @@ impl DirectCoderWorker {
                     return Err("coder wall-clock timeout exceeded".to_string());
                 }
             }
-            let response = self.call_api(&messages)?;
+            let request_timeout = deadline
+                .map(|limit| limit.saturating_duration_since(Instant::now()))
+                .unwrap_or(Duration::from_secs(330));
+            if request_timeout.is_zero() {
+                return Err("coder wall-clock timeout exceeded".to_string());
+            }
+            let response = self.call_api(&messages, request_timeout)?;
             let choice = response
                 .get("choices")
                 .and_then(Value::as_array)
@@ -121,11 +127,22 @@ impl DirectCoderWorker {
 
     fn build_prompt(&self, task: &str) -> String {
         format!(
-            "Using your tools, complete the following task exactly as requested.\n\nRules:\n- Use actual tool calls.\n- Do not describe tool calls in plain text.\n- After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n- Do not write the word COMPLETE into any project file unless explicitly asked.\n\nTask:\n{task}"
+            "Using your tools, complete the following task exactly as requested.\n\n\
+    Worker identity:\n\
+    - Your assigned model id is `{}`.\n\
+    - This model id is authoritative.\n\
+    - Do not infer, guess, or probe your model identity using shell commands, environment variables, files, or tools.\n\n\
+    Rules:\n\
+    - Use actual tool calls.\n\
+    - Do not describe tool calls in plain text.\n\
+    - After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n\
+    - Do not write the word COMPLETE into any project file unless explicitly asked.\n\n\
+    Task:\n{}",
+            self.model_id, task
         )
     }
 
-    fn call_api(&self, messages: &[Value]) -> Result<Value, String> {
+    fn call_api(&self, messages: &[Value], request_timeout: Duration) -> Result<Value, String> {
         let payload = json!({
             "model": self.model_id,
             "messages": messages,
@@ -133,10 +150,25 @@ impl DirectCoderWorker {
             "tool_choice": "auto",
             "stream": false,
             "temperature": 0,
+            "max_tokens": 1024,
         });
-        let mut response = ureq::post(&self.endpoint)
+
+        let turn_timeout = request_timeout.min(Duration::from_secs(60));
+
+        let config = ureq::Agent::config_builder()
+            .timeout_connect(Some(Duration::from_secs(5)))
+            .timeout_send_request(Some(turn_timeout))
+            .timeout_recv_response(Some(turn_timeout))
+            .timeout_global(Some(turn_timeout))
+            .build();
+
+        let agent = config.new_agent();
+
+        let mut response = agent
+            .post(&self.endpoint)
             .send_json(&payload)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| format!("model request failed or timed out: {error}"))?;
+
         response
             .body_mut()
             .read_json::<Value>()
@@ -225,6 +257,8 @@ mod tests {
         let prompt = worker.build_prompt("Write file");
         assert!(prompt.contains("Use actual tool calls."));
         assert!(prompt.contains("Task:\nWrite file"));
+        assert!(prompt.contains("Your assigned model id is `local-coder`."));
+        assert!(prompt.contains("This model id is authoritative."));
     }
 
     #[test]

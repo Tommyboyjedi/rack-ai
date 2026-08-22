@@ -25,3 +25,4 @@ state/changes/**
 state/campaigns/**
 !state/campaigns/.gitkeep
 state/workspaces/**
+.idea/

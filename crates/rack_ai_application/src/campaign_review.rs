@@ -1,10 +1,13 @@
-use crate::source_paths;
 use crate::CampaignStep;
 use crate::CampaignStepKind;
+use crate::CommandEvidence;
 use crate::CoordinatorReview;
 use crate::CoordinatorReviewDisposition;
 use crate::FailureClassification;
 use crate::GitEvidence;
+use crate::campaign_paths::assert_authorized_paths;
+use crate::campaign_paths::required_prefix_satisfied;
+use crate::source_paths;
 
 pub struct ReviewInput<'a> {
     pub step: &'a CampaignStep,
@@ -33,13 +36,22 @@ pub fn looks_like_markdown_tool_call(text: &str) -> bool {
     fenced && mentions_tool
 }
 
+const ACCEPTANCE_EVIDENCE_MAX_LINES: usize = 12;
+const ACCEPTANCE_EVIDENCE_MAX_CHARS: usize = 600;
+
 pub fn repair_instruction(
     step: &CampaignStep,
     review: &CoordinatorReview,
     diff_summary: &str,
+    commands: &[CommandEvidence],
 ) -> String {
+    let acceptance_context = bounded_acceptance_context(review, commands);
+    let acceptance_block = acceptance_context
+        .as_deref()
+        .map(|value| format!("\nAcceptance failure evidence:\n{value}"))
+        .unwrap_or_default();
     format!(
-        "Repair the previous attempt for step {}.\nOriginal task: {}\nRejection classification: {}\nRejection rationale: {}\nRequired changed paths: {}\nAllowed paths: {}\nDiff summary: {}\nDo not add new tasks. Do not broaden allowed_paths, acceptance commands, duration, resource limits, or promotion authority.",
+        "Repair the previous attempt for step {}.\nOriginal task: {}\nRejection classification: {}\nRejection rationale: {}\nRequired changed paths: {}\nAllowed paths: {}\nDiff summary: {}{}\nDo not add new tasks. Do not broaden allowed_paths, acceptance commands, duration, resource limits, or promotion authority.",
         step.id,
         step.task,
         review
@@ -49,8 +61,67 @@ pub fn repair_instruction(
         review.rationale,
         step.required_changed_paths.join(", "),
         step.allowed_paths.join(", "),
-        diff_summary
+        diff_summary,
+        acceptance_block,
     )
+}
+
+fn bounded_acceptance_context(
+    review: &CoordinatorReview,
+    commands: &[CommandEvidence],
+) -> Option<String> {
+    if review.classification != Some(FailureClassification::AcceptanceFailed) {
+        return None;
+    }
+    let failed = commands.iter().find(|command| !command.succeeded())?;
+    let mut lines = vec![
+        format!("Failing command: {}", failed.argv().join(" ")),
+        format!("Exit code: {}", failed.exit_code()),
+    ];
+    let stderr = bounded_excerpt(failed.stderr());
+    if !stderr.is_empty() {
+        lines.push(format!("stderr:\n{stderr}"));
+    }
+    let stdout = bounded_excerpt(failed.stdout());
+    if !stdout.is_empty() {
+        lines.push(format!("stdout:\n{stdout}"));
+    }
+    Some(lines.join("\n"))
+}
+
+fn bounded_excerpt(text: &str) -> String {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut lines = Vec::new();
+    let mut used = 0usize;
+    let mut truncated = false;
+    for (index, line) in trimmed.lines().enumerate() {
+        if index >= ACCEPTANCE_EVIDENCE_MAX_LINES {
+            truncated = true;
+            break;
+        }
+        let separator = usize::from(!lines.is_empty());
+        if used + separator + line.len() > ACCEPTANCE_EVIDENCE_MAX_CHARS {
+            let remaining = ACCEPTANCE_EVIDENCE_MAX_CHARS.saturating_sub(used + separator);
+            if remaining > 0 {
+                lines.push(line.chars().take(remaining).collect::<String>());
+            }
+            truncated = true;
+            break;
+        }
+        used += separator + line.len();
+        lines.push(line.to_string());
+    }
+    let mut excerpt = lines.join("\n");
+    if truncated {
+        if !excerpt.is_empty() {
+            excerpt.push('\n');
+        }
+        excerpt.push_str("[truncated]");
+    }
+    excerpt
 }
 
 pub fn review_attempt(input: ReviewInput<'_>) -> CoordinatorReview {
@@ -210,32 +281,12 @@ fn review_verification(input: ReviewInput<'_>, evidence_refs: Vec<String>) -> Co
 }
 
 fn assert_allowed_paths(step: &CampaignStep, changed: &[String]) -> Result<(), String> {
-    let disallowed: Vec<&String> = changed
-        .iter()
-        .filter(|path| {
-            !step
-                .allowed_paths
-                .iter()
-                .any(|prefix| path.starts_with(prefix))
-        })
-        .collect();
-    if disallowed.is_empty() {
-        Ok(())
-    } else {
-        Err(format!(
-            "changed paths outside allowed_paths: {}",
-            disallowed
-                .iter()
-                .map(|path| path.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ))
-    }
+    assert_authorized_paths(changed, &step.allowed_paths)
 }
 
 fn assert_required_changed_paths(step: &CampaignStep, changed: &[String]) -> Result<(), String> {
     for required in &step.required_changed_paths {
-        if !changed.iter().any(|path| path.starts_with(required)) {
+        if !required_prefix_satisfied(changed, required)? {
             return Err(format!(
                 "required changed path not satisfied: {required}; a passing test suite is not sufficient"
             ));
@@ -248,11 +299,10 @@ fn required_artifacts_changed(step: &CampaignStep, changed: &[String]) -> bool {
     if step.acceptance.required_artifacts.is_empty() {
         return true;
     }
-    step.acceptance.required_artifacts.iter().any(|artifact| {
-        changed
-            .iter()
-            .any(|path| path == artifact || path.starts_with(artifact))
-    })
+    step.acceptance
+        .required_artifacts
+        .iter()
+        .any(|artifact| required_prefix_satisfied(changed, artifact).unwrap_or(false))
 }
 
 fn retryable(
@@ -285,10 +335,10 @@ fn terminal(
 
 #[cfg(test)]
 mod tests {
+    use super::ReviewInput;
     use super::looks_like_markdown_tool_call;
     use super::repair_instruction;
     use super::review_attempt;
-    use super::ReviewInput;
     use crate::CampaignStep;
     use crate::CampaignStepKind;
     use crate::CoordinatorReviewDisposition;
@@ -330,7 +380,7 @@ mod tests {
             CoordinatorReviewDisposition::RejectedRetryable
         );
         assert_eq!(review.classification, Some(FailureClassification::NoChange));
-        let instruction = repair_instruction(&step, &review, evidence.diff_stat());
+        let instruction = repair_instruction(&step, &review, evidence.diff_stat(), &[]);
         assert!(instruction.contains("src/domain/"));
         assert!(instruction.contains("Do not broaden allowed_paths"));
     }

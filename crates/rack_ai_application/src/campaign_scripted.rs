@@ -42,6 +42,7 @@ pub struct ScriptedChangeImplementer<'a> {
     executor: &'a dyn WorkspaceExecutor,
     remaining: Mutex<Vec<ScriptedAttempt>>,
     seen_workers: Mutex<Vec<String>>,
+    seen_tasks: Mutex<Vec<String>>,
 }
 
 impl<'a> ScriptedChangeImplementer<'a> {
@@ -50,6 +51,7 @@ impl<'a> ScriptedChangeImplementer<'a> {
             executor,
             remaining: Mutex::new(attempts),
             seen_workers: Mutex::new(Vec::new()),
+            seen_tasks: Mutex::new(Vec::new()),
         }
     }
 
@@ -62,6 +64,13 @@ impl<'a> ScriptedChangeImplementer<'a> {
 
     pub fn seen_workers(&self) -> Vec<String> {
         self.seen_workers
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .clone()
+    }
+
+    pub fn seen_tasks(&self) -> Vec<String> {
+        self.seen_tasks
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .clone()
@@ -81,6 +90,10 @@ impl ChangeImplementer for ScriptedChangeImplementer<'_> {
             .lock()
             .map_err(|error| error.to_string())?
             .push(worker_id.clone());
+        self.seen_tasks
+            .lock()
+            .map_err(|error| error.to_string())?
+            .push(request.task().to_string());
         if let Some(expected) = &spec.match_worker {
             if expected != &worker_id {
                 return Err(format!(

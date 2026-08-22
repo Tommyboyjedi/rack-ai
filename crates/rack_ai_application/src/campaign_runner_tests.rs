@@ -10,7 +10,7 @@ use rack_ai_domain::ChangeId;
 use rack_ai_domain::GitSha;
 use rack_ai_domain::RepositoryId;
 
-use crate::assert_campaign_git_args;
+use crate::AttemptKind;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
 use crate::CampaignHealth;
@@ -22,6 +22,8 @@ use crate::CampaignRunnerDependencies;
 use crate::CampaignState;
 use crate::CampaignStep;
 use crate::CampaignStepKind;
+use crate::CampaignSupervisor;
+use crate::CampaignSupervisorDependencies;
 use crate::CampaignWorkerCatalog;
 use crate::CampaignWorkerRuntime;
 use crate::ChangeWorkspace;
@@ -33,23 +35,31 @@ use crate::ExecutorConfig;
 use crate::FailureClassification;
 use crate::GitEvidence;
 use crate::GitWorktree;
+use crate::ImplementationReviewer;
 use crate::InspectChangeWorktreeRequest;
+use crate::ModelReviewRequest;
+use crate::ModelReviewResult;
+use crate::OperationsConfig;
 use crate::ReadFileRequest;
+use crate::RecoverySleeper;
 use crate::RegisteredRepository;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
+use crate::RetentionConfig;
 use crate::RunCommandRequest;
 use crate::ScriptedAttempt;
 use crate::ScriptedChangeImplementer;
 use crate::ScriptedWrite;
 use crate::StepAcceptance;
 use crate::StepLimits;
+use crate::SupervisorConfig;
 use crate::UnixClock;
 use crate::WorkerPolicy;
 use crate::WorkspaceExecutionResult;
 use crate::WorkspaceExecutor;
 use crate::WorkspaceRoot;
 use crate::WriteFileRequest;
+use crate::assert_campaign_git_args;
 
 struct TestClock {
     now: Cell<u64>,
@@ -61,6 +71,122 @@ impl UnixClock for TestClock {
     }
 }
 
+struct NoopSleeper;
+
+impl RecoverySleeper for NoopSleeper {
+    fn sleep_seconds(&self, _seconds: u64) {}
+}
+
+struct RecordingSleeper<'a> {
+    clock: &'a TestClock,
+    sleeps: Mutex<Vec<u64>>,
+}
+
+impl<'a> RecordingSleeper<'a> {
+    fn new(clock: &'a TestClock) -> Self {
+        Self {
+            clock,
+            sleeps: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn sleeps(&self) -> Vec<u64> {
+        self.sleeps.lock().unwrap().clone()
+    }
+}
+
+impl RecoverySleeper for RecordingSleeper<'_> {
+    fn sleep_seconds(&self, seconds: u64) {
+        self.sleeps.lock().unwrap().push(seconds);
+        self.clock
+            .now
+            .set(self.clock.now.get().saturating_add(seconds));
+    }
+}
+
+struct PauseRequestSleeper<'a> {
+    clock: &'a TestClock,
+    state_root: PathBuf,
+    campaign_id: String,
+    triggered: Cell<bool>,
+}
+
+impl<'a> PauseRequestSleeper<'a> {
+    fn new(clock: &'a TestClock, state_root: PathBuf, campaign_id: &str) -> Self {
+        Self {
+            clock,
+            state_root,
+            campaign_id: campaign_id.to_string(),
+            triggered: Cell::new(false),
+        }
+    }
+}
+
+impl RecoverySleeper for PauseRequestSleeper<'_> {
+    fn sleep_seconds(&self, seconds: u64) {
+        self.clock
+            .now
+            .set(self.clock.now.get().saturating_add(seconds));
+        if self.triggered.replace(true) {
+            return;
+        }
+        let path = self
+            .state_root
+            .join("state")
+            .join("campaigns")
+            .join(&self.campaign_id)
+            .join("state.json");
+        let mut value =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
+        value["pause_requested"] = serde_json::Value::Bool(true);
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&value).unwrap()
+                + "
+",
+        )
+        .unwrap();
+    }
+}
+
+struct FlakyWorkerHealth {
+    startup_successes: Cell<usize>,
+    failures: Mutex<Vec<String>>,
+}
+
+impl FlakyWorkerHealth {
+    fn new(startup_successes: usize, failures: Vec<&str>) -> Self {
+        Self {
+            startup_successes: Cell::new(startup_successes),
+            failures: Mutex::new(failures.into_iter().map(str::to_string).collect()),
+        }
+    }
+}
+
+impl CampaignHealth for FlakyWorkerHealth {
+    fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        self.assert_worker("local-primary")
+    }
+
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
+        let remaining_successes = self.startup_successes.get();
+        if remaining_successes > 0 {
+            self.startup_successes.set(remaining_successes - 1);
+            return Ok(());
+        }
+        let mut failures = self.failures.lock().unwrap();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.remove(0))
+        }
+    }
+
+    fn assert_executor(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 struct AllowAllPolicy;
 
 impl CommandPolicy for AllowAllPolicy {
@@ -69,10 +195,47 @@ impl CommandPolicy for AllowAllPolicy {
     }
 }
 
+struct ResumeCurrentWorkerHealthyOtherUnavailable {
+    coder_failures_left: Cell<usize>,
+}
+
+impl ResumeCurrentWorkerHealthyOtherUnavailable {
+    fn new(coder_failures_left: usize) -> Self {
+        Self {
+            coder_failures_left: Cell::new(coder_failures_left),
+        }
+    }
+}
+
+impl CampaignHealth for ResumeCurrentWorkerHealthyOtherUnavailable {
+    fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Err("worker endpoint is unhealthy: local-primary".to_string())
+    }
+
+    fn assert_worker(&self, worker_id: &str) -> Result<(), String> {
+        if worker_id == "local-coder" {
+            let remaining = self.coder_failures_left.get();
+            if remaining > 0 {
+                self.coder_failures_left.set(remaining - 1);
+                return Err("io: Peer disconnected".to_string());
+            }
+            return Ok(());
+        }
+        Err(format!("worker endpoint is unhealthy: {worker_id}"))
+    }
+
+    fn assert_executor(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 struct Healthy;
 
 impl CampaignHealth for Healthy {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Ok(())
+    }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
         Ok(())
     }
     fn assert_executor(&self) -> Result<(), String> {
@@ -86,6 +249,9 @@ impl CampaignHealth for UnhealthyExecutor {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
         Ok(())
     }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn assert_executor(&self) -> Result<(), String> {
         Err("podman is not available".to_string())
     }
@@ -95,6 +261,9 @@ struct UnhealthyWorker;
 
 impl CampaignHealth for UnhealthyWorker {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Err("worker endpoint is unhealthy: local-coder".to_string())
+    }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
         Err("worker endpoint is unhealthy: local-coder".to_string())
     }
     fn assert_executor(&self) -> Result<(), String> {
@@ -155,6 +324,16 @@ struct ProcessGit;
 static PROCESS_GIT: ProcessGit = ProcessGit;
 static ALLOW_ALL: AllowAllPolicy = AllowAllPolicy;
 static WORKERS: StaticWorkers = StaticWorkers;
+static NOOP_SLEEPER: NoopSleeper = NoopSleeper;
+
+struct FailingReviewer;
+static FAILING_REVIEWER: FailingReviewer = FailingReviewer;
+
+impl ImplementationReviewer for FailingReviewer {
+    fn review(&self, _request: &ModelReviewRequest) -> Result<ModelReviewResult, String> {
+        Err("review endpoint timed out".to_string())
+    }
+}
 
 impl GitWorktree for ProcessGit {
     fn resolve_sha(&self, request: &ResolveGitShaRequest) -> Result<GitSha, String> {
@@ -238,12 +417,37 @@ impl GitWorktree for ProcessGit {
         git(request.worktree_path(), &commit)?;
         GitSha::new(git(request.worktree_path(), &["rev-parse", "HEAD"])?)
     }
+
+    fn reset_managed_worktree(
+        &self,
+        worktree_path: &Path,
+        expected_head: &GitSha,
+        dirty_paths: &[String],
+    ) -> Result<(), String> {
+        let current = GitSha::new(git(worktree_path, &["rev-parse", "HEAD"])?)?;
+        if &current != expected_head {
+            return Err("worktree HEAD changed before managed reset".to_string());
+        }
+        for relative in dirty_paths {
+            let path = worktree_path.join(relative);
+            if path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+            } else if path.exists() {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+        }
+        git(worktree_path, &["reset", "--hard", expected_head.value()])?;
+        Ok(())
+    }
 }
 
 struct HostExecutor {
     writes: Mutex<Vec<String>>,
     poison_path: Option<String>,
     read_error: Option<String>,
+    command_stdout: Option<String>,
+    command_stderr: Option<String>,
+    command_exit_code: i32,
 }
 
 impl HostExecutor {
@@ -252,6 +456,9 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: None,
             read_error: None,
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
         }
     }
     fn with_poison(path: &str) -> Self {
@@ -259,6 +466,9 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: Some(path.to_string()),
             read_error: None,
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
         }
     }
     fn with_read_error(error: &str) -> Self {
@@ -266,6 +476,20 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: None,
             read_error: Some(error.to_string()),
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
+        }
+    }
+
+    fn with_command_failure(stdout: &str, stderr: &str, exit_code: i32) -> Self {
+        Self {
+            writes: Mutex::new(Vec::new()),
+            poison_path: None,
+            read_error: None,
+            command_stdout: Some(stdout.to_string()),
+            command_stderr: Some(stderr.to_string()),
+            command_exit_code: exit_code,
         }
     }
 }
@@ -302,11 +526,23 @@ impl WorkspaceExecutor for HostExecutor {
             let path = request.worktree_path().join(poison);
             fs::write(path, "poison\n").map_err(|error| error.to_string())?;
         }
-        let failed = request.argv().iter().any(|item| item == "FAIL");
-        Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
+        let failed =
+            request.argv().iter().any(|item| item == "FAIL") || self.command_exit_code != 0;
+        let mut evidence = CommandEvidence::new(
             request.argv().to_vec(),
-            if failed { 1 } else { 0 },
-        )))
+            if failed {
+                self.command_exit_code.max(1)
+            } else {
+                0
+            },
+        );
+        if let Some(stdout) = &self.command_stdout {
+            evidence = evidence.with_stdout(stdout.clone());
+        }
+        if let Some(stderr) = &self.command_stderr {
+            evidence = evidence.with_stderr(stderr.clone());
+        }
+        Ok(WorkspaceExecutionResult::new(evidence))
     }
 }
 
@@ -357,12 +593,14 @@ fn porcelain_paths(status: &str) -> Vec<String> {
 }
 
 fn git_init(repo: &Path) {
-    assert!(Command::new("git")
-        .args(["init", "-b", "main"])
-        .current_dir(repo)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
     git(repo, &["config", "user.email", "test@example.com"]).unwrap();
     git(repo, &["config", "user.name", "test"]).unwrap();
     git(repo, &["add", "."]).unwrap();
@@ -455,6 +693,17 @@ fn empty_attempt(output: &str) -> ScriptedAttempt {
         writes: Vec::new(),
         output: output.to_string(),
         error: None,
+        protocol_error: None,
+        executor_kind: None,
+    }
+}
+
+fn error_attempt(error: &str) -> ScriptedAttempt {
+    ScriptedAttempt {
+        match_worker: None,
+        writes: Vec::new(),
+        output: String::new(),
+        error: Some(error.to_string()),
         protocol_error: None,
         executor_kind: None,
     }
@@ -686,11 +935,62 @@ fn repair_and_fallback_bounds_then_stop() {
     assert_eq!(state.steps[0].attempts[1].worker_id, "local-coder");
     assert_eq!(state.steps[0].attempts[2].worker_id, "local-primary");
     assert_eq!(state.state, CampaignState::Blocked);
-    assert!(state.steps[0].attempts[1]
+    assert!(
+        state.steps[0].attempts[1]
+            .repair_instruction
+            .as_ref()
+            .unwrap()
+            .contains("Do not broaden")
+    );
+}
+
+#[test]
+fn acceptance_stderr_reaches_bounded_repair_instruction_and_fallback_task() {
+    let fx = fixture();
+    let stderr = (0..20)
+        .map(|index| format!("error line {index}: mismatched types"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stdout = (0..8)
+        .map(|index| format!("note line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let executor = HostExecutor::with_command_failure(&stdout, &stderr, 101);
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+        ],
+    );
+    let campaign = make_campaign(
+        "acceptance-evidence",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+
+    assert_eq!(state.steps[0].attempts.len(), 3);
+    let repair_instruction = state.steps[0].attempts[0]
         .repair_instruction
-        .as_ref()
-        .unwrap()
-        .contains("Do not broaden"));
+        .as_deref()
+        .unwrap();
+    assert!(repair_instruction.contains("Failing command:"));
+    assert!(repair_instruction.contains("Exit code: 101"));
+    assert!(repair_instruction.contains("stderr:"));
+    assert!(repair_instruction.contains("error line 0: mismatched types"));
+    assert!(repair_instruction.contains("stdout:"));
+    assert!(repair_instruction.contains("note line 0"));
+    assert!(repair_instruction.contains("[truncated]"));
+    assert!(!repair_instruction.contains("error line 19: mismatched types"));
+
+    let seen_tasks = implementer.seen_tasks();
+    assert!(seen_tasks[1].contains("Failing command: true"));
+    assert!(seen_tasks[1].contains("Exit code: 101"));
+    assert!(seen_tasks[2].contains("Failing command: true"));
+    assert!(seen_tasks[2].contains("[truncated]"));
 }
 
 #[test]
@@ -723,15 +1023,60 @@ fn fallback_uses_workspace_executor_not_host_jcode() {
     );
     let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
     assert_eq!(state.state, CampaignState::Completed);
-    assert!(executor
-        .writes
-        .lock()
-        .unwrap()
-        .contains(&"src/alpha.rs".to_string()));
+    assert!(
+        executor
+            .writes
+            .lock()
+            .unwrap()
+            .contains(&"src/alpha.rs".to_string())
+    );
     assert_eq!(
         implementer.seen_workers(),
         ["local-coder", "local-coder", "local-primary"]
     );
+}
+
+#[test]
+fn reviewer_failure_fails_closed_and_persists_request_evidence() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "review-fail-closed",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&FAILING_REVIEWER);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::ModelUnavailable)
+    );
+    let packet = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "add-alpha", 1)
+            .join("model-review.json"),
+    )
+    .unwrap();
+    assert!(packet.contains("review endpoint timed out"));
+    assert!(packet.contains("allowed_paths"));
+    assert!(packet.contains("command_summary"));
+    assert!(packet.contains("changed_paths"));
 }
 
 #[test]
@@ -805,7 +1150,12 @@ fn recovery_after_accepted_step_does_not_repeat_commit() {
         workers: &WORKERS,
         health: &Healthy,
         clock: &clock,
+        sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
+        container_tracker: None,
     });
     runner.start(&campaign).unwrap();
     runner.run("recover").unwrap();
@@ -842,10 +1192,12 @@ fn detach_setup_failure_blocks_created_campaign() {
         blocked.blocked_reason.as_deref(),
         Some("executor_unavailable")
     );
-    assert!(blocked
-        .error_message
-        .unwrap()
-        .contains("detached runner setup failed"));
+    assert!(
+        blocked
+            .error_message
+            .unwrap()
+            .contains("detached runner setup failed")
+    );
 }
 
 #[test]
@@ -999,6 +1351,133 @@ fn revision_appends_steps_without_rewriting_accepted_history() {
 }
 
 #[test]
+fn stale_runner_save_cannot_erase_operator_cancel_pause_or_revision() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "state-merge",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let stale = runner.start(&campaign).unwrap();
+
+    runner.pause("state-merge").unwrap();
+    let mut paused = runner.load_state("state-merge").unwrap().unwrap();
+    paused.state = CampaignState::Paused;
+    runner.save_state(&paused).unwrap();
+    runner
+        .revise(
+            "state-merge",
+            CampaignRevisionDocument {
+                instruction: "append beta".to_string(),
+                steps: vec![sample_step("add-beta", "src/beta.rs", "Add beta.")],
+            },
+        )
+        .unwrap();
+    runner.cancel("state-merge", Some("operator stop")).unwrap();
+
+    runner.save_state(&stale).unwrap();
+    let saved = runner.load_state("state-merge").unwrap().unwrap();
+    assert!(saved.cancel_requested);
+    assert_eq!(saved.state, CampaignState::Cancelled);
+    assert_eq!(saved.revisions.len(), 1);
+    assert!(saved.steps.iter().any(|step| step.step_id == "add-beta"));
+}
+
+#[test]
+fn stale_runner_save_preserves_pause_until_intentional_resume() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "pause-merge",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let stale = runner.start(&campaign).unwrap();
+    runner.pause("pause-merge").unwrap();
+    runner.save_state(&stale).unwrap();
+    assert!(
+        runner
+            .load_state("pause-merge")
+            .unwrap()
+            .unwrap()
+            .pause_requested
+    );
+}
+
+#[test]
+fn background_state_heartbeat_cannot_resurrect_paused_campaign() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "paused-heartbeat",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    runner.pause("paused-heartbeat").unwrap();
+    runner.run("paused-heartbeat").unwrap();
+
+    let before = runner.load_state("paused-heartbeat").unwrap().unwrap();
+    assert_eq!(before.state, CampaignState::Paused);
+
+    let error = runner
+        .test_background_state_heartbeat(
+            "paused-heartbeat",
+            Some("add-alpha"),
+            Some("local-coder"),
+            "model_request",
+        )
+        .unwrap_err();
+    assert!(error.contains("no longer running"), "{error}");
+
+    let after = runner.load_state("paused-heartbeat").unwrap().unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn background_state_heartbeat_cannot_resurrect_cancelled_campaign() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "cancelled-heartbeat",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    runner.cancel("cancelled-heartbeat", Some("stop")).unwrap();
+    runner.run("cancelled-heartbeat").unwrap();
+
+    let before = runner.load_state("cancelled-heartbeat").unwrap().unwrap();
+    assert_eq!(before.state, CampaignState::Cancelled);
+
+    let error = runner
+        .test_background_state_heartbeat(
+            "cancelled-heartbeat",
+            Some("add-alpha"),
+            Some("local-coder"),
+            "model_request",
+        )
+        .unwrap_err();
+    assert!(error.contains("no longer running"), "{error}");
+
+    let after = runner.load_state("cancelled-heartbeat").unwrap().unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
 fn cancel_prevents_commit_and_retains_evidence() {
     let fx = fixture();
     let executor = HostExecutor::new();
@@ -1023,6 +1502,362 @@ fn cancel_prevents_commit_and_retains_evidence() {
     assert!(state.active_lease_id.is_none());
     assert!(state.steps[0].accepted_commit.is_none());
     assert!(runner.campaign_dir("cancel").join("campaign.json").exists());
+}
+
+#[test]
+fn supervisor_resumes_running_campaigns() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "supervise-running",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.resumed_campaigns, 1);
+    assert_eq!(report.actions[0].action, "resume");
+    assert_eq!(
+        report.actions[0].outcome_state,
+        Some(CampaignState::Completed)
+    );
+    assert_eq!(
+        runner
+            .load_state("supervise-running")
+            .unwrap()
+            .unwrap()
+            .state,
+        CampaignState::Completed
+    );
+}
+
+#[test]
+fn supervisor_prunes_old_terminal_campaigns_beyond_retention() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let old_campaign = make_campaign(
+        "old-terminal",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let new_campaign = make_campaign(
+        "new-terminal",
+        &fx.sha,
+        vec![sample_step("add-beta", "src/beta.rs", "Add beta.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &old_campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&old_campaign).unwrap();
+    runner.start(&new_campaign).unwrap();
+    let mut old_state = runner.load_state("old-terminal").unwrap().unwrap();
+    old_state.state = CampaignState::Completed;
+    old_state.end_time = Some("100".to_string());
+    runner.save_state(&old_state).unwrap();
+    let mut new_state = runner.load_state("new-terminal").unwrap().unwrap();
+    new_state.state = CampaignState::Completed;
+    new_state.end_time = Some("4900".to_string());
+    runner.save_state(&new_state).unwrap();
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.cleanup.len(), 1);
+    assert_eq!(report.cleanup[0].campaign_id, "old-terminal");
+    assert!(runner.load_state("old-terminal").unwrap().is_none());
+    assert!(
+        !fx.workspaces
+            .join("campaign-old-terminal")
+            .join("repo")
+            .exists()
+    );
+    assert!(runner.load_state("new-terminal").unwrap().is_some());
+}
+
+#[test]
+fn supervisor_removes_stale_orphan_repository_leases() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "lease-anchor",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let lease_dir = fx.root.join("state/campaigns/.repository-leases");
+    fs::create_dir_all(&lease_dir).unwrap();
+    fs::write(
+        lease_dir.join("fixture.json"),
+        r#"{
+  "campaign_id": "missing-campaign",
+  "repository_id": "fixture",
+  "pid": 1,
+  "acquired_at": "1",
+  "heartbeat": "1",
+  "heartbeat_seconds": 10,
+  "action_timeout_seconds": 60
+}
+"#,
+    )
+    .unwrap();
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.cleanup.len(), 1);
+    assert_eq!(report.cleanup[0].action, "remove_orphan_repository_lease");
+    assert!(!lease_dir.join("fixture.json").exists());
+}
+
+#[test]
+fn supervisor_cleans_stale_campaign_container_before_resume() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "supervise-container",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let mut state = runner.load_state("supervise-container").unwrap().unwrap();
+    state.active_container_id = Some("ghost-container".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        runner
+            .campaign_dir("supervise-container")
+            .join("active-container.json"),
+        r#"{
+  "campaign_id": "supervise-container",
+  "step_id": "add-alpha",
+  "action": "model_request",
+  "container_id": "ghost-container",
+  "recorded_at": "1000"
+}
+"#,
+    )
+    .unwrap();
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert!(
+        report
+            .cleanup
+            .iter()
+            .any(|item| item.action == "cleanup_stale_campaign_container")
+    );
+    let after = runner.load_state("supervise-container").unwrap().unwrap();
+    assert_eq!(after.state, CampaignState::Completed);
+    assert!(after.active_container_id.is_none());
+    assert!(
+        !runner
+            .campaign_dir("supervise-container")
+            .join("active-container.json")
+            .exists()
+    );
+}
+
+#[test]
+fn supervisor_prunes_auxiliary_artifacts_beyond_retention() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "auxiliary-retention",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let logs_dir = fx.root.join("logs/runs");
+    let changes_dir = fx.root.join("state/changes");
+    fs::create_dir_all(&logs_dir).unwrap();
+    fs::create_dir_all(&changes_dir).unwrap();
+    let old_log = logs_dir.join("old.json");
+    let new_log = logs_dir.join("new.json");
+    fs::write(&old_log, "old").unwrap();
+    fs::write(&new_log, "new").unwrap();
+    let old_change = changes_dir.join("old-change");
+    let new_change = changes_dir.join("new-change");
+    fs::create_dir_all(&old_change).unwrap();
+    fs::create_dir_all(&new_change).unwrap();
+    fs::write(
+        old_change.join("review-packet.json"),
+        "{}
+",
+    )
+    .unwrap();
+    fs::write(
+        new_change.join("review-packet.json"),
+        "{}
+",
+    )
+    .unwrap();
+    let clock = TestClock {
+        now: Cell::new(10_000_000_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert!(
+        report
+            .cleanup
+            .iter()
+            .filter(|item| item.action == "prune_auxiliary_artifact")
+            .count()
+            >= 2
+    );
+    assert!(!old_log.exists());
+    assert!(new_log.exists());
+    assert!(!old_change.exists());
+    assert!(new_change.exists());
 }
 
 #[test]
@@ -1052,7 +1887,12 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
         workers: &WORKERS,
         health: &Healthy,
         clock: &clock,
+        sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
+        container_tracker: None,
     })
     .run("closed")
     .unwrap();
@@ -1142,6 +1982,915 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
 }
 
 #[test]
+fn recovery_retries_worker_health_until_endpoint_recovers_without_consuming_attempts() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-waits",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(1, vec!["io: Peer disconnected", "io: Peer disconnected"]);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run("recovery-waits").unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(sleeper.sleeps(), vec![5, 10]);
+    let events = fs::read_to_string(runner.events_path("recovery-waits")).unwrap();
+    assert!(events.contains("dependency_recovery_waiting"));
+    assert!(events.contains("dependency_recovery_ready"));
+}
+
+#[test]
+fn recovery_blocks_after_bounded_worker_health_wait_without_consuming_attempts() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let campaign = make_campaign(
+        "recovery-blocks",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(
+        1,
+        vec![
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+        ],
+    );
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run("recovery-blocks").unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("model_unavailable"));
+    assert!(
+        blocked
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("bounded recovery wait")
+    );
+    assert!(blocked.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 0);
+    assert_eq!(
+        sleeper.sleeps(),
+        vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120]
+    );
+}
+
+#[test]
+fn recovery_wait_honors_pause_before_any_attempt_runs() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-pause",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = PauseRequestSleeper::new(&clock, fx.root.clone(), "recovery-pause");
+    let health = FlakyWorkerHealth::new(1, vec!["io: Peer disconnected", "io: Peer disconnected"]);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let paused = runner.run("recovery-pause").unwrap();
+
+    assert_eq!(paused.state, CampaignState::Paused);
+    assert!(paused.pause_requested);
+    assert!(paused.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn resume_preflight_does_not_require_other_worker_after_current_worker_recovers() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "resume-current-worker-only",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let start_runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    start_runner.start(&campaign).unwrap();
+    let mut state = start_runner
+        .load_state(&campaign.campaign_id)
+        .unwrap()
+        .unwrap();
+    state.state = CampaignState::Running;
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    start_runner.save_state(&state).unwrap();
+
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = ResumeCurrentWorkerHealthyOtherUnavailable::new(5);
+    let resume_runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+
+    let completed = resume_runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_workers(), vec!["local-coder".to_string()]);
+    assert_eq!(sleeper.sleeps(), vec![5, 10, 15, 20, 30]);
+    let events = fs::read_to_string(resume_runner.events_path(&campaign.campaign_id)).unwrap();
+    let recovered = events.find("campaign_recovered").unwrap();
+    let started = events.rfind("model_request_started").unwrap();
+    assert!(started > recovered);
+}
+
+#[test]
+fn invalid_static_preflight_condition_still_fails_closed() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "invalid-static-preflight",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let mut broken = campaign.clone();
+    broken.worker_policy.fallback = "missing-worker".to_string();
+    fs::write(
+        runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("campaign.json"),
+        serde_json::to_string_pretty(&broken).unwrap()
+            + "
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn fallback_worker_unavailability_recovers_when_fallback_is_selected() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("connection refused"),
+            write_attempt(
+                "src/alpha.rs",
+                "pub fn alpha() -> u8 { 1 }
+",
+            ),
+        ],
+    );
+    let mut policy = default_policy();
+    policy.primary_attempts = 0;
+    policy.repair_attempts = 0;
+    policy.fallback_attempts = 1;
+    let campaign = make_campaign(
+        "fallback-recovery",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        policy,
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(
+        implementer.seen_workers(),
+        vec!["local-primary".to_string(), "local-primary".to_string()]
+    );
+    assert_eq!(sleeper.sleeps(), vec![5]);
+}
+
+#[test]
+fn transient_model_request_transport_failure_reenters_bounded_recovery_and_continues_same_attempt()
+{
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("io: Peer disconnected"),
+            write_attempt(
+                "src/alpha.rs",
+                "pub fn alpha() -> u8 { 1 }
+",
+            ),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-retry-success",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(completed.steps[0].attempts[0].attempt, 1);
+    assert_eq!(implementer.seen_tasks().len(), 2);
+    assert_eq!(sleeper.sleeps(), vec![5]);
+    let events = fs::read_to_string(runner.events_path(&campaign.campaign_id)).unwrap();
+    assert!(events.contains("dependency_recovery_waiting"));
+    assert!(events.contains("dependency_recovery_ready"));
+}
+
+#[test]
+fn persistent_transient_model_request_failure_eventually_blocks_without_consuming_attempt() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("connection refused"),
+            error_attempt("connection refused"),
+            error_attempt("connection refused"),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-retry-blocks",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer: &implementer,
+        executor: &executor,
+        workers: &WORKERS,
+        health: &Healthy,
+        clock: &clock,
+        sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: 10,
+        worker_recovery_retry_delays_seconds: vec![1, 1],
+        worker_recovery_max_attempts: 3,
+        state_root: fx.root.clone(),
+        container_tracker: None,
+    });
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("model_unavailable"));
+    assert_eq!(blocked.current_attempt, 1);
+    assert!(blocked.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 3);
+    assert_eq!(sleeper.sleeps(), vec![1, 1]);
+}
+
+#[test]
+fn non_transport_worker_failure_does_not_enter_dependency_recovery() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("worker produced invalid code output"),
+            error_attempt("worker produced invalid code output"),
+            error_attempt("worker produced invalid code output"),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-non-retry",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(implementer.seen_tasks().len(), 3);
+    assert!(sleeper.sleeps().is_empty());
+    let events = fs::read_to_string(runner.events_path(&campaign.campaign_id)).unwrap();
+    assert!(!events.contains("dependency_recovery_waiting"));
+}
+
+#[test]
+fn recovery_resets_interrupted_campaign_owned_dirty_worktree_and_continues() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-owned-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let started = runner.start(&campaign).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("src/alpha.rs"),
+        "partial
+",
+    )
+    .unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("src/reboot.rs"),
+        "partial
+",
+    )
+    .unwrap();
+    fs::write(
+        fx.repo.join("src/source_only.rs"),
+        "leave me alone
+",
+    )
+    .unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert!(
+        !Path::new(&completed.worktree_path)
+            .join("src/reboot.rs")
+            .exists()
+    );
+    let evidence = fs::read_to_string(
+        runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("recovery-reset-attempt-1.json"),
+    )
+    .unwrap();
+    assert!(evidence.contains("src/alpha.rs"));
+    assert!(evidence.contains("src/reboot.rs"));
+    assert!(evidence.contains("model_request"));
+    assert_eq!(
+        fs::read_to_string(fx.repo.join("src/source_only.rs")).unwrap(),
+        "leave me alone
+"
+    );
+}
+
+#[test]
+fn recovery_blocks_on_unknown_dirty_worktree_changes() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-unknown-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let started = runner.start(&campaign).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("README.md"),
+        "partial
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert!(
+        !runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("recovery-reset-attempt-1.json")
+            .exists()
+    );
+}
+
+#[test]
+fn recovery_never_discards_dirty_worktree_after_accepted_commit() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-accepted-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.state = CampaignState::Running;
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 2;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    state.current_head_sha = completed.current_head_sha.clone();
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&completed.worktree_path).join("src/alpha.rs"),
+        "dirty again
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert_eq!(
+        fs::read_to_string(Path::new(&completed.worktree_path).join("src/alpha.rs")).unwrap(),
+        "dirty again
+"
+    );
+}
+
+#[test]
+fn recovery_uses_configured_worker_recovery_policy() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-custom-policy",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(
+        1,
+        vec![
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+        ],
+    );
+    let runner = CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer: &implementer,
+        executor: &executor,
+        workers: &WORKERS,
+        health: &health,
+        clock: &clock,
+        sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: 40,
+        worker_recovery_retry_delays_seconds: vec![7, 11, 13],
+        worker_recovery_max_attempts: 4,
+        state_root: fx.root.clone(),
+        container_tracker: None,
+    });
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(sleeper.sleeps(), vec![7, 11, 13]);
+}
+
+#[test]
+fn load_state_migrates_historical_attempt_without_kind_from_verification_step() {
+    let fx = fixture();
+    let campaign = make_campaign(
+        "compat",
+        &fx.sha,
+        vec![CampaignStep {
+            id: "verify-alpha".to_string(),
+            kind: CampaignStepKind::Verification,
+            task: "Verify alpha.".to_string(),
+            allowed_paths: vec!["src/".to_string()],
+            required_changed_paths: vec![],
+            acceptance: StepAcceptance {
+                commands: vec![vec!["cargo".to_string(), "test".to_string()]],
+                required_artifacts: vec![],
+            },
+            limits: StepLimits {
+                timeout_seconds: 120,
+                network: "disabled".to_string(),
+            },
+        }],
+        default_policy(),
+    );
+    let campaign_dir = fx
+        .root
+        .join("state")
+        .join("campaigns")
+        .join(&campaign.campaign_id);
+    fs::create_dir_all(&campaign_dir).unwrap();
+    fs::write(
+        campaign_dir.join("campaign.json"),
+        serde_json::to_string_pretty(&campaign).unwrap() + "\n",
+    )
+    .unwrap();
+    let state = serde_json::json!({
+        "schema_version": "rack-ai/campaign/v1",
+        "campaign_id": campaign.campaign_id,
+        "campaign_digest": "digest",
+        "repository_id": "fixture",
+        "base_sha": fx.sha,
+        "branch": "rack/campaign-compat",
+        "worktree_path": fx.root.join("workspaces/compat/repo").display().to_string(),
+        "current_head_sha": "head",
+        "state": "blocked",
+        "current_step_id": "verify-alpha",
+        "current_attempt": 1,
+        "pause_requested": false,
+        "cancel_requested": false,
+        "start_time": "1",
+        "end_time": "2",
+        "duration_seconds": 1,
+        "remaining_seconds": 0,
+        "last_heartbeat": "2",
+        "steps": [{
+            "step_id": "verify-alpha",
+            "kind": "verification",
+            "disposition": "accepted",
+            "review_disposition": "accepted",
+            "review_rationale": "ok",
+            "attempts": [{
+                "attempt": 1,
+                "worker_id": "local-primary",
+                "start_time": "1",
+                "end_time": "2",
+                "disposition": "accepted",
+                "classification": null,
+                "rationale": "verified",
+                "commit_sha": null,
+                "repair_instruction": null,
+                "repair_of": null,
+                "fallback_of": null
+            }],
+            "accepted_commit": null
+        }],
+        "revisions": [],
+        "active_lease_id": null,
+        "active_container_id": null,
+        "error_message": null,
+        "blocked_reason": "compat"
+    });
+    fs::write(
+        campaign_dir.join("state.json"),
+        serde_json::to_string_pretty(&state).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 10);
+    let loaded = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+
+    assert_eq!(loaded.steps[0].attempts[0].kind, AttemptKind::Verification);
+}
+
+#[test]
+fn supervisor_isolates_incompatible_campaign_state_and_continues() {
+    let fx = fixture();
+    let good_campaign = make_campaign(
+        "good",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let good_dir = fx.root.join("state").join("campaigns").join("good");
+    fs::create_dir_all(&good_dir).unwrap();
+    fs::write(
+        good_dir.join("campaign.json"),
+        serde_json::to_string_pretty(&good_campaign).unwrap() + "\n",
+    )
+    .unwrap();
+    fs::write(
+        good_dir.join("state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "rack-ai/campaign/v1",
+            "campaign_id": "good",
+            "campaign_digest": "digest",
+            "repository_id": "fixture",
+            "base_sha": fx.sha,
+            "branch": "rack/campaign-good",
+            "worktree_path": fx.root.join("workspaces/good/repo").display().to_string(),
+            "current_head_sha": "head",
+            "state": "completed",
+            "current_step_id": null,
+            "current_attempt": 1,
+            "pause_requested": false,
+            "cancel_requested": false,
+            "start_time": "1",
+            "end_time": "2",
+            "duration_seconds": 1,
+            "remaining_seconds": 0,
+            "last_heartbeat": "2",
+            "steps": [],
+            "revisions": [],
+            "active_lease_id": null,
+            "active_container_id": null,
+            "error_message": null,
+            "blocked_reason": null
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    let bad_dir = fx.root.join("state").join("campaigns").join("bad");
+    fs::create_dir_all(&bad_dir).unwrap();
+    fs::write(
+        bad_dir.join("state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "rack-ai/campaign/v1",
+            "campaign_id": "bad",
+            "campaign_digest": "digest",
+            "repository_id": "fixture",
+            "base_sha": fx.sha,
+            "branch": "rack/campaign-bad",
+            "worktree_path": fx.root.join("workspaces/bad/repo").display().to_string(),
+            "current_head_sha": "head",
+            "state": "running",
+            "current_step_id": "mystery",
+            "current_attempt": 1,
+            "pause_requested": false,
+            "cancel_requested": false,
+            "start_time": "1",
+            "end_time": null,
+            "duration_seconds": 1,
+            "remaining_seconds": 10,
+            "last_heartbeat": "2",
+            "steps": [{
+                "step_id": "mystery",
+                "disposition": "accepted",
+                "attempts": [{
+                    "attempt": 1,
+                    "worker_id": "local-coder",
+                    "start_time": "1",
+                    "end_time": "2",
+                    "disposition": "accepted",
+                    "classification": null,
+                    "rationale": "old",
+                    "commit_sha": null
+                }],
+                "accepted_commit": null
+            }],
+            "revisions": [],
+            "active_lease_id": null,
+            "active_container_id": null,
+            "error_message": null,
+            "blocked_reason": null
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let runner = make_runner(
+        &fx,
+        &good_campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        10_000,
+    );
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: Box::leak(Box::new(TestClock {
+            now: Cell::new(10_000),
+        })),
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 30,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 10,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+
+    assert_eq!(report.scanned_campaigns, 2);
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|item| item.campaign_id == "good" && item.action == "observe")
+    );
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|item| item.campaign_id == "bad" && item.action == "incompatible_state")
+    );
+    assert!(bad_dir.join("supervisor-load-error.json").exists());
+}
+
+#[test]
 fn production_campaign_git_path_has_no_remote_operations() {
     assert!(assert_campaign_git_args(&["push", "origin", "main"]).is_err());
     assert!(assert_campaign_git_args(&["fetch"]).is_err());
@@ -1186,6 +2935,41 @@ fn make_runner<'a>(
         clock: Box::leak(Box::new(TestClock {
             now: Cell::new(now),
         })),
+        sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
+        container_tracker: None,
+    })
+}
+
+fn make_runner_with_support<'a>(
+    fx: &'a Fixture,
+    _campaign: &Campaign,
+    implementer: &'a ScriptedChangeImplementer<'a>,
+    executor: &'a HostExecutor,
+    health: &'a dyn CampaignHealth,
+    clock: &'a dyn UnixClock,
+    sleeper: &'a dyn RecoverySleeper,
+) -> CampaignRunner<'a> {
+    CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer,
+        executor,
+        workers: &WORKERS,
+        health,
+        clock,
+        sleeper,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
+        state_root: fx.root.clone(),
+        container_tracker: None,
     })
 }

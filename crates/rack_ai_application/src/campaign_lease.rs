@@ -1,6 +1,12 @@
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::CampaignLock;
+use crate::atomic_write;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -22,11 +28,70 @@ pub struct CampaignLeaseStore {
     state_root: PathBuf,
 }
 
+pub struct CampaignHeartbeatGuard {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for CampaignHeartbeatGuard {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
 impl CampaignLeaseStore {
     pub fn new(state_root: PathBuf) -> Self {
         Self { state_root }
     }
+    pub fn start_background_heartbeat(
+        &self,
+        campaign_id: &str,
+        repository_id: &str,
+        heartbeat_seconds: u64,
+    ) -> CampaignHeartbeatGuard {
+        let state_root = self.state_root.clone();
+        let campaign_id = campaign_id.to_string();
+        let repository_id = repository_id.to_string();
 
+        let interval = Duration::from_secs(heartbeat_seconds.clamp(1, 30));
+
+        let (stop_tx, stop_rx) = mpsc::channel();
+
+        let thread = thread::spawn(move || {
+            let leases = CampaignLeaseStore::new(state_root);
+
+            loop {
+                match stop_rx.recv_timeout(interval) {
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        let now = SystemTime::now()
+                            .duration_since(UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs()
+                            .to_string();
+
+                        if leases
+                            .heartbeat(&campaign_id, &repository_id, &now)
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
+
+        CampaignHeartbeatGuard {
+            stop: Some(stop_tx),
+            thread: Some(thread),
+        }
+    }
     pub fn campaign_lease_path(&self, campaign_id: &str) -> PathBuf {
         self.state_root
             .join("state")
@@ -51,6 +116,7 @@ impl CampaignLeaseStore {
         heartbeat_seconds: u64,
         action_timeout_seconds: u64,
     ) -> Result<CampaignLeaseRecord, String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         self.fail_if_held(
             &self.campaign_lease_path(campaign_id),
             campaign_id,
@@ -85,6 +151,7 @@ impl CampaignLeaseStore {
         repository_id: &str,
         now: &str,
     ) -> Result<(), String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         let path = self.campaign_lease_path(campaign_id);
         if !path.exists() {
             return Err(format!("campaign lease missing: {campaign_id}"));
@@ -100,6 +167,7 @@ impl CampaignLeaseStore {
     }
 
     pub fn release(&self, campaign_id: &str, repository_id: &str) -> Result<(), String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         let campaign_path = self.campaign_lease_path(campaign_id);
         if campaign_path.exists() {
             fs::remove_file(&campaign_path).map_err(|error| error.to_string())?;
@@ -113,6 +181,13 @@ impl CampaignLeaseStore {
             }
         }
         Ok(())
+    }
+
+    fn lease_lock_path(&self) -> PathBuf {
+        self.state_root
+            .join("state")
+            .join("campaigns")
+            .join(".lease.lock")
     }
 
     fn fail_if_repository_held(
@@ -179,8 +254,10 @@ impl CampaignLeaseStore {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
+
         let json = serde_json::to_string_pretty(record).map_err(|error| error.to_string())?;
-        fs::write(path, format!("{json}\n")).map_err(|error| error.to_string())
+
+        atomic_write(path, &format!("{json}\n"))
     }
 }
 
@@ -297,6 +374,16 @@ mod tests {
         let record = store.acquire("c1", "repo", "1000", 10, 60).unwrap();
         assert_eq!(record.pid, std::process::id());
         assert_eq!(record.heartbeat, "1000");
+    }
+
+    #[test]
+    fn background_heartbeat_is_bounded_to_thirty_seconds() {
+        let root = temp_root();
+        let store = CampaignLeaseStore::new(root);
+
+        let guard = store.start_background_heartbeat("c1", "repo", 120);
+
+        drop(guard);
     }
 
     fn temp_root() -> std::path::PathBuf {

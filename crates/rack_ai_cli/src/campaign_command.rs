@@ -2,27 +2,35 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
 use rack_ai_application::Campaign;
+use rack_ai_application::CampaignContainerTracker;
 use rack_ai_application::CampaignEvent;
 use rack_ai_application::CampaignHealth;
 use rack_ai_application::CampaignRevisionDocument;
 use rack_ai_application::CampaignRunner;
 use rack_ai_application::CampaignRunnerDependencies;
 use rack_ai_application::CampaignStatus;
+use rack_ai_application::CampaignSupervisionReport;
+use rack_ai_application::CampaignSupervisor;
+use rack_ai_application::CampaignSupervisorDependencies;
 use rack_ai_application::CampaignWorkerCatalog;
 use rack_ai_application::CampaignWorkerRuntime;
 use rack_ai_application::ChangeImplementer;
+use rack_ai_application::OperationsConfig;
 use rack_ai_application::RepositoryRegistry;
 use rack_ai_application::ScriptedChangeImplementer;
 use rack_ai_application::ScriptedImplementerDocument;
+use rack_ai_application::SystemRecoverySleeper;
 use rack_ai_application::SystemUnixClock;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
+use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
 use rack_ai_infrastructure::PodmanChangeImplementer;
 use rack_ai_infrastructure::PodmanWorkspaceExecutor;
@@ -71,15 +79,18 @@ struct LiveHealth {
 
 impl CampaignHealth for LiveHealth {
     fn assert_workers(&self, primary: &str, fallback: &str) -> Result<(), String> {
+        self.assert_worker(primary)?;
+        self.assert_worker(fallback)
+    }
+
+    fn assert_worker(&self, worker_id: &str) -> Result<(), String> {
         let probe = EndpointProbe;
         let workers = RegistryWorkers {
             repo_root: self.repo_root.clone(),
         };
-        for worker_id in [primary, fallback] {
-            let runtime = workers.runtime(worker_id)?;
-            if !probe.check_models(runtime.endpoint.as_str())? {
-                return Err(format!("worker endpoint is unhealthy: {worker_id}"));
-            }
+        let runtime = workers.runtime(worker_id)?;
+        if !probe.check_models(runtime.endpoint.as_str())? {
+            return Err(format!("worker endpoint is unhealthy: {worker_id}"));
         }
         Ok(())
     }
@@ -101,6 +112,10 @@ impl CampaignHealth for PermissiveHealth {
         Ok(())
     }
 
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
+        Ok(())
+    }
+
     fn assert_executor(&self) -> Result<(), String> {
         Ok(())
     }
@@ -119,6 +134,7 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         "cancel" => cancel_command(repo_root, state_root, &arguments[1..]),
         "revise" => revise_command(repo_root, state_root, &arguments[1..]),
         "inspect" => inspect_command(state_root, &arguments[1..]),
+        "supervise" => supervise_command(repo_root, state_root, &arguments[1..]),
         value => Err(format!("unsupported campaign subcommand: {value}")),
     }
 }
@@ -134,12 +150,18 @@ fn validate_command(
 ) -> Result<i32, String> {
     let campaign = load_campaign_file(arguments.first().ok_or("expected campaign path")?)?;
     let seams = test_seams_from_arguments(arguments)?;
-    with_runner(repo_root, state_root, seams.fixture.as_deref(), seams.skip_live, |runner| {
-        runner.validate(&campaign)?;
-        println!("campaign_id: {}", campaign.campaign_id);
-        println!("status: valid");
-        Ok(0)
-    })
+    with_runner(
+        repo_root,
+        state_root,
+        seams.fixture.as_deref(),
+        seams.skip_live,
+        |runner| {
+            runner.validate(&campaign)?;
+            println!("campaign_id: {}", campaign.campaign_id);
+            println!("status: valid");
+            Ok(0)
+        },
+    )
 }
 
 fn start_command(
@@ -223,15 +245,58 @@ fn resume_command(
 ) -> Result<i32, String> {
     let campaign_id = arguments.first().ok_or("expected campaign id")?;
     let seams = test_seams_from_arguments(arguments)?;
-    with_runner(repo_root, state_root, seams.fixture.as_deref(), seams.skip_live, |runner| {
-        let state = runner.resume(campaign_id)?;
-        println!("campaign_id: {}", state.campaign_id);
-        println!("state: {:?}", state.state);
-        Ok(match state.state {
-            rack_ai_application::CampaignState::Completed => 0,
-            _ => 1,
-        })
-    })
+    with_runner(
+        repo_root,
+        state_root,
+        seams.fixture.as_deref(),
+        seams.skip_live,
+        |runner| {
+            let state = runner.resume(campaign_id)?;
+            println!("campaign_id: {}", state.campaign_id);
+            println!("state: {:?}", state.state);
+            Ok(match state.state {
+                rack_ai_application::CampaignState::Completed => 0,
+                _ => 1,
+            })
+        },
+    )
+}
+
+fn supervise_command(
+    repo_root: PathBuf,
+    state_root: PathBuf,
+    arguments: &[String],
+) -> Result<i32, String> {
+    let emit_json = arguments.iter().any(|value| value == "--emit-json");
+    let loop_mode = arguments.iter().any(|value| value == "--loop");
+    let seams = test_seams_from_arguments(arguments)?;
+    let operations = load_operations_config(&repo_root)?;
+    let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root.clone()));
+    let workspace_root = registry.workspace_root()?.as_path().to_path_buf();
+    let clock = SystemUnixClock;
+    with_runner(
+        repo_root,
+        state_root.clone(),
+        seams.fixture.as_deref(),
+        seams.skip_live,
+        |runner| loop {
+            let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+                runner,
+                clock: &clock,
+                state_root: state_root.clone(),
+                workspace_root: workspace_root.clone(),
+                operations: operations.clone(),
+            })?;
+            let report = supervisor.run_once()?;
+            print_supervision_report(&report, emit_json)?;
+            if !loop_mode {
+                return Ok(0);
+            }
+            thread::sleep(Duration::from_secs(
+                operations.supervisor.scan_interval_seconds,
+            ));
+        },
+    )
 }
 
 fn control_command(
@@ -383,8 +448,7 @@ fn format_events(content: &str, emit_json: bool) -> Result<String, String> {
         if line.trim().is_empty() {
             continue;
         }
-        let event: CampaignEvent =
-            serde_json::from_str(line).map_err(|error| error.to_string())?;
+        let event: CampaignEvent = serde_json::from_str(line).map_err(|error| error.to_string())?;
         output.push_str(&format_event_human(&event));
         output.push('\n');
     }
@@ -515,6 +579,7 @@ fn spawn_detached_runner(
     Ok(())
 }
 
+#[cfg(test)]
 fn create_campaign_after_detach_preflight(
     detach: bool,
     preflight: impl FnOnce() -> Result<(), String>,
@@ -542,11 +607,15 @@ where
 {
     let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root.clone()));
     let policy = registry.command_policy()?;
+    let operations = load_operations_config(&repo_root)?;
     let git = GitCommandWorktree;
     let executor_config = registry.executor_config()?;
-    let executor = PodmanWorkspaceExecutor::new(executor_config.clone());
-    let live_implementer =
-        PodmanChangeImplementer::new(PodmanWorkspaceExecutor::new(executor_config));
+    let container_tracker = Arc::new(CampaignContainerTracker::new(state_root.clone()));
+    let executor = PodmanWorkspaceExecutor::new(executor_config.clone())
+        .with_observer(container_tracker.clone());
+    let live_implementer = PodmanChangeImplementer::new(
+        PodmanWorkspaceExecutor::new(executor_config).with_observer(container_tracker.clone()),
+    );
     let fixture_document = load_fixture_document(fixture)?;
     let scripted = fixture_document
         .as_ref()
@@ -565,6 +634,9 @@ where
     let permissive = PermissiveHealth;
     let health: &dyn CampaignHealth = if skip_live { &permissive } else { &live_health };
     let clock = SystemUnixClock;
+    let sleeper = SystemRecoverySleeper;
+    let reviewer = LocalPrimaryReviewer::local_default();
+
     let runner = CampaignRunner::new(CampaignRunnerDependencies {
         registry: &registry,
         command_policy: &policy,
@@ -574,14 +646,71 @@ where
         workers: &workers,
         health,
         clock: &clock,
+        sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: operations.supervisor.worker_recovery_max_wait_seconds,
+        worker_recovery_retry_delays_seconds: operations
+            .supervisor
+            .worker_recovery_retry_delays_seconds
+            .clone(),
+        worker_recovery_max_attempts: operations.supervisor.worker_recovery_max_attempts,
         state_root,
+        container_tracker: Some(container_tracker),
     });
+
+    let runner = if fixture_document.is_none() && !skip_live {
+        runner.with_reviewer(&reviewer)
+    } else {
+        runner
+    };
+
     body(&runner)
 }
 
 fn load_campaign_file(path: &str) -> Result<Campaign, String> {
     let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
     serde_json::from_str(&content).map_err(|error| error.to_string())
+}
+
+fn load_operations_config(repo_root: &Path) -> Result<OperationsConfig, String> {
+    let path = repo_root.join("config").join("operations.json");
+    let content = fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read {}: {}", path.display(), error))?;
+    let config = serde_json::from_str::<OperationsConfig>(&content)
+        .map_err(|error| format!("failed to parse {}: {}", path.display(), error))?;
+    config.validate()?;
+    Ok(config)
+}
+
+fn print_supervision_report(
+    report: &CampaignSupervisionReport,
+    emit_json: bool,
+) -> Result<(), String> {
+    if emit_json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(report).map_err(|error| error.to_string())?
+        );
+        return Ok(());
+    }
+    println!("scanned_campaigns: {}", report.scanned_campaigns);
+    println!("resumed_campaigns: {}", report.resumed_campaigns);
+    for action in &report.actions {
+        println!(
+            "campaign={} action={} previous={:?} outcome={:?} message={}",
+            action.campaign_id,
+            action.action,
+            action.previous_state,
+            action.outcome_state,
+            action.message
+        );
+    }
+    for cleanup in &report.cleanup {
+        println!(
+            "cleanup campaign={} action={} message={}",
+            cleanup.campaign_id, cleanup.action, cleanup.message
+        );
+    }
+    Ok(())
 }
 
 fn load_revision_file(path: &str) -> Result<CampaignRevisionDocument, String> {

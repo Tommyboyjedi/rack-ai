@@ -10,6 +10,10 @@ impl RegistryPaths {
         Self { root }
     }
 
+    pub fn root(&self) -> &std::path::Path {
+        self.root.as_path()
+    }
+
     pub fn workers_path(&self) -> PathBuf {
         self.root.join("config/workers.json")
     }

@@ -127,8 +127,8 @@ impl<T: GitWorktree> GitWorktree for DelegatingCampaignGit<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::assert_campaign_git_args;
     use super::CampaignCommitRequest;
+    use super::assert_campaign_git_args;
     use std::path::PathBuf;
 
     #[test]
@@ -136,25 +136,22 @@ mod tests {
         assert!(assert_campaign_git_args(&["status", "--porcelain"]).is_ok());
         assert!(assert_campaign_git_args(&["diff", "--stat"]).is_ok());
         assert!(assert_campaign_git_args(&["rev-parse", "HEAD"]).is_ok());
-        assert!(assert_campaign_git_args(&[
-            "worktree",
-            "add",
-            "-b",
-            "rack/campaign-1",
-            "path",
-            "abc"
-        ])
-        .is_ok());
-        assert!(assert_campaign_git_args(&[
-            "-c",
-            "user.name=Rack AI Campaign",
-            "-c",
-            "user.email=rack-ai-campaign@local",
-            "commit",
-            "-m",
-            "rack(campaign-1): step-1",
-        ])
-        .is_ok());
+        assert!(
+            assert_campaign_git_args(&["worktree", "add", "-b", "rack/campaign-1", "path", "abc"])
+                .is_ok()
+        );
+        assert!(
+            assert_campaign_git_args(&[
+                "-c",
+                "user.name=Rack AI Campaign",
+                "-c",
+                "user.email=rack-ai-campaign@local",
+                "commit",
+                "-m",
+                "rack(campaign-1): step-1",
+            ])
+            .is_ok()
+        );
         assert!(assert_campaign_git_args(&["add", "-A", "--", "src/lib.rs"]).is_ok());
         assert!(assert_campaign_git_args(&["log", "-1", "--format=%H"]).is_ok());
         assert!(assert_campaign_git_args(&["branch", "--show-current"]).is_ok());

@@ -3,9 +3,12 @@ use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 use std::process::Stdio;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rack_ai_application::CommandEvidence;
+use rack_ai_application::ContainerLifecycleObserver;
 use rack_ai_application::ExecutorConfig;
 use rack_ai_application::ReadFileRequest;
 use rack_ai_application::RunCommandRequest;
@@ -23,6 +26,7 @@ use crate::WallClockWait;
 pub struct PodmanWorkspaceExecutor {
     config: ExecutorConfig,
     command: String,
+    observer: Option<Arc<dyn ContainerLifecycleObserver>>,
 }
 
 impl PodmanWorkspaceExecutor {
@@ -31,7 +35,16 @@ impl PodmanWorkspaceExecutor {
     }
 
     pub fn new_with_command(config: ExecutorConfig, command: String) -> Self {
-        Self { config, command }
+        Self {
+            config,
+            command,
+            observer: None,
+        }
+    }
+
+    pub fn with_observer(mut self, observer: Arc<dyn ContainerLifecycleObserver>) -> Self {
+        self.observer = Some(observer);
+        self
     }
 }
 
@@ -123,16 +136,30 @@ impl PodmanWorkspaceExecutor {
                 return Err(map_spawn_error(error));
             }
         };
+        let tracked_container_id =
+            match self.track_container_start(cleanup.cidfile(), timeout_seconds) {
+                Ok(value) => value,
+                Err(error) => {
+                    cleanup.stop_and_remove();
+                    let _ = self.track_container_finish();
+                    return Err(error);
+                }
+            };
         if let Some(payload) = stdin {
             if let Some(mut handle) = child.stdin.take() {
-                handle
-                    .write_all(payload.as_bytes())
-                    .map_err(|error| error.to_string())?;
+                if let Err(error) = handle.write_all(payload.as_bytes()) {
+                    cleanup.stop_and_remove();
+                    let _ = self.track_container_finish();
+                    return Err(error.to_string());
+                }
             }
         }
-        match WallClockWait::child_output(child, timeout_seconds)? {
+        let wait = WallClockWait::child_output(child, timeout_seconds)?;
+        let finish_result = self.track_container_finish();
+        match wait {
             WaitOutcome::Completed(output) => {
                 let _ = fs::remove_file(cleanup.cidfile());
+                finish_result?;
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let evidence = CommandEvidence::new(argv, output.status.code().unwrap_or(1))
@@ -142,14 +169,60 @@ impl PodmanWorkspaceExecutor {
             }
             WaitOutcome::TimedOut => {
                 cleanup.stop_and_remove();
-                let evidence = CommandEvidence::new(argv, 124)
-                    .with_stderr(format!(
+                finish_result?;
+                let stderr = match tracked_container_id {
+                    Some(id) => format!(
+                        "workspace command exceeded wall-clock timeout of {timeout_seconds}s (container {id})"
+                    ),
+                    None => format!(
                         "workspace command exceeded wall-clock timeout of {timeout_seconds}s"
-                    ))
+                    ),
+                };
+                let evidence = CommandEvidence::new(argv, 124)
+                    .with_stderr(stderr)
                     .with_timed_out(true);
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
         }
+    }
+
+    fn track_container_start(
+        &self,
+        cidfile: &Path,
+        timeout_seconds: u32,
+    ) -> Result<Option<String>, String> {
+        let Some(observer) = self.observer.as_ref() else {
+            return Ok(None);
+        };
+        let container_id = wait_for_container_id(cidfile, timeout_seconds);
+        if let Some(container_id) = container_id.as_deref() {
+            observer.container_started(container_id)?;
+        }
+        Ok(container_id)
+    }
+
+    fn track_container_finish(&self) -> Result<(), String> {
+        let Some(observer) = self.observer.as_ref() else {
+            return Ok(());
+        };
+        observer.container_finished()
+    }
+}
+
+fn wait_for_container_id(cidfile: &Path, timeout_seconds: u32) -> Option<String> {
+    let max_wait = Duration::from_secs(timeout_seconds.min(5) as u64);
+    let start = SystemTime::now();
+    loop {
+        if let Ok(text) = fs::read_to_string(cidfile) {
+            let id = text.trim();
+            if !id.is_empty() {
+                return Some(id.to_string());
+            }
+        }
+        if start.elapsed().unwrap_or_default() >= max_wait {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(25));
     }
 }
 
@@ -219,13 +292,9 @@ mod tests {
         let run_error = executor
             .run_command(&RunCommandRequest::new(worktree, vec!["true".to_string()]).unwrap())
             .unwrap_err();
-        for item in [error, read_error, run_error] {
-            assert!(
-                item.contains("podman is not available")
-                    || item.contains("worktree does not exist"),
-                "{item}"
-            );
-        }
+        assert!(error.contains("podman is not available"));
+        assert!(read_error.contains("podman is not available"));
+        assert!(run_error.contains("podman is not available"));
     }
 
     fn existing_worktree() -> PathBuf {
@@ -233,8 +302,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let root = std::env::temp_dir().join(format!("rack-ai-podman-ws-{nanos}"));
-        std::fs::create_dir_all(&root).unwrap();
-        root
+        let path = std::env::temp_dir().join(format!("rack-ai-existing-worktree-{nanos}"));
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        path
     }
 }
