@@ -195,6 +195,40 @@ impl CommandPolicy for AllowAllPolicy {
     }
 }
 
+struct ResumeCurrentWorkerHealthyOtherUnavailable {
+    coder_failures_left: Cell<usize>,
+}
+
+impl ResumeCurrentWorkerHealthyOtherUnavailable {
+    fn new(coder_failures_left: usize) -> Self {
+        Self {
+            coder_failures_left: Cell::new(coder_failures_left),
+        }
+    }
+}
+
+impl CampaignHealth for ResumeCurrentWorkerHealthyOtherUnavailable {
+    fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Err("worker endpoint is unhealthy: local-primary".to_string())
+    }
+
+    fn assert_worker(&self, worker_id: &str) -> Result<(), String> {
+        if worker_id == "local-coder" {
+            let remaining = self.coder_failures_left.get();
+            if remaining > 0 {
+                self.coder_failures_left.set(remaining - 1);
+                return Err("io: Peer disconnected".to_string());
+            }
+            return Ok(());
+        }
+        Err(format!("worker endpoint is unhealthy: {worker_id}"))
+    }
+
+    fn assert_executor(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 struct Healthy;
 
 impl CampaignHealth for Healthy {
@@ -2092,6 +2126,156 @@ fn recovery_wait_honors_pause_before_any_attempt_runs() {
     assert!(paused.pause_requested);
     assert!(paused.steps[0].attempts.is_empty());
     assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn resume_preflight_does_not_require_other_worker_after_current_worker_recovers() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "resume-current-worker-only",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let start_runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    start_runner.start(&campaign).unwrap();
+    let mut state = start_runner
+        .load_state(&campaign.campaign_id)
+        .unwrap()
+        .unwrap();
+    state.state = CampaignState::Running;
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    start_runner.save_state(&state).unwrap();
+
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = ResumeCurrentWorkerHealthyOtherUnavailable::new(5);
+    let resume_runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+
+    let completed = resume_runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_workers(), vec!["local-coder".to_string()]);
+    assert_eq!(sleeper.sleeps(), vec![5, 10, 15, 20, 30]);
+    let events = fs::read_to_string(resume_runner.events_path(&campaign.campaign_id)).unwrap();
+    let recovered = events.find("campaign_recovered").unwrap();
+    let started = events.rfind("model_request_started").unwrap();
+    assert!(started > recovered);
+}
+
+#[test]
+fn invalid_static_preflight_condition_still_fails_closed() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "invalid-static-preflight",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let mut broken = campaign.clone();
+    broken.worker_policy.fallback = "missing-worker".to_string();
+    fs::write(
+        runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("campaign.json"),
+        serde_json::to_string_pretty(&broken).unwrap()
+            + "
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn fallback_worker_unavailability_recovers_when_fallback_is_selected() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("connection refused"),
+            write_attempt(
+                "src/alpha.rs",
+                "pub fn alpha() -> u8 { 1 }
+",
+            ),
+        ],
+    );
+    let mut policy = default_policy();
+    policy.primary_attempts = 0;
+    policy.repair_attempts = 0;
+    policy.fallback_attempts = 1;
+    let campaign = make_campaign(
+        "fallback-recovery",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        policy,
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(
+        implementer.seen_workers(),
+        vec!["local-primary".to_string(), "local-primary".to_string()]
+    );
+    assert_eq!(sleeper.sleeps(), vec![5]);
 }
 
 #[test]

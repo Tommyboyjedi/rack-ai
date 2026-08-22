@@ -298,11 +298,16 @@ impl<'a> CampaignRunner<'a> {
     }
 
     pub fn validate(&self, campaign: &Campaign) -> Result<(), String> {
-        self.validate_document(campaign)?;
+        self.validate_live_requirements(campaign)?;
         self.health.assert_workers(
             &campaign.worker_policy.primary,
             &campaign.worker_policy.fallback,
         )?;
+        Ok(())
+    }
+
+    fn validate_live_requirements(&self, campaign: &Campaign) -> Result<(), String> {
+        self.validate_document(campaign)?;
         self.health.assert_executor()?;
         self.workers.runtime(&campaign.worker_policy.primary)?;
         self.workers.runtime(&campaign.worker_policy.fallback)?;
@@ -2147,7 +2152,7 @@ impl<'a> CampaignRunner<'a> {
     }
 
     fn preflight_live(&self, campaign: &Campaign, state: &CampaignStatus) -> Result<(), String> {
-        self.validate(campaign)?;
+        self.validate_live_requirements(campaign)?;
         if !std::path::Path::new(&state.worktree_path).exists() {
             return Err("worktree is missing".to_string());
         }
