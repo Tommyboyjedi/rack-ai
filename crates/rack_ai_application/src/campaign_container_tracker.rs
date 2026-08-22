@@ -189,10 +189,8 @@ fn load_state(path: &PathBuf) -> Result<Option<CampaignStatus>, String> {
     if !path.exists() {
         return Ok(None);
     }
-    let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let state =
-        serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
-    Ok(Some(state))
+    let campaign_path = path.parent().map(|value| value.join("campaign.json"));
+    crate::load_campaign_status_compatible(path, campaign_path.as_deref())
 }
 
 fn save_state(path: &PathBuf, state: &CampaignStatus) -> Result<(), String> {

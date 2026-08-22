@@ -6,6 +6,7 @@ use crate::CampaignCleanupAction;
 use crate::CampaignContainerTracker;
 use crate::CampaignLeaseRecord;
 use crate::CampaignLeaseStore;
+use crate::CampaignLock;
 use crate::CampaignRunner;
 use crate::CampaignState;
 use crate::CampaignStatus;
@@ -14,6 +15,7 @@ use crate::CampaignSupervisionReport;
 use crate::FailureClassification;
 use crate::OperationsConfig;
 use crate::UnixClock;
+use crate::atomic_write;
 use crate::campaign_lease::lease_is_stale;
 
 pub struct CampaignSupervisor<'a> {
@@ -45,9 +47,10 @@ impl<'a> CampaignSupervisor<'a> {
     }
 
     pub fn run_once(&self) -> Result<CampaignSupervisionReport, String> {
-        let states = self.load_states()?;
+        let (states, load_actions, scanned_campaigns) = self.load_states()?;
         let mut report = CampaignSupervisionReport::new();
-        report.scanned_campaigns = states.len();
+        report.scanned_campaigns = scanned_campaigns;
+        report.actions.extend(load_actions);
         for state in &states {
             let previous = state.state;
             if previous == CampaignState::Running {
@@ -97,11 +100,15 @@ impl<'a> CampaignSupervisor<'a> {
         Ok(report)
     }
 
-    fn load_states(&self) -> Result<Vec<CampaignStatus>, String> {
+    fn load_states(
+        &self,
+    ) -> Result<(Vec<CampaignStatus>, Vec<CampaignSupervisionAction>, usize), String> {
         let mut states = Vec::new();
+        let mut actions = Vec::new();
+        let mut scanned_campaigns = 0usize;
         let dir = self.state_root.join("state").join("campaigns");
         if !dir.exists() {
-            return Ok(states);
+            return Ok((states, actions, scanned_campaigns));
         }
         for entry in fs::read_dir(dir).map_err(|error| error.to_string())? {
             let path = entry.map_err(|error| error.to_string())?.path();
@@ -114,12 +121,46 @@ impl<'a> CampaignSupervisor<'a> {
             if name.starts_with('.') {
                 continue;
             }
-            if let Some(state) = self.runner.load_state(name)? {
-                states.push(state);
+            scanned_campaigns += 1;
+            match self.runner.load_state(name) {
+                Ok(Some(state)) => states.push(state),
+                Ok(None) => {}
+                Err(error) => {
+                    self.record_load_error(name, &path, &error)?;
+                    actions.push(CampaignSupervisionAction {
+                        campaign_id: name.to_string(),
+                        previous_state: CampaignState::Blocked,
+                        action: "incompatible_state".to_string(),
+                        outcome_state: Some(CampaignState::Blocked),
+                        message: error,
+                    });
+                }
             }
         }
         states.sort_by(|left, right| left.campaign_id.cmp(&right.campaign_id));
-        Ok(states)
+        Ok((states, actions, scanned_campaigns))
+    }
+
+    fn record_load_error(
+        &self,
+        campaign_id: &str,
+        campaign_dir: &PathBuf,
+        error: &str,
+    ) -> Result<(), String> {
+        let _lock = CampaignLock::acquire(campaign_dir)?;
+        let evidence = serde_json::json!({
+            "campaign_id": campaign_id,
+            "recorded_at": self.clock.now_unix().to_string(),
+            "state": "incompatible",
+            "state_path": campaign_dir.join("state.json").display().to_string(),
+            "campaign_path": campaign_dir.join("campaign.json").display().to_string(),
+            "error": error,
+        });
+        let json = serde_json::to_string_pretty(&evidence).map_err(|item| item.to_string())?;
+        atomic_write(
+            &campaign_dir.join("supervisor-load-error.json"),
+            &format!("{json}\n"),
+        )
     }
 
     fn cleanup_stale_campaign_container(

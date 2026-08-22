@@ -202,10 +202,8 @@ impl<'a> CampaignRunner<'a> {
         if !path.exists() {
             return Ok(None);
         }
-        let content = fs::read_to_string(path).map_err(|error| error.to_string())?;
-        let state =
-            serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
-        Ok(Some(state))
+        let campaign_path = self.campaign_dir(campaign_id).join("campaign.json");
+        crate::load_campaign_status_compatible(&path, Some(&campaign_path))
     }
 
     pub fn save_state(&self, state: &CampaignStatus) -> Result<(), String> {
@@ -2000,9 +1998,9 @@ fn update_background_state_heartbeat(
     let campaign_dir = state_root.join("state").join("campaigns").join(campaign_id);
     let state_path = campaign_dir.join("state.json");
     let _lock = CampaignLock::acquire(&campaign_dir)?;
-    let content = fs::read_to_string(&state_path).map_err(|error| error.to_string())?;
-    let mut state =
-        serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
+    let campaign_path = campaign_dir.join("campaign.json");
+    let mut state = crate::load_campaign_status_compatible(&state_path, Some(&campaign_path))?
+        .ok_or_else(|| format!("campaign state not found: {campaign_id}"))?;
     if !matches!(state.state, CampaignState::Running) {
         return Err(format!("campaign {campaign_id} is no longer running"));
     }

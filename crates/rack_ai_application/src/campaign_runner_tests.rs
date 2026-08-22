@@ -10,6 +10,7 @@ use rack_ai_domain::ChangeId;
 use rack_ai_domain::GitSha;
 use rack_ai_domain::RepositoryId;
 
+use crate::AttemptKind;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
 use crate::CampaignHealth;
@@ -1677,6 +1678,250 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
     );
     let error = runner.start(&campaign).unwrap_err();
     assert!(error.contains("unhealthy"));
+}
+
+#[test]
+fn load_state_migrates_historical_attempt_without_kind_from_verification_step() {
+    let fx = fixture();
+    let campaign = make_campaign(
+        "compat",
+        &fx.sha,
+        vec![CampaignStep {
+            id: "verify-alpha".to_string(),
+            kind: CampaignStepKind::Verification,
+            task: "Verify alpha.".to_string(),
+            allowed_paths: vec!["src/".to_string()],
+            required_changed_paths: vec![],
+            acceptance: StepAcceptance {
+                commands: vec![vec!["cargo".to_string(), "test".to_string()]],
+                required_artifacts: vec![],
+            },
+            limits: StepLimits {
+                timeout_seconds: 120,
+                network: "disabled".to_string(),
+            },
+        }],
+        default_policy(),
+    );
+    let campaign_dir = fx
+        .root
+        .join("state")
+        .join("campaigns")
+        .join(&campaign.campaign_id);
+    fs::create_dir_all(&campaign_dir).unwrap();
+    fs::write(
+        campaign_dir.join("campaign.json"),
+        serde_json::to_string_pretty(&campaign).unwrap() + "\n",
+    )
+    .unwrap();
+    let state = serde_json::json!({
+        "schema_version": "rack-ai/campaign/v1",
+        "campaign_id": campaign.campaign_id,
+        "campaign_digest": "digest",
+        "repository_id": "fixture",
+        "base_sha": fx.sha,
+        "branch": "rack/campaign-compat",
+        "worktree_path": fx.root.join("workspaces/compat/repo").display().to_string(),
+        "current_head_sha": "head",
+        "state": "blocked",
+        "current_step_id": "verify-alpha",
+        "current_attempt": 1,
+        "pause_requested": false,
+        "cancel_requested": false,
+        "start_time": "1",
+        "end_time": "2",
+        "duration_seconds": 1,
+        "remaining_seconds": 0,
+        "last_heartbeat": "2",
+        "steps": [{
+            "step_id": "verify-alpha",
+            "kind": "verification",
+            "disposition": "accepted",
+            "review_disposition": "accepted",
+            "review_rationale": "ok",
+            "attempts": [{
+                "attempt": 1,
+                "worker_id": "local-primary",
+                "start_time": "1",
+                "end_time": "2",
+                "disposition": "accepted",
+                "classification": null,
+                "rationale": "verified",
+                "commit_sha": null,
+                "repair_instruction": null,
+                "repair_of": null,
+                "fallback_of": null
+            }],
+            "accepted_commit": null
+        }],
+        "revisions": [],
+        "active_lease_id": null,
+        "active_container_id": null,
+        "error_message": null,
+        "blocked_reason": "compat"
+    });
+    fs::write(
+        campaign_dir.join("state.json"),
+        serde_json::to_string_pretty(&state).unwrap() + "\n",
+    )
+    .unwrap();
+
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 10);
+    let loaded = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+
+    assert_eq!(loaded.steps[0].attempts[0].kind, AttemptKind::Verification);
+}
+
+#[test]
+fn supervisor_isolates_incompatible_campaign_state_and_continues() {
+    let fx = fixture();
+    let good_campaign = make_campaign(
+        "good",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let good_dir = fx.root.join("state").join("campaigns").join("good");
+    fs::create_dir_all(&good_dir).unwrap();
+    fs::write(
+        good_dir.join("campaign.json"),
+        serde_json::to_string_pretty(&good_campaign).unwrap() + "\n",
+    )
+    .unwrap();
+    fs::write(
+        good_dir.join("state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "rack-ai/campaign/v1",
+            "campaign_id": "good",
+            "campaign_digest": "digest",
+            "repository_id": "fixture",
+            "base_sha": fx.sha,
+            "branch": "rack/campaign-good",
+            "worktree_path": fx.root.join("workspaces/good/repo").display().to_string(),
+            "current_head_sha": "head",
+            "state": "completed",
+            "current_step_id": null,
+            "current_attempt": 1,
+            "pause_requested": false,
+            "cancel_requested": false,
+            "start_time": "1",
+            "end_time": "2",
+            "duration_seconds": 1,
+            "remaining_seconds": 0,
+            "last_heartbeat": "2",
+            "steps": [],
+            "revisions": [],
+            "active_lease_id": null,
+            "active_container_id": null,
+            "error_message": null,
+            "blocked_reason": null
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    let bad_dir = fx.root.join("state").join("campaigns").join("bad");
+    fs::create_dir_all(&bad_dir).unwrap();
+    fs::write(
+        bad_dir.join("state.json"),
+        serde_json::to_string_pretty(&serde_json::json!({
+            "schema_version": "rack-ai/campaign/v1",
+            "campaign_id": "bad",
+            "campaign_digest": "digest",
+            "repository_id": "fixture",
+            "base_sha": fx.sha,
+            "branch": "rack/campaign-bad",
+            "worktree_path": fx.root.join("workspaces/bad/repo").display().to_string(),
+            "current_head_sha": "head",
+            "state": "running",
+            "current_step_id": "mystery",
+            "current_attempt": 1,
+            "pause_requested": false,
+            "cancel_requested": false,
+            "start_time": "1",
+            "end_time": null,
+            "duration_seconds": 1,
+            "remaining_seconds": 10,
+            "last_heartbeat": "2",
+            "steps": [{
+                "step_id": "mystery",
+                "disposition": "accepted",
+                "attempts": [{
+                    "attempt": 1,
+                    "worker_id": "local-coder",
+                    "start_time": "1",
+                    "end_time": "2",
+                    "disposition": "accepted",
+                    "classification": null,
+                    "rationale": "old",
+                    "commit_sha": null
+                }],
+                "accepted_commit": null
+            }],
+            "revisions": [],
+            "active_lease_id": null,
+            "active_container_id": null,
+            "error_message": null,
+            "blocked_reason": null
+        }))
+        .unwrap()
+            + "\n",
+    )
+    .unwrap();
+
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let runner = make_runner(
+        &fx,
+        &good_campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        10_000,
+    );
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: Box::leak(Box::new(TestClock {
+            now: Cell::new(10_000),
+        })),
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 30,
+                resume_running_campaigns: true,
+                podman_command: "true".to_string(),
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 10,
+                max_auxiliary_artifact_age_seconds: 3_600,
+                retain_auxiliary_artifacts: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+
+    assert_eq!(report.scanned_campaigns, 2);
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|item| item.campaign_id == "good" && item.action == "observe")
+    );
+    assert!(
+        report
+            .actions
+            .iter()
+            .any(|item| item.campaign_id == "bad" && item.action == "incompatible_state")
+    );
+    assert!(bad_dir.join("supervisor-load-error.json").exists());
 }
 
 #[test]
