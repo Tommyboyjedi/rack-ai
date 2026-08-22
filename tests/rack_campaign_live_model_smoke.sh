@@ -25,6 +25,7 @@ evidence_root="${RACK_AI_LIVE_EVIDENCE_DIR:-$(mktemp -d -t rack-ai-live-XXXXXX)}
 fixture="$evidence_root/fixture"
 rack="$evidence_root/rack"
 mkdir -p "$fixture/src" "$rack/config" "$rack/state/campaigns"
+git -C "$rack" init -b main >/dev/null
 printf '%s\n' '[package]' 'name = "rack_live_fixture"' 'version = "0.1.0"' 'edition = "2021"' '' '[lib]' 'path = "src/lib.rs"' > "$fixture/Cargo.toml"
 printf 'pub fn seed() -> u8 { 1 }\n' > "$fixture/src/lib.rs"
 (cd "$fixture" && cargo generate-lockfile >/dev/null)
@@ -36,6 +37,7 @@ git -C "$fixture" commit -m init >/dev/null
 base_sha="$(git -C "$fixture" rev-parse HEAD)"
 cp "$repo_root/config/workers.json" "$rack/config/workers.json"
 cp "$repo_root/config/models.json" "$rack/config/models.json"
+cp "$repo_root/config/operations.json" "$rack/config/operations.json"
 
 printf '{\n  "workspace_root": "%s",\n  "approved_programs": ["cargo", "true"],\n  "executor": {"backend":"podman","image":"docker.io/library/rust:bookworm","workspace_path":"/workspace","memory":"2g","pids_limit":256},\n  "repositories": [{"id":"fixture","root":"%s","default_base_ref":"main","enabled":true}]\n}\n' "$evidence_root/workspaces" "$fixture" > "$rack/config/repositories.json"
 

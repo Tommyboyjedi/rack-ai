@@ -62,6 +62,7 @@ base_sha="$(git -C "$fixture" rev-parse HEAD)"
 
 rack="$tmp/rack"
 mkdir -p "$rack/config" "$rack/state/changes"
+git -C "$rack" init -b main >/dev/null
 cat > "$rack/config/repositories.json" <<EOF
 {
   "workspace_root": "$tmp/workspaces",
