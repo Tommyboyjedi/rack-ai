@@ -5,8 +5,8 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::atomic_write;
 use crate::CampaignLock;
+use crate::atomic_write;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -59,9 +59,7 @@ impl CampaignLeaseStore {
         let campaign_id = campaign_id.to_string();
         let repository_id = repository_id.to_string();
 
-        let interval = Duration::from_secs(
-            heartbeat_seconds.clamp(1, 30)
-        );
+        let interval = Duration::from_secs(heartbeat_seconds.clamp(1, 30));
 
         let (stop_tx, stop_rx) = mpsc::channel();
 
@@ -259,10 +257,7 @@ impl CampaignLeaseStore {
 
         let json = serde_json::to_string_pretty(record).map_err(|error| error.to_string())?;
 
-        atomic_write(
-            path,
-            &format!("{json}\n"),
-        )
+        atomic_write(path, &format!("{json}\n"))
     }
 }
 
@@ -386,11 +381,7 @@ mod tests {
         let root = temp_root();
         let store = CampaignLeaseStore::new(root);
 
-        let guard = store.start_background_heartbeat(
-            "c1",
-            "repo",
-            120,
-        );
+        let guard = store.start_background_heartbeat("c1", "repo", 120);
 
         drop(guard);
     }
@@ -404,6 +395,4 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         root
     }
-
-
 }

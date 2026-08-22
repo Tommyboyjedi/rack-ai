@@ -205,6 +205,7 @@ Python is retained only where an external dependency structurally requires it, c
 | `bin/rack-coordinator` | Template-driven task generation |
 | `bin/rack-change` | Bounded external-repository change execution |
 | `bin/rack-campaign` | Autonomous multi-step campaign execution |
+| `bin/rack-campaign supervise` | Unattended supervisor scan and recovery loop |
 
 ## Current Project Status
 
@@ -286,8 +287,10 @@ Among other things, the standards require:
 - [`docs/engineering-contract.md`](docs/engineering-contract.md) — detailed engineering, safety, and Rust standards
 - [`docs/external-repository-change-workflow.md`](docs/external-repository-change-workflow.md) — isolated repository mutation contract
 - [`docs/autonomous-campaign-runner-contract.md`](docs/autonomous-campaign-runner-contract.md) — autonomous campaign behaviour
+- [`docs/rack-operations.md`](docs/rack-operations.md) — unattended supervision, restart, retention, and upgrade runbook
 - [`docs/rust-application-architecture.md`](docs/rust-application-architecture.md) — application architecture
 - [`config/README.md`](config/README.md) — runtime configuration
+- [`config/operations.json`](config/operations.json) — versioned supervision and retention policy
 - [`tests/README.md`](tests/README.md) — smoke and live-test inventory
 
 ---

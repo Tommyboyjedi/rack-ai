@@ -1,7 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-use rack_ai_application::assert_campaign_git_args;
 use rack_ai_application::CampaignCommitRequest;
 use rack_ai_application::ChangeWorkspace;
 use rack_ai_application::CreateChangeWorktreeRequest;
@@ -9,6 +8,7 @@ use rack_ai_application::GitEvidence;
 use rack_ai_application::GitWorktree;
 use rack_ai_application::InspectChangeWorktreeRequest;
 use rack_ai_application::ResolveGitShaRequest;
+use rack_ai_application::assert_campaign_git_args;
 use rack_ai_domain::ChangeId;
 use rack_ai_domain::GitSha;
 
@@ -153,8 +153,8 @@ fn branch_change_id(branch_name: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::branch_change_id;
     use super::GitCommandWorktree;
+    use super::branch_change_id;
     use crate::GitCommand;
     use rack_ai_application::CreateChangeWorktreeRequest;
     use rack_ai_application::GitWorktree;
@@ -210,10 +210,9 @@ mod tests {
                 sha.clone(),
             ))
             .unwrap();
-        let allowed = rack_ai_domain::AllowedPaths::new(vec![rack_ai_domain::AllowedPath::new(
-            "src".to_string(),
-        )
-        .unwrap()])
+        let allowed = rack_ai_domain::AllowedPaths::new(vec![
+            rack_ai_domain::AllowedPath::new("src".to_string()).unwrap(),
+        ])
         .unwrap();
         let rejected = allowed.reject_disallowed(escaped.changed_paths());
         assert!(rejected.iter().any(|path| path.as_str() == "README.md"));

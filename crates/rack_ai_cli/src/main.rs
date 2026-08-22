@@ -39,8 +39,8 @@ use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
 
-mod change_command;
 mod campaign_command;
+mod change_command;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;

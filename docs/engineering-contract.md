@@ -20,6 +20,21 @@ Its purpose is not merely to make local models run. It must make autonomous work
 
 The system should be safe to leave running without relying on undocumented model behaviour or continuous human supervision.
 
+## August 22, 2026 Progress
+
+Implemented in the current `feat/campaign-live-supervision` branch:
+- P0 regression coverage proving a background state heartbeat cannot resurrect paused or cancelled campaign state
+- versioned unattended operations config in `config/operations.json`
+- `campaign supervise` reconciliation loop for campaigns left in `running` state
+- bounded retention pruning for old terminal campaign state/worktrees
+- stale orphan repository-lease cleanup
+- headless operating documentation and supervision smoke coverage
+
+Still outstanding for full unattended confidence:
+- durable tracking and cleanup of orphaned live Podman containers after unclean process/host failure
+- broader disk-usage policy beyond terminal campaign retention
+- longer soak and repeated crash/reboot recovery runs on the live rack
+
 # Runtime Architecture
 
 Host: `gpurack`

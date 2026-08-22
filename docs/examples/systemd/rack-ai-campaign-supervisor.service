@@ -1,0 +1,13 @@
+[Unit]
+Description=Rack AI campaign supervisor
+After=default.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/rack-ai
+ExecStart=/srv/rack-ai/bin/rack-campaign supervise --loop
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

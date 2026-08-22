@@ -77,8 +77,7 @@ impl ImplementationReviewer for LocalPrimaryReviewer {
         let prompt = request.prompt();
         let raw_output = self.call_api(&prompt, request.timeout_seconds)?;
 
-        let (disposition, classification, rationale) =
-            parse_model_review_output(&raw_output)?;
+        let (disposition, classification, rationale) = parse_model_review_output(&raw_output)?;
 
         Ok(ModelReviewResult {
             disposition,

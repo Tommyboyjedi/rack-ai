@@ -42,7 +42,10 @@ pub fn parse_campaign_path(raw: &str) -> Result<String, String> {
 }
 
 pub fn parse_campaign_paths(values: &[String]) -> Result<Vec<String>, String> {
-    values.iter().map(|value| parse_campaign_path(value)).collect()
+    values
+        .iter()
+        .map(|value| parse_campaign_path(value))
+        .collect()
 }
 
 pub fn allowed_paths_from(values: &[String]) -> Result<AllowedPaths, String> {

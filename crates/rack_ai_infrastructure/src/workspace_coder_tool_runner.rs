@@ -50,10 +50,7 @@ impl WorkspaceCoderToolRunner<'_> {
         )?;
 
         if result.evidence().exit_code() != 0 {
-            return Err(format!(
-                "write failed: {}",
-                result.evidence().stderr()
-            ));
+            return Err(format!("write failed: {}", result.evidence().stderr()));
         }
 
         Ok("File written successfully".to_string())

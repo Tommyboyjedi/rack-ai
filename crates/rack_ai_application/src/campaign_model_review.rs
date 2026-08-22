@@ -109,8 +109,9 @@ impl ImplementationReviewer for AcceptingReviewer {
             classification: None,
             rationale: "test reviewer accepted after deterministic gates".to_string(),
             prompt: request.prompt(),
-            raw_output: "{\"disposition\":\"accepted\",\"classification\":null,\"rationale\":\"ok\"}"
-                .to_string(),
+            raw_output:
+                "{\"disposition\":\"accepted\",\"classification\":null,\"rationale\":\"ok\"}"
+                    .to_string(),
             used_host_shell: false,
         })
     }
@@ -144,10 +145,18 @@ impl ImplementationReviewer for RejectingReviewer {
     }
 }
 
-pub fn parse_model_review_output(raw: &str) -> Result<(CoordinatorReviewDisposition, Option<FailureClassification>, String), String> {
-    let json = extract_json_object(raw).ok_or_else(|| {
-        "model review did not return a JSON object".to_string()
-    })?;
+pub fn parse_model_review_output(
+    raw: &str,
+) -> Result<
+    (
+        CoordinatorReviewDisposition,
+        Option<FailureClassification>,
+        String,
+    ),
+    String,
+> {
+    let json = extract_json_object(raw)
+        .ok_or_else(|| "model review did not return a JSON object".to_string())?;
     let value: serde_json::Value =
         serde_json::from_str(&json).map_err(|error| error.to_string())?;
     let disposition = match value.get("disposition").and_then(|item| item.as_str()) {
@@ -157,7 +166,7 @@ pub fn parse_model_review_output(raw: &str) -> Result<(CoordinatorReviewDisposit
         other => {
             return Err(format!(
                 "model review returned invalid disposition: {other:?}"
-            ))
+            ));
         }
     };
     let classification = match value.get("classification").and_then(|item| item.as_str()) {

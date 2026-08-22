@@ -1,9 +1,9 @@
-use rack_ai_application::looks_like_markdown_tool_call;
 use rack_ai_application::ChangeImplementer;
 use rack_ai_application::CoderRunRequest;
 use rack_ai_application::CoderWorkspaceContext;
 use rack_ai_application::ImplementChangeRequest;
 use rack_ai_application::ImplementChangeResult;
+use rack_ai_application::looks_like_markdown_tool_call;
 
 use crate::DirectCoderWorker;
 use crate::PodmanWorkspaceExecutor;

@@ -10,7 +10,6 @@ use rack_ai_domain::ChangeId;
 use rack_ai_domain::GitSha;
 use rack_ai_domain::RepositoryId;
 
-use crate::assert_campaign_git_args;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
 use crate::CampaignHealth;
@@ -22,6 +21,8 @@ use crate::CampaignRunnerDependencies;
 use crate::CampaignState;
 use crate::CampaignStep;
 use crate::CampaignStepKind;
+use crate::CampaignSupervisor;
+use crate::CampaignSupervisorDependencies;
 use crate::CampaignWorkerCatalog;
 use crate::CampaignWorkerRuntime;
 use crate::ChangeWorkspace;
@@ -33,26 +34,30 @@ use crate::ExecutorConfig;
 use crate::FailureClassification;
 use crate::GitEvidence;
 use crate::GitWorktree;
-use crate::InspectChangeWorktreeRequest;
 use crate::ImplementationReviewer;
+use crate::InspectChangeWorktreeRequest;
 use crate::ModelReviewRequest;
 use crate::ModelReviewResult;
+use crate::OperationsConfig;
 use crate::ReadFileRequest;
 use crate::RegisteredRepository;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
+use crate::RetentionConfig;
 use crate::RunCommandRequest;
 use crate::ScriptedAttempt;
 use crate::ScriptedChangeImplementer;
 use crate::ScriptedWrite;
 use crate::StepAcceptance;
 use crate::StepLimits;
+use crate::SupervisorConfig;
 use crate::UnixClock;
 use crate::WorkerPolicy;
 use crate::WorkspaceExecutionResult;
 use crate::WorkspaceExecutor;
 use crate::WorkspaceRoot;
 use crate::WriteFileRequest;
+use crate::assert_campaign_git_args;
 
 struct TestClock {
     now: Cell<u64>,
@@ -369,12 +374,14 @@ fn porcelain_paths(status: &str) -> Vec<String> {
 }
 
 fn git_init(repo: &Path) {
-    assert!(Command::new("git")
-        .args(["init", "-b", "main"])
-        .current_dir(repo)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(repo)
+            .status()
+            .unwrap()
+            .success()
+    );
     git(repo, &["config", "user.email", "test@example.com"]).unwrap();
     git(repo, &["config", "user.name", "test"]).unwrap();
     git(repo, &["add", "."]).unwrap();
@@ -698,11 +705,13 @@ fn repair_and_fallback_bounds_then_stop() {
     assert_eq!(state.steps[0].attempts[1].worker_id, "local-coder");
     assert_eq!(state.steps[0].attempts[2].worker_id, "local-primary");
     assert_eq!(state.state, CampaignState::Blocked);
-    assert!(state.steps[0].attempts[1]
-        .repair_instruction
-        .as_ref()
-        .unwrap()
-        .contains("Do not broaden"));
+    assert!(
+        state.steps[0].attempts[1]
+            .repair_instruction
+            .as_ref()
+            .unwrap()
+            .contains("Do not broaden")
+    );
 }
 
 #[test]
@@ -735,11 +744,13 @@ fn fallback_uses_workspace_executor_not_host_jcode() {
     );
     let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
     assert_eq!(state.state, CampaignState::Completed);
-    assert!(executor
-        .writes
-        .lock()
-        .unwrap()
-        .contains(&"src/alpha.rs".to_string()));
+    assert!(
+        executor
+            .writes
+            .lock()
+            .unwrap()
+            .contains(&"src/alpha.rs".to_string())
+    );
     assert_eq!(
         implementer.seen_workers(),
         ["local-coder", "local-coder", "local-primary"]
@@ -752,7 +763,10 @@ fn reviewer_failure_fails_closed_and_persists_request_evidence() {
     let executor = HostExecutor::new();
     let implementer = ScriptedChangeImplementer::new(
         &executor,
-        vec![write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n")],
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
     );
     let campaign = make_campaign(
         "review-fail-closed",
@@ -894,10 +908,12 @@ fn detach_setup_failure_blocks_created_campaign() {
         blocked.blocked_reason.as_deref(),
         Some("executor_unavailable")
     );
-    assert!(blocked
-        .error_message
-        .unwrap()
-        .contains("detached runner setup failed"));
+    assert!(
+        blocked
+            .error_message
+            .unwrap()
+            .contains("detached runner setup failed")
+    );
 }
 
 #[test]
@@ -1102,7 +1118,79 @@ fn stale_runner_save_preserves_pause_until_intentional_resume() {
     let stale = runner.start(&campaign).unwrap();
     runner.pause("pause-merge").unwrap();
     runner.save_state(&stale).unwrap();
-    assert!(runner.load_state("pause-merge").unwrap().unwrap().pause_requested);
+    assert!(
+        runner
+            .load_state("pause-merge")
+            .unwrap()
+            .unwrap()
+            .pause_requested
+    );
+}
+
+#[test]
+fn background_state_heartbeat_cannot_resurrect_paused_campaign() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "paused-heartbeat",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    runner.pause("paused-heartbeat").unwrap();
+    runner.run("paused-heartbeat").unwrap();
+
+    let before = runner.load_state("paused-heartbeat").unwrap().unwrap();
+    assert_eq!(before.state, CampaignState::Paused);
+
+    let error = runner
+        .test_background_state_heartbeat(
+            "paused-heartbeat",
+            Some("add-alpha"),
+            Some("local-coder"),
+            "model_request",
+        )
+        .unwrap_err();
+    assert!(error.contains("no longer running"), "{error}");
+
+    let after = runner.load_state("paused-heartbeat").unwrap().unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn background_state_heartbeat_cannot_resurrect_cancelled_campaign() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "cancelled-heartbeat",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    runner.cancel("cancelled-heartbeat", Some("stop")).unwrap();
+    runner.run("cancelled-heartbeat").unwrap();
+
+    let before = runner.load_state("cancelled-heartbeat").unwrap().unwrap();
+    assert_eq!(before.state, CampaignState::Cancelled);
+
+    let error = runner
+        .test_background_state_heartbeat(
+            "cancelled-heartbeat",
+            Some("add-alpha"),
+            Some("local-coder"),
+            "model_request",
+        )
+        .unwrap_err();
+    assert!(error.contains("no longer running"), "{error}");
+
+    let after = runner.load_state("cancelled-heartbeat").unwrap().unwrap();
+    assert_eq!(after, before);
 }
 
 #[test]
@@ -1130,6 +1218,183 @@ fn cancel_prevents_commit_and_retains_evidence() {
     assert!(state.active_lease_id.is_none());
     assert!(state.steps[0].accepted_commit.is_none());
     assert!(runner.campaign_dir("cancel").join("campaign.json").exists());
+}
+
+#[test]
+fn supervisor_resumes_running_campaigns() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "supervise-running",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.resumed_campaigns, 1);
+    assert_eq!(report.actions[0].action, "resume");
+    assert_eq!(
+        report.actions[0].outcome_state,
+        Some(CampaignState::Completed)
+    );
+    assert_eq!(
+        runner
+            .load_state("supervise-running")
+            .unwrap()
+            .unwrap()
+            .state,
+        CampaignState::Completed
+    );
+}
+
+#[test]
+fn supervisor_prunes_old_terminal_campaigns_beyond_retention() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let old_campaign = make_campaign(
+        "old-terminal",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let new_campaign = make_campaign(
+        "new-terminal",
+        &fx.sha,
+        vec![sample_step("add-beta", "src/beta.rs", "Add beta.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &old_campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&old_campaign).unwrap();
+    runner.start(&new_campaign).unwrap();
+    let mut old_state = runner.load_state("old-terminal").unwrap().unwrap();
+    old_state.state = CampaignState::Completed;
+    old_state.end_time = Some("100".to_string());
+    runner.save_state(&old_state).unwrap();
+    let mut new_state = runner.load_state("new-terminal").unwrap().unwrap();
+    new_state.state = CampaignState::Completed;
+    new_state.end_time = Some("4900".to_string());
+    runner.save_state(&new_state).unwrap();
+    let clock = TestClock {
+        now: Cell::new(5_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.cleanup.len(), 1);
+    assert_eq!(report.cleanup[0].campaign_id, "old-terminal");
+    assert!(runner.load_state("old-terminal").unwrap().is_none());
+    assert!(
+        !fx.workspaces
+            .join("campaign-old-terminal")
+            .join("repo")
+            .exists()
+    );
+    assert!(runner.load_state("new-terminal").unwrap().is_some());
+}
+
+#[test]
+fn supervisor_removes_stale_orphan_repository_leases() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, Vec::new());
+    let campaign = make_campaign(
+        "lease-anchor",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let lease_dir = fx.root.join("state/campaigns/.repository-leases");
+    fs::create_dir_all(&lease_dir).unwrap();
+    fs::write(
+        lease_dir.join("fixture.json"),
+        r#"{
+  "campaign_id": "missing-campaign",
+  "repository_id": "fixture",
+  "pid": 1,
+  "acquired_at": "1",
+  "heartbeat": "1",
+  "heartbeat_seconds": 10,
+  "action_timeout_seconds": 60
+}
+"#,
+    )
+    .unwrap();
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let supervisor = CampaignSupervisor::new(CampaignSupervisorDependencies {
+        runner: &runner,
+        clock: &clock,
+        state_root: fx.root.clone(),
+        workspace_root: fx.workspaces.clone(),
+        operations: OperationsConfig {
+            schema_version: "rack-ai/operations/v1".to_string(),
+            supervisor: SupervisorConfig {
+                scan_interval_seconds: 10,
+                resume_running_campaigns: true,
+            },
+            retention: RetentionConfig {
+                max_terminal_campaign_age_seconds: 3_600,
+                retain_terminal_campaigns: 1,
+            },
+        },
+    })
+    .unwrap();
+
+    let report = supervisor.run_once().unwrap();
+    assert_eq!(report.cleanup.len(), 1);
+    assert_eq!(report.cleanup[0].action, "remove_orphan_repository_lease");
+    assert!(!lease_dir.join("fixture.json").exists());
 }
 
 #[test]

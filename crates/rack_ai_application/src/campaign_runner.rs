@@ -12,20 +12,13 @@ use rack_ai_domain::GitSha;
 use rack_ai_domain::RepositoryId;
 use serde::Serialize;
 
-use crate::assert_step_paths_permitted;
-use crate::campaign_digest;
-use crate::durable_file::append_line;
-use crate::atomic_write;
-use crate::CampaignLock;
-use crate::repair_instruction;
-use crate::review_attempt;
-use crate::source_paths;
 use crate::AttemptKind;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
 use crate::CampaignEvent;
 use crate::CampaignHealth;
 use crate::CampaignLeaseStore;
+use crate::CampaignLock;
 use crate::CampaignRevisionDocument;
 use crate::CampaignState;
 use crate::CampaignStatus;
@@ -57,6 +50,13 @@ use crate::StepStatusRecord;
 use crate::UnixClock;
 use crate::WorkspaceExecutor;
 use crate::WorkspacePath;
+use crate::assert_step_paths_permitted;
+use crate::atomic_write;
+use crate::campaign_digest;
+use crate::durable_file::append_line;
+use crate::repair_instruction;
+use crate::review_attempt;
+use crate::source_paths;
 
 pub struct CampaignRunnerDependencies<'a> {
     pub registry: &'a dyn RepositoryRegistry,
@@ -217,7 +217,11 @@ impl<'a> CampaignRunner<'a> {
             }
         }
         for step in disk.steps {
-            if !merged.steps.iter().any(|candidate| candidate.step_id == step.step_id) {
+            if !merged
+                .steps
+                .iter()
+                .any(|candidate| candidate.step_id == step.step_id)
+            {
                 merged.steps.push(step);
             }
         }
@@ -232,10 +236,7 @@ impl<'a> CampaignRunner<'a> {
 
     fn save_state_unlocked(&self, state: &CampaignStatus) -> Result<(), String> {
         let json = serde_json::to_string_pretty(state).map_err(|error| error.to_string())?;
-        atomic_write(
-            &self.state_path(&state.campaign_id),
-            &format!("{json}\n"),
-        )
+        atomic_write(&self.state_path(&state.campaign_id), &format!("{json}\n"))
     }
 
     pub fn log_event(&self, event: CampaignEvent) -> Result<(), String> {
@@ -388,10 +389,7 @@ impl<'a> CampaignRunner<'a> {
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
         let campaign_json =
             serde_json::to_string_pretty(campaign).map_err(|error| error.to_string())?;
-        atomic_write(
-            &dir.join("campaign.json"),
-            &format!("{campaign_json}\n"),
-        )?;
+        atomic_write(&dir.join("campaign.json"), &format!("{campaign_json}\n"))?;
         let now = self.now_text();
         let state = CampaignStatus {
             schema_version: "rack-ai/campaign/v1".to_string(),
@@ -484,9 +482,9 @@ impl<'a> CampaignRunner<'a> {
         }
 
         if !matches!(
-        state.state,
-        CampaignState::Completed | CampaignState::Cancelled | CampaignState::Expired
-    ) {
+            state.state,
+            CampaignState::Completed | CampaignState::Cancelled | CampaignState::Expired
+        ) {
             state.state = CampaignState::Cancelled;
             state.end_time = Some(self.now_text());
             state.blocked_reason = Some("operator_cancelled".to_string());
@@ -553,8 +551,7 @@ impl<'a> CampaignRunner<'a> {
             .map(|step| step.id.clone())
             .collect::<Vec<_>>();
         let revision_path = self.campaign_dir(campaign_id).join("revisions.jsonl");
-        let revision_json =
-            serde_json::to_string(&revision).map_err(|error| error.to_string())?;
+        let revision_json = serde_json::to_string(&revision).map_err(|error| error.to_string())?;
         append_line(&revision_path, &revision_json)?;
         for step in revision.steps {
             state.steps.push(pending_step(&step));
@@ -833,11 +830,7 @@ impl<'a> CampaignRunner<'a> {
             match self.run_acceptance(campaign, state, step) {
                 Ok(value) => value,
                 Err(error) if is_executor_error(&error) => {
-                    self.block_in_place(
-                        state,
-                        FailureClassification::ExecutorUnavailable,
-                        error,
-                    )?;
+                    self.block_in_place(state, FailureClassification::ExecutorUnavailable, error)?;
                     return Ok(StepOutcome::Stopped);
                 }
                 Err(error) => return Err(error),
@@ -1157,8 +1150,7 @@ impl<'a> CampaignRunner<'a> {
                     let model_review = reviewer.review(&model_request);
                     drop(_review_heartbeat);
 
-                    let review_dir =
-                        self.attempt_dir(&state.campaign_id, &step.id, attempt_number);
+                    let review_dir = self.attempt_dir(&state.campaign_id, &step.id, attempt_number);
                     fs::create_dir_all(&review_dir).map_err(|error| error.to_string())?;
 
                     let model_review_packet = match &model_review {
@@ -1186,10 +1178,7 @@ impl<'a> CampaignRunner<'a> {
                         }),
                     };
 
-                    write_json(
-                        review_dir.join("model-review.json"),
-                        &model_review_packet,
-                    )?;
+                    write_json(review_dir.join("model-review.json"), &model_review_packet)?;
 
                     match model_review {
                         Ok(result) => {
@@ -1256,12 +1245,9 @@ impl<'a> CampaignRunner<'a> {
                     review = pre_commit_review;
                     last_review = Some(review.clone());
                 } else {
-                    if let Some(stopped) = self.checkpoint(
-                        campaign,
-                        state,
-                        step,
-                        Some(attempt_number),
-                    )? {
+                    if let Some(stopped) =
+                        self.checkpoint(campaign, state, step, Some(attempt_number))?
+                    {
                         self.persist_attempt(
                             state,
                             step,
@@ -1593,9 +1579,10 @@ impl<'a> CampaignRunner<'a> {
             let read = ReadFileRequest::new(PathBuf::from(&state.worktree_path), workspace_path)
                 .with_timeout_seconds(request.timeout_seconds);
             if let Ok(result) = self.executor.read_file(&read) {
-                request
-                    .diff
-                    .push_str(&format!("\n--- /dev/null\n+++ b/{path}\n{}", result.content()));
+                request.diff.push_str(&format!(
+                    "\n--- /dev/null\n+++ b/{path}\n{}",
+                    result.content()
+                ));
                 request.diff_stat.push_str(&format!("\n{path} | new file"));
             }
         }
@@ -1616,20 +1603,22 @@ impl<'a> CampaignRunner<'a> {
         let action = action.to_string();
         let interval = Duration::from_secs(heartbeat_seconds.clamp(1, 30));
         let (stop_tx, stop_rx) = mpsc::channel();
-        let thread = thread::spawn(move || loop {
-            match stop_rx.recv_timeout(interval) {
-                Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    if update_background_state_heartbeat(
-                        &state_root,
-                        &campaign_id,
-                        step_id.as_deref(),
-                        worker_id.as_deref(),
-                        &action,
-                    )
-                    .is_err()
-                    {
-                        break;
+        let thread = thread::spawn(move || {
+            loop {
+                match stop_rx.recv_timeout(interval) {
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {
+                        if update_background_state_heartbeat(
+                            &state_root,
+                            &campaign_id,
+                            step_id.as_deref(),
+                            worker_id.as_deref(),
+                            &action,
+                        )
+                        .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
             }
@@ -1638,6 +1627,17 @@ impl<'a> CampaignRunner<'a> {
             stop: Some(stop_tx),
             thread: Some(thread),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn test_background_state_heartbeat(
+        &self,
+        campaign_id: &str,
+        step_id: Option<&str>,
+        worker_id: Option<&str>,
+        action: &str,
+    ) -> Result<(), String> {
+        update_background_state_heartbeat(&self.state_root, campaign_id, step_id, worker_id, action)
     }
 
     fn snapshot_checked(&self, state: &CampaignStatus) -> Result<GitEvidence, String> {
@@ -1971,7 +1971,8 @@ fn update_background_state_heartbeat(
     let state_path = campaign_dir.join("state.json");
     let _lock = CampaignLock::acquire(&campaign_dir)?;
     let content = fs::read_to_string(&state_path).map_err(|error| error.to_string())?;
-    let mut state = serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
+    let mut state =
+        serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
     if !matches!(state.state, CampaignState::Running) {
         return Err(format!("campaign {campaign_id} is no longer running"));
     }

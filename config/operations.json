@@ -1,0 +1,11 @@
+{
+  "schema_version": "rack-ai/operations/v1",
+  "supervisor": {
+    "scan_interval_seconds": 30,
+    "resume_running_campaigns": true
+  },
+  "retention": {
+    "max_terminal_campaign_age_seconds": 604800,
+    "retain_terminal_campaigns": 20
+  }
+}

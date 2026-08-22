@@ -6,9 +6,9 @@ use std::path::Path;
 use std::path::PathBuf;
 
 pub fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
-    let parent = path.parent().ok_or_else(|| {
-        format!("cannot write {} without a parent directory", path.display())
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| format!("cannot write {} without a parent directory", path.display()))?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let tmp = temporary_path(path);
     {
@@ -94,8 +94,8 @@ fn temporary_path(path: &Path) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use super::atomic_write;
     use super::CampaignLock;
+    use super::atomic_write;
     use std::fs;
     use std::sync::Arc;
     use std::thread;

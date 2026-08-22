@@ -127,7 +127,7 @@ impl DirectCoderWorker {
 
     fn build_prompt(&self, task: &str) -> String {
         format!(
-                "Using your tools, complete the following task exactly as requested.\n\n\
+            "Using your tools, complete the following task exactly as requested.\n\n\
     Worker identity:\n\
     - Your assigned model id is `{}`.\n\
     - This model id is authoritative.\n\
@@ -138,21 +138,20 @@ impl DirectCoderWorker {
     - After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n\
     - Do not write the word COMPLETE into any project file unless explicitly asked.\n\n\
     Task:\n{}",
-            self.model_id,
-            task
+            self.model_id, task
         )
     }
 
     fn call_api(&self, messages: &[Value], request_timeout: Duration) -> Result<Value, String> {
         let payload = json!({
-        "model": self.model_id,
-        "messages": messages,
-        "tools": self.tool_definitions(),
-        "tool_choice": "auto",
-        "stream": false,
-        "temperature": 0,
-        "max_tokens": 1024,
-    });
+            "model": self.model_id,
+            "messages": messages,
+            "tools": self.tool_definitions(),
+            "tool_choice": "auto",
+            "stream": false,
+            "temperature": 0,
+            "max_tokens": 1024,
+        });
 
         let turn_timeout = request_timeout.min(Duration::from_secs(60));
 

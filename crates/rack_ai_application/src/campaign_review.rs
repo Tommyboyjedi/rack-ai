@@ -1,12 +1,12 @@
-use crate::campaign_paths::assert_authorized_paths;
-use crate::campaign_paths::required_prefix_satisfied;
-use crate::source_paths;
 use crate::CampaignStep;
 use crate::CampaignStepKind;
 use crate::CoordinatorReview;
 use crate::CoordinatorReviewDisposition;
 use crate::FailureClassification;
 use crate::GitEvidence;
+use crate::campaign_paths::assert_authorized_paths;
+use crate::campaign_paths::required_prefix_satisfied;
+use crate::source_paths;
 
 pub struct ReviewInput<'a> {
     pub step: &'a CampaignStep,
@@ -230,9 +230,10 @@ fn required_artifacts_changed(step: &CampaignStep, changed: &[String]) -> bool {
     if step.acceptance.required_artifacts.is_empty() {
         return true;
     }
-    step.acceptance.required_artifacts.iter().any(|artifact| {
-        required_prefix_satisfied(changed, artifact).unwrap_or(false)
-    })
+    step.acceptance
+        .required_artifacts
+        .iter()
+        .any(|artifact| required_prefix_satisfied(changed, artifact).unwrap_or(false))
 }
 
 fn retryable(
@@ -265,10 +266,10 @@ fn terminal(
 
 #[cfg(test)]
 mod tests {
+    use super::ReviewInput;
     use super::looks_like_markdown_tool_call;
     use super::repair_instruction;
     use super::review_attempt;
-    use super::ReviewInput;
     use crate::CampaignStep;
     use crate::CampaignStepKind;
     use crate::CoordinatorReviewDisposition;

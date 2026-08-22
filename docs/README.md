@@ -16,3 +16,6 @@ The current change command is a Milestone 1–2 pilot: isolated worktree, Podman
 The target repository is the workload; Rack AI remains the control plane and does not self-modify as part of a normal change job.
 
 `docs/autonomous-campaign-runner-contract.md` is the implementation contract for the next feature: a bounded, restartable, operator-controlled, local-only campaign runner for unattended external-repository work.
+
+
+`docs/rack-operations.md` is the headless operating runbook for unattended supervision, restart, retention, and safe upgrade behavior.
