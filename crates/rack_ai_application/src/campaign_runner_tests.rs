@@ -262,6 +262,9 @@ struct HostExecutor {
     writes: Mutex<Vec<String>>,
     poison_path: Option<String>,
     read_error: Option<String>,
+    command_stdout: Option<String>,
+    command_stderr: Option<String>,
+    command_exit_code: i32,
 }
 
 impl HostExecutor {
@@ -270,6 +273,9 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: None,
             read_error: None,
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
         }
     }
     fn with_poison(path: &str) -> Self {
@@ -277,6 +283,9 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: Some(path.to_string()),
             read_error: None,
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
         }
     }
     fn with_read_error(error: &str) -> Self {
@@ -284,6 +293,20 @@ impl HostExecutor {
             writes: Mutex::new(Vec::new()),
             poison_path: None,
             read_error: Some(error.to_string()),
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
+        }
+    }
+
+    fn with_command_failure(stdout: &str, stderr: &str, exit_code: i32) -> Self {
+        Self {
+            writes: Mutex::new(Vec::new()),
+            poison_path: None,
+            read_error: None,
+            command_stdout: Some(stdout.to_string()),
+            command_stderr: Some(stderr.to_string()),
+            command_exit_code: exit_code,
         }
     }
 }
@@ -320,11 +343,23 @@ impl WorkspaceExecutor for HostExecutor {
             let path = request.worktree_path().join(poison);
             fs::write(path, "poison\n").map_err(|error| error.to_string())?;
         }
-        let failed = request.argv().iter().any(|item| item == "FAIL");
-        Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
+        let failed =
+            request.argv().iter().any(|item| item == "FAIL") || self.command_exit_code != 0;
+        let mut evidence = CommandEvidence::new(
             request.argv().to_vec(),
-            if failed { 1 } else { 0 },
-        )))
+            if failed {
+                self.command_exit_code.max(1)
+            } else {
+                0
+            },
+        );
+        if let Some(stdout) = &self.command_stdout {
+            evidence = evidence.with_stdout(stdout.clone());
+        }
+        if let Some(stderr) = &self.command_stderr {
+            evidence = evidence.with_stderr(stderr.clone());
+        }
+        Ok(WorkspaceExecutionResult::new(evidence))
     }
 }
 
@@ -713,6 +748,55 @@ fn repair_and_fallback_bounds_then_stop() {
             .unwrap()
             .contains("Do not broaden")
     );
+}
+
+#[test]
+fn acceptance_stderr_reaches_bounded_repair_instruction_and_fallback_task() {
+    let fx = fixture();
+    let stderr = (0..20)
+        .map(|index| format!("error line {index}: mismatched types"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let stdout = (0..8)
+        .map(|index| format!("note line {index}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let executor = HostExecutor::with_command_failure(&stdout, &stderr, 101);
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+            write_attempt("src/alpha.rs", "pub fn alpha() -> u8 { 1 }\n"),
+        ],
+    );
+    let campaign = make_campaign(
+        "acceptance-evidence",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+
+    assert_eq!(state.steps[0].attempts.len(), 3);
+    let repair_instruction = state.steps[0].attempts[0]
+        .repair_instruction
+        .as_deref()
+        .unwrap();
+    assert!(repair_instruction.contains("Failing command:"));
+    assert!(repair_instruction.contains("Exit code: 101"));
+    assert!(repair_instruction.contains("stderr:"));
+    assert!(repair_instruction.contains("error line 0: mismatched types"));
+    assert!(repair_instruction.contains("stdout:"));
+    assert!(repair_instruction.contains("note line 0"));
+    assert!(repair_instruction.contains("[truncated]"));
+    assert!(!repair_instruction.contains("error line 19: mismatched types"));
+
+    let seen_tasks = implementer.seen_tasks();
+    assert!(seen_tasks[1].contains("Failing command: true"));
+    assert!(seen_tasks[1].contains("Exit code: 101"));
+    assert!(seen_tasks[2].contains("Failing command: true"));
+    assert!(seen_tasks[2].contains("[truncated]"));
 }
 
 #[test]

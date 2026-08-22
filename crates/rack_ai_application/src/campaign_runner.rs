@@ -912,6 +912,7 @@ impl<'a> CampaignRunner<'a> {
         let mut fallback_left = campaign.worker_policy.fallback_attempts;
         let mut last_review: Option<CoordinatorReview> = None;
         let mut last_evidence_summary = String::new();
+        let mut last_commands: Vec<CommandEvidence> = Vec::new();
         let mut last_attempt = 0usize;
         loop {
             if let Some(stopped) = self.checkpoint(campaign, state, step, None)? {
@@ -987,7 +988,9 @@ impl<'a> CampaignRunner<'a> {
             let task = match kind {
                 AttemptKind::Primary => step.task.clone(),
                 _ => match &last_review {
-                    Some(review) => repair_instruction(step, review, &last_evidence_summary),
+                    Some(review) => {
+                        repair_instruction(step, review, &last_evidence_summary, &last_commands)
+                    }
                     None => step.task.clone(),
                 },
             };
@@ -1122,6 +1125,7 @@ impl<'a> CampaignRunner<'a> {
                 };
             let evidence = self.snapshot_checked(state)?;
             last_evidence_summary = evidence.diff_stat().to_string();
+            last_commands = commands.clone();
             state.current_action = Some("coordinator_review".to_string());
             self.heartbeat(state)?;
             self.emit(
@@ -1222,8 +1226,12 @@ impl<'a> CampaignRunner<'a> {
                 }
             }
             if review.disposition == CoordinatorReviewDisposition::RejectedRetryable {
-                review.repair_instruction =
-                    Some(repair_instruction(step, &review, evidence.diff_stat()));
+                review.repair_instruction = Some(repair_instruction(
+                    step,
+                    &review,
+                    evidence.diff_stat(),
+                    &commands,
+                ));
             }
             if review.disposition == CoordinatorReviewDisposition::RejectedRetryable {
                 if let Some(classification) = review.classification {
