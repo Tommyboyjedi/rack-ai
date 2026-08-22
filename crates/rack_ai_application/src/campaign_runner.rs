@@ -1045,45 +1045,68 @@ impl<'a> CampaignRunner<'a> {
                         runtime.endpoint.clone(),
                         runtime.api_model_id.clone(),
                     );
-            self.emit(
-                &state.campaign_id,
-                Some(&step.id),
-                Some(attempt_number),
-                Some(runtime.worker_id.as_str()),
-                "model_request_started",
-                "calling model-backed implementer",
-                Some(state),
-            )?;
-            let _heartbeat_guard = self.leases.start_background_heartbeat(
-                &state.campaign_id,
-                &state.repository_id,
-                campaign.limits.heartbeat_seconds,
-            );
-            let _state_heartbeat = self.start_background_state_heartbeat(
-                &state.campaign_id,
-                Some(&step.id),
-                Some(runtime.worker_id.as_str()),
-                "model_request",
-                campaign.limits.heartbeat_seconds,
-            );
+            let transport_recovery_started_at = self.clock.now_unix();
+            let mut transport_recovery_attempts = 0usize;
+            let implement_result = loop {
+                self.emit(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(attempt_number),
+                    Some(runtime.worker_id.as_str()),
+                    "model_request_started",
+                    "calling model-backed implementer",
+                    Some(state),
+                )?;
+                let _heartbeat_guard = self.leases.start_background_heartbeat(
+                    &state.campaign_id,
+                    &state.repository_id,
+                    campaign.limits.heartbeat_seconds,
+                );
+                let _state_heartbeat = self.start_background_state_heartbeat(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(runtime.worker_id.as_str()),
+                    "model_request",
+                    campaign.limits.heartbeat_seconds,
+                );
 
-            let _container_scope =
-                self.bind_container_scope(&state.campaign_id, Some(&step.id), "model_request");
-            let implement_result = match self.implementer.implement(&implement_request) {
-                Ok(result) => result,
-                Err(error) => implementer_error_result(error),
+                let _container_scope =
+                    self.bind_container_scope(&state.campaign_id, Some(&step.id), "model_request");
+                let implement_result = match self.implementer.implement(&implement_request) {
+                    Ok(result) => result,
+                    Err(error) => implementer_error_result(error),
+                };
+
+                drop(_heartbeat_guard);
+                self.emit(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(attempt_number),
+                    Some(runtime.worker_id.as_str()),
+                    "model_request_completed",
+                    "implementer returned",
+                    Some(state),
+                )?;
+                if let Some(error) = implement_result.worker_error() {
+                    if is_transient_worker_transport_error(error) {
+                        match self.recover_after_transient_model_request_failure(
+                            campaign,
+                            state,
+                            step,
+                            runtime.worker_id.as_str(),
+                            &mut transport_recovery_attempts,
+                            transport_recovery_started_at,
+                            error,
+                        )? {
+                            RecoveryHealthOutcome::Healthy { .. } => continue,
+                            RecoveryHealthOutcome::Stopped(stopped) => {
+                                return Ok(stopped_from(stopped));
+                            }
+                        }
+                    }
+                }
+                break implement_result;
             };
-
-            drop(_heartbeat_guard);
-            self.emit(
-                &state.campaign_id,
-                Some(&step.id),
-                Some(attempt_number),
-                Some(runtime.worker_id.as_str()),
-                "model_request_completed",
-                "implementer returned",
-                Some(state),
-            )?;
             if let Some(stopped) = self.checkpoint(campaign, state, step, None)? {
                 self.persist_partial_failure(
                     state,
@@ -1845,6 +1868,81 @@ impl<'a> CampaignRunner<'a> {
         Ok(state)
     }
 
+    fn recover_after_transient_model_request_failure(
+        &self,
+        campaign: &Campaign,
+        state: &mut CampaignStatus,
+        step: &CampaignStep,
+        worker_id: &str,
+        recovery_attempts: &mut usize,
+        recovery_started_at: u64,
+        error: &str,
+    ) -> Result<RecoveryHealthOutcome, String> {
+        *recovery_attempts += 1;
+        let elapsed = self.clock.now_unix().saturating_sub(recovery_started_at);
+        if *recovery_attempts >= self.worker_recovery_max_attempts
+            || elapsed >= self.worker_recovery_max_wait_seconds
+        {
+            let blocked = self.block(
+                state.clone(),
+                FailureClassification::ModelUnavailable,
+                format!(
+                    "worker endpoint {worker_id} remained inference-unready after bounded recovery wait (attempt {}/{}, elapsed {}s): {}",
+                    *recovery_attempts,
+                    self.worker_recovery_max_attempts,
+                    elapsed,
+                    error
+                ),
+            )?;
+            *state = blocked.clone();
+            return Ok(RecoveryHealthOutcome::Stopped(blocked));
+        }
+        state.current_action = Some("dependency_recovery_wait".to_string());
+        state.error_message = Some(format!(
+            "worker endpoint {worker_id} transient model-request startup failure after attempt {}/{}: {}",
+            *recovery_attempts, self.worker_recovery_max_attempts, error
+        ));
+        self.save_state(state)?;
+        self.emit(
+            &state.campaign_id,
+            Some(&step.id),
+            Some(state.current_attempt),
+            Some(worker_id),
+            "dependency_recovery_waiting",
+            format!(
+                "worker endpoint {worker_id} transient model-request startup failure after attempt {}/{}: {}",
+                *recovery_attempts,
+                self.worker_recovery_max_attempts,
+                error
+            ),
+            Some(state),
+        )?;
+        if self.recovery_checkpoint(campaign, state)?.is_some() {
+            return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
+        }
+        let delay = recovery_delay_seconds(
+            &self.worker_recovery_retry_delays_seconds,
+            *recovery_attempts,
+        );
+        self.sleeper.sleep_seconds(delay);
+        if self.recovery_checkpoint(campaign, state)?.is_some() {
+            return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
+        }
+        state.current_action = Some("model_request".to_string());
+        state.error_message = None;
+        self.save_state(state)?;
+        self.emit(
+            &state.campaign_id,
+            Some(&step.id),
+            Some(state.current_attempt),
+            Some(worker_id),
+            "dependency_recovery_ready",
+            "retrying model request after transient worker startup failure",
+            Some(state),
+        )?;
+        Ok(RecoveryHealthOutcome::Healthy { waited: true })
+    }
+
     fn recover_worker_health(
         &self,
         campaign: &Campaign,
@@ -2359,6 +2457,16 @@ fn implementer_error_result(error: String) -> ImplementChangeResult {
     } else {
         ImplementChangeResult::new(String::new()).with_worker_error(error)
     }
+}
+
+fn is_transient_worker_transport_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+    lower.contains("connection refused")
+        || lower.contains("peer disconnected")
+        || lower.contains("connection reset")
+        || lower.contains("reset by peer")
+        || lower.contains("peer reset")
+        || lower.contains("temporary http transport failure")
 }
 
 fn empty_evidence(sha: &str) -> Result<GitEvidence, String> {

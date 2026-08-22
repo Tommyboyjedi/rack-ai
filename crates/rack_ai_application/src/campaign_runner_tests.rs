@@ -664,6 +664,17 @@ fn empty_attempt(output: &str) -> ScriptedAttempt {
     }
 }
 
+fn error_attempt(error: &str) -> ScriptedAttempt {
+    ScriptedAttempt {
+        match_worker: None,
+        writes: Vec::new(),
+        output: String::new(),
+        error: Some(error.to_string()),
+        protocol_error: None,
+        executor_kind: None,
+    }
+}
+
 #[test]
 fn two_step_campaign_creates_two_local_commits() {
     let fx = fixture();
@@ -2081,6 +2092,151 @@ fn recovery_wait_honors_pause_before_any_attempt_runs() {
     assert!(paused.pause_requested);
     assert!(paused.steps[0].attempts.is_empty());
     assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn transient_model_request_transport_failure_reenters_bounded_recovery_and_continues_same_attempt()
+{
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("io: Peer disconnected"),
+            write_attempt(
+                "src/alpha.rs",
+                "pub fn alpha() -> u8 { 1 }
+",
+            ),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-retry-success",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.current_attempt, 1);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(completed.steps[0].attempts[0].attempt, 1);
+    assert_eq!(implementer.seen_tasks().len(), 2);
+    assert_eq!(sleeper.sleeps(), vec![5]);
+    let events = fs::read_to_string(runner.events_path(&campaign.campaign_id)).unwrap();
+    assert!(events.contains("dependency_recovery_waiting"));
+    assert!(events.contains("dependency_recovery_ready"));
+}
+
+#[test]
+fn persistent_transient_model_request_failure_eventually_blocks_without_consuming_attempt() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("connection refused"),
+            error_attempt("connection refused"),
+            error_attempt("connection refused"),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-retry-blocks",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer: &implementer,
+        executor: &executor,
+        workers: &WORKERS,
+        health: &Healthy,
+        clock: &clock,
+        sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: 10,
+        worker_recovery_retry_delays_seconds: vec![1, 1],
+        worker_recovery_max_attempts: 3,
+        state_root: fx.root.clone(),
+        container_tracker: None,
+    });
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("model_unavailable"));
+    assert_eq!(blocked.current_attempt, 1);
+    assert!(blocked.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 3);
+    assert_eq!(sleeper.sleeps(), vec![1, 1]);
+}
+
+#[test]
+fn non_transport_worker_failure_does_not_enter_dependency_recovery() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            error_attempt("worker produced invalid code output"),
+            error_attempt("worker produced invalid code output"),
+            error_attempt("worker produced invalid code output"),
+        ],
+    );
+    let campaign = make_campaign(
+        "transport-non-retry",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &Healthy,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(implementer.seen_tasks().len(), 3);
+    assert!(sleeper.sleeps().is_empty());
+    let events = fs::read_to_string(runner.events_path(&campaign.campaign_id)).unwrap();
+    assert!(!events.contains("dependency_recovery_waiting"));
 }
 
 #[test]
