@@ -165,6 +165,10 @@ impl FlakyWorkerHealth {
 
 impl CampaignHealth for FlakyWorkerHealth {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        self.assert_worker("local-primary")
+    }
+
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
         let remaining_successes = self.startup_successes.get();
         if remaining_successes > 0 {
             self.startup_successes.set(remaining_successes - 1);
@@ -197,6 +201,9 @@ impl CampaignHealth for Healthy {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
         Ok(())
     }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn assert_executor(&self) -> Result<(), String> {
         Ok(())
     }
@@ -208,6 +215,9 @@ impl CampaignHealth for UnhealthyExecutor {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
         Ok(())
     }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
+        Ok(())
+    }
     fn assert_executor(&self) -> Result<(), String> {
         Err("podman is not available".to_string())
     }
@@ -217,6 +227,9 @@ struct UnhealthyWorker;
 
 impl CampaignHealth for UnhealthyWorker {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Err("worker endpoint is unhealthy: local-coder".to_string())
+    }
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
         Err("worker endpoint is unhealthy: local-coder".to_string())
     }
     fn assert_executor(&self) -> Result<(), String> {
@@ -369,6 +382,28 @@ impl GitWorktree for ProcessGit {
         assert_campaign_git_args(&commit)?;
         git(request.worktree_path(), &commit)?;
         GitSha::new(git(request.worktree_path(), &["rev-parse", "HEAD"])?)
+    }
+
+    fn reset_managed_worktree(
+        &self,
+        worktree_path: &Path,
+        expected_head: &GitSha,
+        dirty_paths: &[String],
+    ) -> Result<(), String> {
+        let current = GitSha::new(git(worktree_path, &["rev-parse", "HEAD"])?)?;
+        if &current != expected_head {
+            return Err("worktree HEAD changed before managed reset".to_string());
+        }
+        for relative in dirty_paths {
+            let path = worktree_path.join(relative);
+            if path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+            } else if path.exists() {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+        }
+        git(worktree_path, &["reset", "--hard", expected_head.value()])?;
+        Ok(())
     }
 }
 
@@ -1071,6 +1106,9 @@ fn recovery_after_accepted_step_does_not_repeat_commit() {
         health: &Healthy,
         clock: &clock,
         sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
         container_tracker: None,
     });
@@ -1454,6 +1492,9 @@ fn supervisor_resumes_running_campaigns() {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -1524,6 +1565,9 @@ fn supervisor_prunes_old_terminal_campaigns_beyond_retention() {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -1590,6 +1634,9 @@ fn supervisor_removes_stale_orphan_repository_leases() {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -1657,6 +1704,9 @@ fn supervisor_cleans_stale_campaign_container_before_resume() {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -1736,6 +1786,9 @@ fn supervisor_prunes_auxiliary_artifacts_beyond_retention() {
                 scan_interval_seconds: 10,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -1790,6 +1843,9 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
         health: &Healthy,
         clock: &clock,
         sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
         container_tracker: None,
     })
@@ -1918,7 +1974,7 @@ fn recovery_retries_worker_health_until_endpoint_recovers_without_consuming_atte
     assert_eq!(completed.state, CampaignState::Completed);
     assert_eq!(completed.steps[0].attempts.len(), 1);
     assert_eq!(implementer.seen_tasks().len(), 1);
-    assert_eq!(sleeper.sleeps(), vec![2, 4]);
+    assert_eq!(sleeper.sleeps(), vec![5, 10]);
     let events = fs::read_to_string(runner.events_path("recovery-waits")).unwrap();
     assert!(events.contains("dependency_recovery_waiting"));
     assert!(events.contains("dependency_recovery_ready"));
@@ -1942,6 +1998,11 @@ fn recovery_blocks_after_bounded_worker_health_wait_without_consuming_attempts()
     let health = FlakyWorkerHealth::new(
         1,
         vec![
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
             "io: Peer disconnected",
             "io: Peer disconnected",
             "io: Peer disconnected",
@@ -1975,7 +2036,10 @@ fn recovery_blocks_after_bounded_worker_health_wait_without_consuming_attempts()
     );
     assert!(blocked.steps[0].attempts.is_empty());
     assert_eq!(implementer.seen_tasks().len(), 0);
-    assert_eq!(sleeper.sleeps(), vec![2, 4, 8, 16, 30]);
+    assert_eq!(
+        sleeper.sleeps(),
+        vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120]
+    );
 }
 
 #[test]
@@ -2017,6 +2081,226 @@ fn recovery_wait_honors_pause_before_any_attempt_runs() {
     assert!(paused.pause_requested);
     assert!(paused.steps[0].attempts.is_empty());
     assert_eq!(implementer.seen_tasks().len(), 0);
+}
+
+#[test]
+fn recovery_resets_interrupted_campaign_owned_dirty_worktree_and_continues() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-owned-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let started = runner.start(&campaign).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("src/alpha.rs"),
+        "partial
+",
+    )
+    .unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("src/reboot.rs"),
+        "partial
+",
+    )
+    .unwrap();
+    fs::write(
+        fx.repo.join("src/source_only.rs"),
+        "leave me alone
+",
+    )
+    .unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert!(
+        !Path::new(&completed.worktree_path)
+            .join("src/reboot.rs")
+            .exists()
+    );
+    let evidence = fs::read_to_string(
+        runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("recovery-reset-attempt-1.json"),
+    )
+    .unwrap();
+    assert!(evidence.contains("src/alpha.rs"));
+    assert!(evidence.contains("src/reboot.rs"));
+    assert!(evidence.contains("model_request"));
+    assert_eq!(
+        fs::read_to_string(fx.repo.join("src/source_only.rs")).unwrap(),
+        "leave me alone
+"
+    );
+}
+
+#[test]
+fn recovery_blocks_on_unknown_dirty_worktree_changes() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-unknown-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    let started = runner.start(&campaign).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 1;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&started.worktree_path).join("README.md"),
+        "partial
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert!(
+        !runner
+            .campaign_dir(&campaign.campaign_id)
+            .join("recovery-reset-attempt-1.json")
+            .exists()
+    );
+}
+
+#[test]
+fn recovery_never_discards_dirty_worktree_after_accepted_commit() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "reboot-accepted-dirty",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+    let mut state = runner.load_state(&campaign.campaign_id).unwrap().unwrap();
+    state.state = CampaignState::Running;
+    state.current_step_id = Some("add-alpha".to_string());
+    state.current_attempt = 2;
+    state.current_worker = Some("local-coder".to_string());
+    state.current_action = Some("model_request".to_string());
+    state.current_head_sha = completed.current_head_sha.clone();
+    runner.save_state(&state).unwrap();
+    fs::write(
+        Path::new(&completed.worktree_path).join("src/alpha.rs"),
+        "dirty again
+",
+    )
+    .unwrap();
+
+    let blocked = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("continuity_failed"));
+    assert_eq!(
+        fs::read_to_string(Path::new(&completed.worktree_path).join("src/alpha.rs")).unwrap(),
+        "dirty again
+"
+    );
+}
+
+#[test]
+fn recovery_uses_configured_worker_recovery_policy() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-custom-policy",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(
+        1,
+        vec![
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+        ],
+    );
+    let runner = CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer: &implementer,
+        executor: &executor,
+        workers: &WORKERS,
+        health: &health,
+        clock: &clock,
+        sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: 40,
+        worker_recovery_retry_delays_seconds: vec![7, 11, 13],
+        worker_recovery_max_attempts: 4,
+        state_root: fx.root.clone(),
+        container_tracker: None,
+    });
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run(&campaign.campaign_id).unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(sleeper.sleeps(), vec![7, 11, 13]);
 }
 
 #[test]
@@ -2234,6 +2518,9 @@ fn supervisor_isolates_incompatible_campaign_state_and_continues() {
                 scan_interval_seconds: 30,
                 resume_running_campaigns: true,
                 podman_command: "true".to_string(),
+                worker_recovery_max_wait_seconds: 900,
+                worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+                worker_recovery_max_attempts: 11,
             },
             retention: RetentionConfig {
                 max_terminal_campaign_age_seconds: 3_600,
@@ -2309,6 +2596,9 @@ fn make_runner<'a>(
             now: Cell::new(now),
         })),
         sleeper: &NOOP_SLEEPER,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
         container_tracker: None,
     })
@@ -2336,6 +2626,9 @@ fn make_runner_with_support<'a>(
         health,
         clock,
         sleeper,
+        worker_recovery_max_wait_seconds: 900,
+        worker_recovery_retry_delays_seconds: vec![5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+        worker_recovery_max_attempts: 11,
         state_root: fx.root.clone(),
         container_tracker: None,
     })

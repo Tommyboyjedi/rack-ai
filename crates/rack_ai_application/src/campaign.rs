@@ -280,6 +280,7 @@ pub trait CampaignWorkerCatalog {
 
 pub trait CampaignHealth {
     fn assert_workers(&self, primary: &str, fallback: &str) -> Result<(), String>;
+    fn assert_worker(&self, worker_id: &str) -> Result<(), String>;
     fn assert_executor(&self) -> Result<(), String>;
 }
 

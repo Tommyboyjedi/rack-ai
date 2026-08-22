@@ -29,4 +29,13 @@ pub trait GitWorktree {
     fn commit_local(&self, _request: &CampaignCommitRequest) -> Result<GitSha, String> {
         Err("git commit_local is not supported".to_string())
     }
+
+    fn reset_managed_worktree(
+        &self,
+        _worktree_path: &Path,
+        _expected_head: &GitSha,
+        _dirty_paths: &[String],
+    ) -> Result<(), String> {
+        Err("git reset_managed_worktree is not supported".to_string())
+    }
 }

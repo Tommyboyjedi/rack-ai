@@ -3,7 +3,10 @@
   "supervisor": {
     "scan_interval_seconds": 30,
     "resume_running_campaigns": true,
-    "podman_command": "podman"
+    "podman_command": "podman",
+    "worker_recovery_max_wait_seconds": 900,
+    "worker_recovery_retry_delays_seconds": [5, 10, 15, 20, 30, 45, 60, 90, 120, 120],
+    "worker_recovery_max_attempts": 11
   },
   "retention": {
     "max_terminal_campaign_age_seconds": 604800,

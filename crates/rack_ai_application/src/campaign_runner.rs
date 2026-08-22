@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -57,13 +58,10 @@ use crate::assert_step_paths_permitted;
 use crate::atomic_write;
 use crate::campaign_digest;
 use crate::durable_file::append_line;
+use crate::path_is_authorized;
 use crate::repair_instruction;
 use crate::review_attempt;
 use crate::source_paths;
-
-const RECOVERY_HEALTH_MAX_ATTEMPTS: usize = 6;
-const RECOVERY_HEALTH_MAX_WAIT_SECONDS: u64 = 90;
-const RECOVERY_DELAY_SECONDS: [u64; 5] = [2, 4, 8, 16, 30];
 
 pub struct CampaignRunnerDependencies<'a> {
     pub registry: &'a dyn RepositoryRegistry,
@@ -75,6 +73,9 @@ pub struct CampaignRunnerDependencies<'a> {
     pub health: &'a dyn CampaignHealth,
     pub clock: &'a dyn UnixClock,
     pub sleeper: &'a dyn RecoverySleeper,
+    pub worker_recovery_max_wait_seconds: u64,
+    pub worker_recovery_retry_delays_seconds: Vec<u64>,
+    pub worker_recovery_max_attempts: usize,
     pub state_root: PathBuf,
     pub container_tracker: Option<Arc<CampaignContainerTracker>>,
 }
@@ -89,6 +90,9 @@ pub struct CampaignRunner<'a> {
     health: &'a dyn CampaignHealth,
     clock: &'a dyn UnixClock,
     sleeper: &'a dyn RecoverySleeper,
+    worker_recovery_max_wait_seconds: u64,
+    worker_recovery_retry_delays_seconds: Vec<u64>,
+    worker_recovery_max_attempts: usize,
     state_root: PathBuf,
     leases: CampaignLeaseStore,
     container_tracker: Option<Arc<CampaignContainerTracker>>,
@@ -131,6 +135,20 @@ struct ReviewPacketDocument {
     commit_sha: Option<String>,
 }
 
+#[derive(Serialize)]
+struct RecoveryResetEvidenceDocument {
+    step_id: String,
+    attempt: usize,
+    worker_id: Option<String>,
+    action: String,
+    reason: String,
+    dirty_paths: Vec<String>,
+    diff_stat: String,
+    diff_excerpt: String,
+    current_head_sha: String,
+    worktree_path: String,
+}
+
 impl<'a> CampaignRunner<'a> {
     pub fn new(dependencies: CampaignRunnerDependencies<'a>) -> Self {
         let leases = CampaignLeaseStore::new(dependencies.state_root.clone());
@@ -144,6 +162,9 @@ impl<'a> CampaignRunner<'a> {
             health: dependencies.health,
             clock: dependencies.clock,
             sleeper: dependencies.sleeper,
+            worker_recovery_max_wait_seconds: dependencies.worker_recovery_max_wait_seconds,
+            worker_recovery_retry_delays_seconds: dependencies.worker_recovery_retry_delays_seconds,
+            worker_recovery_max_attempts: dependencies.worker_recovery_max_attempts,
             state_root: dependencies.state_root,
             leases,
             container_tracker: dependencies.container_tracker,
@@ -1755,14 +1776,23 @@ impl<'a> CampaignRunner<'a> {
         let snapshot = self.git.snapshot(&worktree)?;
         let dirty = source_paths(snapshot.changed_paths());
         if !dirty.is_empty() {
-            return self.block(
-                state,
-                FailureClassification::ContinuityFailed,
-                format!(
-                    "worktree has uncommitted source changes: {}",
-                    dirty.join(", ")
-                ),
-            );
+            if self.can_reset_interrupted_worktree(campaign, &state, &worktree, &dirty)? {
+                self.persist_recovery_reset_evidence(&state, &snapshot, &dirty)?;
+                self.git
+                    .reset_managed_worktree(&worktree, &head, &dirty)
+                    .map_err(|error| {
+                        format!("failed to reconcile interrupted worktree: {error}")
+                    })?;
+            } else {
+                return self.block(
+                    state,
+                    FailureClassification::ContinuityFailed,
+                    format!(
+                        "worktree has uncommitted source changes: {}",
+                        dirty.join(", ")
+                    ),
+                );
+            }
         }
         self.refresh_budget(campaign, &mut state);
         if state.remaining_seconds == 0 {
@@ -1823,23 +1853,26 @@ impl<'a> CampaignRunner<'a> {
         let recovery_started_at = self.clock.now_unix();
         let mut attempts = 0usize;
         let mut waited = false;
+        let worker_id = state
+            .current_worker
+            .as_deref()
+            .unwrap_or(&campaign.worker_policy.primary)
+            .to_string();
         loop {
-            match self.health.assert_workers(
-                &campaign.worker_policy.primary,
-                &campaign.worker_policy.fallback,
-            ) {
+            match self.health.assert_worker(&worker_id) {
                 Ok(()) => return Ok(RecoveryHealthOutcome::Healthy { waited }),
                 Err(error) => {
                     attempts += 1;
                     let elapsed = self.clock.now_unix().saturating_sub(recovery_started_at);
-                    if attempts >= RECOVERY_HEALTH_MAX_ATTEMPTS
-                        || elapsed >= RECOVERY_HEALTH_MAX_WAIT_SECONDS
+                    if attempts >= self.worker_recovery_max_attempts
+                        || elapsed >= self.worker_recovery_max_wait_seconds
                     {
                         let blocked = self.block(
                             state.clone(),
                             FailureClassification::ModelUnavailable,
                             format!(
-                                "worker endpoints unavailable after bounded recovery wait (attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}, elapsed {elapsed}s): {error}"
+                                "worker endpoint {worker_id} unavailable after bounded recovery wait (attempt {attempts}/{}, elapsed {elapsed}s): {error}",
+                                self.worker_recovery_max_attempts
                             ),
                         )?;
                         *state = blocked.clone();
@@ -1848,24 +1881,29 @@ impl<'a> CampaignRunner<'a> {
                     waited = true;
                     state.current_action = Some("dependency_recovery_wait".to_string());
                     state.error_message = Some(format!(
-                        "worker endpoint recovery pending after attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}: {error}"
+                        "worker endpoint {worker_id} recovery pending after attempt {attempts}/{}: {error}",
+                        self.worker_recovery_max_attempts
                     ));
                     self.save_state(state)?;
                     self.emit(
                         &state.campaign_id,
-                        None,
-                        None,
-                        None,
+                        state.current_step_id.as_deref(),
+                        Some(state.current_attempt),
+                        Some(worker_id.as_str()),
                         "dependency_recovery_waiting",
                         format!(
-                            "worker endpoint recovery pending after attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}: {error}"
+                            "worker endpoint {worker_id} recovery pending after attempt {attempts}/{}: {error}",
+                            self.worker_recovery_max_attempts
                         ),
                         Some(state),
                     )?;
                     if self.recovery_checkpoint(campaign, state)?.is_some() {
                         return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
                     }
-                    let delay = recovery_delay_seconds(attempts);
+                    let delay = recovery_delay_seconds(
+                        &self.worker_recovery_retry_delays_seconds,
+                        attempts,
+                    );
                     self.sleeper.sleep_seconds(delay);
                     if self.recovery_checkpoint(campaign, state)?.is_some() {
                         return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
@@ -1920,6 +1958,94 @@ impl<'a> CampaignRunner<'a> {
             return Ok(Some(state.clone()));
         }
         Ok(None)
+    }
+
+    fn can_reset_interrupted_worktree(
+        &self,
+        campaign: &Campaign,
+        state: &CampaignStatus,
+        worktree: &Path,
+        dirty: &[String],
+    ) -> Result<bool, String> {
+        if state.state != CampaignState::Running {
+            return Ok(false);
+        }
+        let action = state.current_action.as_deref().unwrap_or_default();
+        if !matches!(
+            action,
+            "model_request" | "repair" | "fallback" | "git_inspect" | "acceptance_command"
+        ) {
+            return Ok(false);
+        }
+        let step_id = match state.current_step_id.as_deref() {
+            Some(value) => value,
+            None => return Ok(false),
+        };
+        let step_index = match find_step_index(&state.steps, step_id) {
+            Ok(index) => index,
+            Err(_) => return Ok(false),
+        };
+        let step_state = &state.steps[step_index];
+        if step_state.accepted_commit.is_some()
+            || state.current_attempt <= step_state.attempts.len()
+        {
+            return Ok(false);
+        }
+        let workspace_root = self.registry.workspace_root()?;
+        if !worktree.starts_with(workspace_root.as_path()) {
+            return Ok(false);
+        }
+        let step = campaign
+            .steps
+            .iter()
+            .find(|candidate| candidate.id == step_id)
+            .ok_or_else(|| format!("missing campaign step: {step_id}"))?;
+        for path in dirty {
+            if !path_is_authorized(path, &campaign.permitted_paths)? {
+                return Ok(false);
+            }
+            if !path_is_authorized(path, &step.allowed_paths)? {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    fn persist_recovery_reset_evidence(
+        &self,
+        state: &CampaignStatus,
+        snapshot: &GitEvidence,
+        dirty: &[String],
+    ) -> Result<(), String> {
+        let action = state
+            .current_action
+            .clone()
+            .unwrap_or_else(|| "unknown".to_string());
+        let step_id = state
+            .current_step_id
+            .clone()
+            .unwrap_or_else(|| "unknown-step".to_string());
+        let reason = format!(
+            "reset interrupted campaign-owned dirty worktree before recovery resume during {action}"
+        );
+        write_json(
+            self.campaign_dir(&state.campaign_id).join(format!(
+                "recovery-reset-attempt-{}.json",
+                state.current_attempt
+            )),
+            &RecoveryResetEvidenceDocument {
+                step_id,
+                attempt: state.current_attempt,
+                worker_id: state.current_worker.clone(),
+                action,
+                reason,
+                dirty_paths: dirty.to_vec(),
+                diff_stat: snapshot.diff_stat().to_string(),
+                diff_excerpt: bounded_excerpt(snapshot.diff(), 160),
+                current_head_sha: state.current_head_sha.clone(),
+                worktree_path: state.worktree_path.clone(),
+            },
+        )
     }
 
     fn preflight_live(&self, campaign: &Campaign, state: &CampaignStatus) -> Result<(), String> {
@@ -2247,9 +2373,26 @@ fn write_json(path: PathBuf, value: &impl Serialize) -> Result<(), String> {
     fs::write(path, format!("{json}\n")).map_err(|error| error.to_string())
 }
 
-fn recovery_delay_seconds(attempt: usize) -> u64 {
+fn recovery_delay_seconds(delays: &[u64], attempt: usize) -> u64 {
+    if delays.is_empty() {
+        return 1;
+    }
     let index = attempt
         .saturating_sub(1)
-        .min(RECOVERY_DELAY_SECONDS.len().saturating_sub(1));
-    RECOVERY_DELAY_SECONDS[index]
+        .min(delays.len().saturating_sub(1));
+    delays[index]
+}
+
+fn bounded_excerpt(value: &str, max_lines: usize) -> String {
+    let mut lines = value.lines();
+    let excerpt = lines
+        .by_ref()
+        .take(max_lines)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if lines.next().is_some() {
+        format!("{excerpt}\n... truncated ...")
+    } else {
+        excerpt
+    }
 }

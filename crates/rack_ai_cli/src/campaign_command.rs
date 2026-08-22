@@ -79,15 +79,18 @@ struct LiveHealth {
 
 impl CampaignHealth for LiveHealth {
     fn assert_workers(&self, primary: &str, fallback: &str) -> Result<(), String> {
+        self.assert_worker(primary)?;
+        self.assert_worker(fallback)
+    }
+
+    fn assert_worker(&self, worker_id: &str) -> Result<(), String> {
         let probe = EndpointProbe;
         let workers = RegistryWorkers {
             repo_root: self.repo_root.clone(),
         };
-        for worker_id in [primary, fallback] {
-            let runtime = workers.runtime(worker_id)?;
-            if !probe.check_models(runtime.endpoint.as_str())? {
-                return Err(format!("worker endpoint is unhealthy: {worker_id}"));
-            }
+        let runtime = workers.runtime(worker_id)?;
+        if !probe.check_models(runtime.endpoint.as_str())? {
+            return Err(format!("worker endpoint is unhealthy: {worker_id}"));
         }
         Ok(())
     }
@@ -106,6 +109,10 @@ struct PermissiveHealth;
 
 impl CampaignHealth for PermissiveHealth {
     fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn assert_worker(&self, _worker_id: &str) -> Result<(), String> {
         Ok(())
     }
 
@@ -600,6 +607,7 @@ where
 {
     let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root.clone()));
     let policy = registry.command_policy()?;
+    let operations = load_operations_config(&repo_root)?;
     let git = GitCommandWorktree;
     let executor_config = registry.executor_config()?;
     let container_tracker = Arc::new(CampaignContainerTracker::new(state_root.clone()));
@@ -639,6 +647,12 @@ where
         health,
         clock: &clock,
         sleeper: &sleeper,
+        worker_recovery_max_wait_seconds: operations.supervisor.worker_recovery_max_wait_seconds,
+        worker_recovery_retry_delays_seconds: operations
+            .supervisor
+            .worker_recovery_retry_delays_seconds
+            .clone(),
+        worker_recovery_max_attempts: operations.supervisor.worker_recovery_max_attempts,
         state_root,
         container_tracker: Some(container_tracker),
     });

@@ -137,11 +137,41 @@ impl GitWorktree for GitCommandWorktree {
             &["rev-parse", "HEAD"],
         )?)
     }
+
+    fn reset_managed_worktree(
+        &self,
+        worktree_path: &Path,
+        expected_head: &GitSha,
+        dirty_paths: &[String],
+    ) -> Result<(), String> {
+        let actual_head = GitSha::new(run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?)?;
+        if &actual_head != expected_head {
+            return Err("worktree HEAD changed before managed reset".to_string());
+        }
+        for relative in dirty_paths {
+            let path = managed_dirty_path(worktree_path, relative)?;
+            if path.is_dir() {
+                fs::remove_dir_all(&path).map_err(|error| error.to_string())?;
+            } else if path.exists() {
+                fs::remove_file(&path).map_err(|error| error.to_string())?;
+            }
+        }
+        GitCommand::run(worktree_path, &["reset", "--hard", expected_head.value()])?;
+        Ok(())
+    }
 }
 
 fn run_campaign_git(repo: &Path, args: &[&str]) -> Result<String, String> {
     assert_campaign_git_args(args)?;
     GitCommand::run(repo, args)
+}
+
+fn managed_dirty_path(worktree_path: &Path, relative: &str) -> Result<std::path::PathBuf, String> {
+    let path = worktree_path.join(relative);
+    if !path.starts_with(worktree_path) {
+        return Err(format!("dirty path escapes managed worktree: {relative}"));
+    }
+    Ok(path)
 }
 
 fn branch_change_id(branch_name: &str) -> &str {
