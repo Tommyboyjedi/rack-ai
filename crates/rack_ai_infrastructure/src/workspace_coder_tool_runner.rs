@@ -48,7 +48,15 @@ impl WorkspaceCoderToolRunner<'_> {
                 .with_content(content)
                 .with_timeout_seconds(self.context.timeout_seconds()),
         )?;
-        Ok(result.evidence().stdout().to_string())
+
+        if result.evidence().exit_code() != 0 {
+            return Err(format!(
+                "write failed: {}",
+                result.evidence().stderr()
+            ));
+        }
+
+        Ok("File written successfully".to_string())
     }
 
     fn run_read(&self, arguments: &Value) -> Result<String, String> {

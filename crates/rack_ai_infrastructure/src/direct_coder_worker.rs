@@ -127,7 +127,19 @@ impl DirectCoderWorker {
 
     fn build_prompt(&self, task: &str) -> String {
         format!(
-            "Using your tools, complete the following task exactly as requested.\n\nRules:\n- Use actual tool calls.\n- Do not describe tool calls in plain text.\n- After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n- Do not write the word COMPLETE into any project file unless explicitly asked.\n\nTask:\n{task}"
+                "Using your tools, complete the following task exactly as requested.\n\n\
+    Worker identity:\n\
+    - Your assigned model id is `{}`.\n\
+    - This model id is authoritative.\n\
+    - Do not infer, guess, or probe your model identity using shell commands, environment variables, files, or tools.\n\n\
+    Rules:\n\
+    - Use actual tool calls.\n\
+    - Do not describe tool calls in plain text.\n\
+    - After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n\
+    - Do not write the word COMPLETE into any project file unless explicitly asked.\n\n\
+    Task:\n{}",
+            self.model_id,
+            task
         )
     }
 
@@ -139,13 +151,16 @@ impl DirectCoderWorker {
         "tool_choice": "auto",
         "stream": false,
         "temperature": 0,
+        "max_tokens": 1024,
     });
+
+        let turn_timeout = request_timeout.min(Duration::from_secs(60));
 
         let config = ureq::Agent::config_builder()
             .timeout_connect(Some(Duration::from_secs(5)))
-            .timeout_send_request(Some(request_timeout))
-            .timeout_recv_response(Some(request_timeout))
-            .timeout_global(Some(request_timeout))
+            .timeout_send_request(Some(turn_timeout))
+            .timeout_recv_response(Some(turn_timeout))
+            .timeout_global(Some(turn_timeout))
             .build();
 
         let agent = config.new_agent();
@@ -243,6 +258,8 @@ mod tests {
         let prompt = worker.build_prompt("Write file");
         assert!(prompt.contains("Use actual tool calls."));
         assert!(prompt.contains("Task:\nWrite file"));
+        assert!(prompt.contains("Your assigned model id is `local-coder`."));
+        assert!(prompt.contains("This model id is authoritative."));
     }
 
     #[test]

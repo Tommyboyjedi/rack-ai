@@ -516,6 +516,7 @@ fn spawn_detached_runner(
     Ok(())
 }
 
+#[cfg(test)]
 fn create_campaign_after_detach_preflight(
     detach: bool,
     preflight: impl FnOnce() -> Result<(), String>,

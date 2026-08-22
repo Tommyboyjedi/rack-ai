@@ -52,7 +52,7 @@ impl ChangeImplementer for PodmanChangeImplementer {
             Ok(text) => {
                 let mut result = ImplementChangeResult::new(text.clone())
                     .with_tool_calls(tool_calls)
-                    .with_executor_kind("workspace".to_string());
+                    .with_executor_kind("podman".to_string());
                 if looks_like_markdown_tool_call(&text) {
                     result = result.with_protocol_error(
                         "worker emitted markdown or JSON text instead of a valid tool call"
@@ -65,7 +65,7 @@ impl ChangeImplementer for PodmanChangeImplementer {
                 let lower = error.to_lowercase();
                 let mut result = ImplementChangeResult::new(String::new())
                     .with_tool_calls(tool_calls)
-                    .with_executor_kind("workspace".to_string());
+                    .with_executor_kind("podman".to_string());
                 if lower.contains("tool")
                     || lower.contains("finish_reason")
                     || lower.contains("markdown")
