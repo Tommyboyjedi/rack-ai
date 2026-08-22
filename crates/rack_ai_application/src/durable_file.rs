@@ -20,7 +20,8 @@ pub fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     fs::rename(&tmp, path).map_err(|error| {
         let _ = fs::remove_file(&tmp);
         error.to_string()
-    })
+    })?;
+    sync_directory(parent)
 }
 
 pub fn append_line(path: &Path, line: &str) -> Result<(), String> {
@@ -44,14 +45,36 @@ impl CampaignLock {
     pub fn acquire(campaign_dir: &Path) -> Result<Self, String> {
         fs::create_dir_all(campaign_dir).map_err(|error| error.to_string())?;
         let path = campaign_dir.join("control.lock");
+        Self::acquire_path(&path)
+    }
+
+    pub fn acquire_path(path: &Path) -> Result<Self, String> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
         let file = OpenOptions::new()
             .create(true)
             .read(true)
             .write(true)
-            .open(&path)
+            .open(path)
             .map_err(|error| error.to_string())?;
         file.lock().map_err(|error| error.to_string())?;
         Ok(Self { _file: file })
+    }
+}
+
+fn sync_directory(path: &Path) -> Result<(), String> {
+    #[cfg(target_family = "unix")]
+    {
+        File::open(path)
+            .map_err(|error| error.to_string())?
+            .sync_all()
+            .map_err(|error| error.to_string())
+    }
+    #[cfg(not(target_family = "unix"))]
+    {
+        let _ = path;
+        Ok()
     }
 }
 

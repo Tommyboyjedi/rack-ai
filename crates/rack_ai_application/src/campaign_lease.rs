@@ -6,6 +6,7 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::atomic_write;
+use crate::CampaignLock;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -117,6 +118,7 @@ impl CampaignLeaseStore {
         heartbeat_seconds: u64,
         action_timeout_seconds: u64,
     ) -> Result<CampaignLeaseRecord, String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         self.fail_if_held(
             &self.campaign_lease_path(campaign_id),
             campaign_id,
@@ -151,6 +153,7 @@ impl CampaignLeaseStore {
         repository_id: &str,
         now: &str,
     ) -> Result<(), String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         let path = self.campaign_lease_path(campaign_id);
         if !path.exists() {
             return Err(format!("campaign lease missing: {campaign_id}"));
@@ -166,6 +169,7 @@ impl CampaignLeaseStore {
     }
 
     pub fn release(&self, campaign_id: &str, repository_id: &str) -> Result<(), String> {
+        let _lock = CampaignLock::acquire_path(&self.lease_lock_path())?;
         let campaign_path = self.campaign_lease_path(campaign_id);
         if campaign_path.exists() {
             fs::remove_file(&campaign_path).map_err(|error| error.to_string())?;
@@ -179,6 +183,13 @@ impl CampaignLeaseStore {
             }
         }
         Ok(())
+    }
+
+    fn lease_lock_path(&self) -> PathBuf {
+        self.state_root
+            .join("state")
+            .join("campaigns")
+            .join(".lease.lock")
     }
 
     fn fail_if_repository_held(
