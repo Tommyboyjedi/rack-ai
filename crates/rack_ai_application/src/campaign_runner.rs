@@ -1,5 +1,8 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rack_ai_domain::AcceptanceCommand;
 use rack_ai_domain::AllowedPath;
@@ -79,6 +82,22 @@ pub struct CampaignRunner<'a> {
     state_root: PathBuf,
     leases: CampaignLeaseStore,
     reviewer: Option<&'a dyn ImplementationReviewer>,
+}
+
+struct StateHeartbeatGuard {
+    stop: Option<mpsc::Sender<()>>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl Drop for StateHeartbeatGuard {
+    fn drop(&mut self) {
+        if let Some(stop) = self.stop.take() {
+            let _ = stop.send(());
+        }
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -991,6 +1010,13 @@ impl<'a> CampaignRunner<'a> {
                 &state.repository_id,
                 campaign.limits.heartbeat_seconds,
             );
+            let _state_heartbeat = self.start_background_state_heartbeat(
+                &state.campaign_id,
+                Some(&step.id),
+                Some(runtime.worker_id.as_str()),
+                "model_request",
+                campaign.limits.heartbeat_seconds,
+            );
 
             let implement_result = match self.implementer.implement(&implement_request) {
                 Ok(result) => result,
@@ -1108,6 +1134,13 @@ impl<'a> CampaignRunner<'a> {
                     let _review_heartbeat = self.leases.start_background_heartbeat(
                         &state.campaign_id,
                         &state.repository_id,
+                        campaign.limits.heartbeat_seconds,
+                    );
+                    let _review_state_heartbeat = self.start_background_state_heartbeat(
+                        &state.campaign_id,
+                        Some(&step.id),
+                        Some(runtime.worker_id.as_str()),
+                        "coordinator_review",
                         campaign.limits.heartbeat_seconds,
                     );
                     let mut model_request = ModelReviewRequest::from_step(
@@ -1485,6 +1518,13 @@ impl<'a> CampaignRunner<'a> {
             &state.repository_id,
             campaign.limits.heartbeat_seconds,
         );
+        let _state_heartbeat = self.start_background_state_heartbeat(
+            &state.campaign_id,
+            Some(&step.id),
+            state.current_worker.as_deref(),
+            "acceptance_command",
+            campaign.limits.heartbeat_seconds,
+        );
         let mut commands = Vec::new();
         let mut succeeded = true;
         for argv in &step.acceptance.commands {
@@ -1558,6 +1598,45 @@ impl<'a> CampaignRunner<'a> {
                     .push_str(&format!("\n--- /dev/null\n+++ b/{path}\n{}", result.content()));
                 request.diff_stat.push_str(&format!("\n{path} | new file"));
             }
+        }
+    }
+
+    fn start_background_state_heartbeat(
+        &self,
+        campaign_id: &str,
+        step_id: Option<&str>,
+        worker_id: Option<&str>,
+        action: &str,
+        heartbeat_seconds: u64,
+    ) -> StateHeartbeatGuard {
+        let state_root = self.state_root.clone();
+        let campaign_id = campaign_id.to_string();
+        let step_id = step_id.map(str::to_string);
+        let worker_id = worker_id.map(str::to_string);
+        let action = action.to_string();
+        let interval = Duration::from_secs(heartbeat_seconds.clamp(1, 30));
+        let (stop_tx, stop_rx) = mpsc::channel();
+        let thread = thread::spawn(move || loop {
+            match stop_rx.recv_timeout(interval) {
+                Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if update_background_state_heartbeat(
+                        &state_root,
+                        &campaign_id,
+                        step_id.as_deref(),
+                        worker_id.as_deref(),
+                        &action,
+                    )
+                    .is_err()
+                    {
+                        break;
+                    }
+                }
+            }
+        });
+        StateHeartbeatGuard {
+            stop: Some(stop_tx),
+            thread: Some(thread),
         }
     }
 
@@ -1879,6 +1958,38 @@ impl<'a> CampaignRunner<'a> {
 enum StepOutcome {
     Accepted,
     Stopped,
+}
+
+fn update_background_state_heartbeat(
+    state_root: &PathBuf,
+    campaign_id: &str,
+    step_id: Option<&str>,
+    worker_id: Option<&str>,
+    action: &str,
+) -> Result<(), String> {
+    let campaign_dir = state_root.join("state").join("campaigns").join(campaign_id);
+    let state_path = campaign_dir.join("state.json");
+    let _lock = CampaignLock::acquire(&campaign_dir)?;
+    let content = fs::read_to_string(&state_path).map_err(|error| error.to_string())?;
+    let mut state = serde_json::from_str::<CampaignStatus>(&content).map_err(|error| error.to_string())?;
+    if !matches!(state.state, CampaignState::Running) {
+        return Err(format!("campaign {campaign_id} is no longer running"));
+    }
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .to_string();
+    state.last_heartbeat = now;
+    state.current_action = Some(action.to_string());
+    if let Some(step_id) = step_id {
+        state.current_step_id = Some(step_id.to_string());
+    }
+    if let Some(worker_id) = worker_id {
+        state.current_worker = Some(worker_id.to_string());
+    }
+    let json = serde_json::to_string_pretty(&state).map_err(|error| error.to_string())?;
+    atomic_write(&state_path, &format!("{json}\n"))
 }
 
 fn stopped_from(_state: CampaignStatus) -> StepOutcome {
