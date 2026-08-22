@@ -1,18 +1,170 @@
-# GPU Rack Agent Notes
+# AGENTS.md — rack-ai Agent Rules
 
-This repository runs on `gpurack` and uses two local OpenAI-compatible endpoints:
-- `local-primary` on the RTX 4060 Ti (`http://127.0.0.1:8017/v1`)
-- `local-coder` on the RTX 2060 (`http://127.0.0.1:8018/v1`)
+These rules apply to all human and AI changes to `rack-ai`.
 
-Temporary workaround: do not use JCode swarm to delegate cross-provider coding work.
+For rationale, architecture detail, safety invariants, and verification guidance, see:
 
-JCode v0.78.1 is currently unreliable here for swarm delegation because workers can lose swarm state and can also inherit the coordinator endpoint while switching to the `local-coder` model, which routes `local-coder` requests to `8017` and fails.
+`docs/engineering-contract.md`
 
-Current working rack pattern:
-- `bin/rack-primary` uses fresh direct JCode runs for the 4060 Ti coordinator path.
-- `bin/rack-coder` uses a repo-local direct OpenAI-compatible tool loop against the 2060 worker endpoint.
-- `bin/rack-coder-jcode` preserves the old direct JCode coder wrapper as a fallback/debug path.
-- `bin/rack-coordinator` can either use an explicit template or auto-select one from the request.
-- `bin/rack-task` runs those specs and writes structured manifests under `logs/runs/`.
+## Current Runtime
 
-Treat this as temporary rack glue. Remove it after JCode swarm delegation is trustworthy for cross-provider workers.
+- Model runtime: **vLLM**
+- `local-primary` — coordinator, planner, verifier, semantic reviewer, fallback implementer
+    - `http://127.0.0.1:8017/v1`
+- `local-coder` — primary implementation worker
+    - `http://127.0.0.1:8018/v1`
+- Do not replace vLLM with Ollama unless explicitly instructed.
+- Do not use JCode swarm for cross-provider delegation until its provider-rebinding bug has been explicitly proven fixed on this rack.
+
+## Safety Boundaries
+
+- External-repository writes must go through the rootless Podman workspace boundary.
+- Workers must not mutate external repositories through host shell, direct host filesystem writes, JCode shell execution, or other bypass paths.
+- The same rule applies to `local-primary` when acting as fallback implementer.
+- Fail closed on safety, timeout, review, path, lease, state-integrity, protocol, or evidence failures.
+- All model, Podman, command, review, and retry operations must be bounded.
+- Preserve durable campaign state and operator intent.
+- Pause/cancel must be checked immediately before commit; late worker completion must not bypass them.
+- Active long-running work must leave durable liveness evidence, with no intended heartbeat gap over 30 seconds.
+- Do not weaken established safety boundaries for convenience.
+
+## Review Contract
+
+Every implementation attempt must pass:
+
+1. deterministic checks
+2. independent semantic coordinator review
+
+Rules:
+- deterministic checks run first
+- rejected review must block acceptance
+- malformed/error/timeout review fails closed
+- fallback implementations receive a fresh review
+- `local-primary` fallback work is not auto-trusted
+- reviewers must not receive write-capable workspace tools
+- preserve required review request/output/evidence
+
+## Path Safety
+
+- Use parsed/normalized path semantics.
+- Do not authorize raw filesystem paths with naïve string-prefix checks.
+- Reject traversal, absolute paths, malformed paths, prefix collisions, and workspace escape.
+- Fail closed on ambiguous path authorization.
+
+# Rust Programming Standards
+
+## Size and Responsibility
+
+Keep structs, enums, implementation blocks, and major modules small and focused.
+As a default rule, a class-equivalent implementation unit should remain under approximately 100 lines.
+If an implementation grows beyond roughly 100 lines, assume it is carrying too many responsibilities and refactor it into smaller cohesive types/modules/functions.
+
+Exceptions are allowed only where the extra length is mostly declarative rather than behavioural, for example:
+- exhaustive enum matching
+- serialization/schema declarations
+- generated or externally constrained boilerplate
+- compact trait implementations that remain single-purpose
+
+The intent is to prevent large multi-responsibility units, not to satisfy a line counter mechanically.
+
+## General Design
+
+- Prefer composition.
+- Prefer small, cohesive functions and types.
+- Prefer explicit typed domain/request/config objects over unstructured maps or loosely related primitives.
+- If several parameters form one concept, group them into a typed object.
+- Do not apply a rigid parameter-count rule where a small direct Rust signature is clearer.
+- Avoid unexplained magic numbers and magic strings; use constants, enums, configuration, or domain types.
+- Rust `match` may be exhaustive; extract large behavioural branches rather than limiting arm count mechanically.
+- Prefer enums over stringly typed state.
+- Keep public APIs minimal.
+- Keep dependencies explicit.
+- Avoid hidden global state.
+- Avoid premature abstraction.
+- Prefer a little obvious duplication over a complicated abstraction when the shared concept is not stable.
+
+## Errors and Ownership
+
+- Prefer `Result` propagation with useful context.
+- Do not silently swallow errors.
+- Avoid `unwrap()` / `expect()` in production paths unless a clear invariant makes failure genuinely impossible.
+- Prefer clear ownership and explicit state flow.
+- Use shared mutable state, locks, atomics, or interior mutability only where genuinely required.
+- Keep concurrency explicit, bounded, and tested.
+- Avoid unnecessary macros or metaprogramming.
+
+## `unsafe`
+
+Rust `unsafe` is prohibited by default.
+
+Do not introduce:
+- `unsafe` blocks
+- `unsafe fn`
+- `unsafe impl`
+- raw-pointer manipulation
+- unchecked memory access
+
+Any exception requires explicit human approval before implementation, with a documented safety invariant and tests.
+
+Third-party dependencies may internally use `unsafe`; this prohibition applies to code maintained in this repository.
+
+# Testing and Change Discipline
+
+- Add tests for behavioural, bug-fix, safety, timeout, concurrency, state, path, and review changes.
+- Do not weaken, delete, or skip safety tests to make code pass.
+- Important failure modes must be tested directly.
+- Keep changes narrowly scoped.
+- Avoid unrelated refactors and formatting churn.
+- Do not commit `.idea/`, editor state, temporary evidence, logs, model files, build artifacts, or unrelated local configuration.
+- Do not merge PRs unless explicitly instructed.
+- Do not rewrite published history unless explicitly instructed.
+
+Before declaring work complete:
+
+```bash
+cargo test --workspace --offline
+git status
+git diff
+git diff --check
+```
+
+Run all smoke/live tests applicable to the changed behaviour.
+
+For live campaign work, when endpoints are available:
+
+```bash
+RACK_AI_LIVE_SMOKE=1 bash tests/rack_campaign_live_model_smoke.sh
+```
+
+Do not claim live success unless it exits zero and prints:
+
+```text
+rack_campaign_live_model_smoke: ok
+```
+
+## Human Approval Required
+
+Get explicit human approval before:
+- introducing repository `unsafe`
+- weakening a safety boundary
+- enabling host-shell mutation of external repos
+- replacing vLLM
+- re-enabling JCode swarm as the primary cross-provider mechanism
+- removing deterministic or semantic review gates
+- reducing required evidence retention
+- changing the fundamental trust model
+- merging when the task only requested implementation/review
+
+## Default Working Method
+
+1. Inspect the existing code and tests.
+2. Identify the real defect/gap.
+3. Make the smallest coherent fix.
+4. Add/update tests.
+5. Run targeted tests.
+6. Run workspace tests.
+7. Run applicable smoke/live tests.
+8. Inspect the final diff.
+9. Report residual risk honestly.
+
+Prefer boring, explicit, typed, bounded, observable, recoverable code.
