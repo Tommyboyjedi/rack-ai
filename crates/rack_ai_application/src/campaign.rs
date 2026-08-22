@@ -289,6 +289,18 @@ pub trait UnixClock {
 
 pub struct SystemUnixClock;
 
+pub trait RecoverySleeper {
+    fn sleep_seconds(&self, seconds: u64);
+}
+
+pub struct SystemRecoverySleeper;
+
+impl RecoverySleeper for SystemRecoverySleeper {
+    fn sleep_seconds(&self, seconds: u64) {
+        std::thread::sleep(std::time::Duration::from_secs(seconds));
+    }
+}
+
 impl UnixClock for SystemUnixClock {
     fn now_unix(&self) -> u64 {
         std::time::SystemTime::now()

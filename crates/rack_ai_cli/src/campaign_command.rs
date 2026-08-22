@@ -24,6 +24,7 @@ use rack_ai_application::OperationsConfig;
 use rack_ai_application::RepositoryRegistry;
 use rack_ai_application::ScriptedChangeImplementer;
 use rack_ai_application::ScriptedImplementerDocument;
+use rack_ai_application::SystemRecoverySleeper;
 use rack_ai_application::SystemUnixClock;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
@@ -625,6 +626,7 @@ where
     let permissive = PermissiveHealth;
     let health: &dyn CampaignHealth = if skip_live { &permissive } else { &live_health };
     let clock = SystemUnixClock;
+    let sleeper = SystemRecoverySleeper;
     let reviewer = LocalPrimaryReviewer::local_default();
 
     let runner = CampaignRunner::new(CampaignRunnerDependencies {
@@ -636,6 +638,7 @@ where
         workers: &workers,
         health,
         clock: &clock,
+        sleeper: &sleeper,
         state_root,
         container_tracker: Some(container_tracker),
     });

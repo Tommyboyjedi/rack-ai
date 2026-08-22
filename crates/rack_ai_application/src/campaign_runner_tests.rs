@@ -41,6 +41,7 @@ use crate::ModelReviewRequest;
 use crate::ModelReviewResult;
 use crate::OperationsConfig;
 use crate::ReadFileRequest;
+use crate::RecoverySleeper;
 use crate::RegisteredRepository;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
@@ -67,6 +68,118 @@ struct TestClock {
 impl UnixClock for TestClock {
     fn now_unix(&self) -> u64 {
         self.now.get()
+    }
+}
+
+struct NoopSleeper;
+
+impl RecoverySleeper for NoopSleeper {
+    fn sleep_seconds(&self, _seconds: u64) {}
+}
+
+struct RecordingSleeper<'a> {
+    clock: &'a TestClock,
+    sleeps: Mutex<Vec<u64>>,
+}
+
+impl<'a> RecordingSleeper<'a> {
+    fn new(clock: &'a TestClock) -> Self {
+        Self {
+            clock,
+            sleeps: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn sleeps(&self) -> Vec<u64> {
+        self.sleeps.lock().unwrap().clone()
+    }
+}
+
+impl RecoverySleeper for RecordingSleeper<'_> {
+    fn sleep_seconds(&self, seconds: u64) {
+        self.sleeps.lock().unwrap().push(seconds);
+        self.clock
+            .now
+            .set(self.clock.now.get().saturating_add(seconds));
+    }
+}
+
+struct PauseRequestSleeper<'a> {
+    clock: &'a TestClock,
+    state_root: PathBuf,
+    campaign_id: String,
+    triggered: Cell<bool>,
+}
+
+impl<'a> PauseRequestSleeper<'a> {
+    fn new(clock: &'a TestClock, state_root: PathBuf, campaign_id: &str) -> Self {
+        Self {
+            clock,
+            state_root,
+            campaign_id: campaign_id.to_string(),
+            triggered: Cell::new(false),
+        }
+    }
+}
+
+impl RecoverySleeper for PauseRequestSleeper<'_> {
+    fn sleep_seconds(&self, seconds: u64) {
+        self.clock
+            .now
+            .set(self.clock.now.get().saturating_add(seconds));
+        if self.triggered.replace(true) {
+            return;
+        }
+        let path = self
+            .state_root
+            .join("state")
+            .join("campaigns")
+            .join(&self.campaign_id)
+            .join("state.json");
+        let mut value =
+            serde_json::from_str::<serde_json::Value>(&fs::read_to_string(&path).unwrap()).unwrap();
+        value["pause_requested"] = serde_json::Value::Bool(true);
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&value).unwrap()
+                + "
+",
+        )
+        .unwrap();
+    }
+}
+
+struct FlakyWorkerHealth {
+    startup_successes: Cell<usize>,
+    failures: Mutex<Vec<String>>,
+}
+
+impl FlakyWorkerHealth {
+    fn new(startup_successes: usize, failures: Vec<&str>) -> Self {
+        Self {
+            startup_successes: Cell::new(startup_successes),
+            failures: Mutex::new(failures.into_iter().map(str::to_string).collect()),
+        }
+    }
+}
+
+impl CampaignHealth for FlakyWorkerHealth {
+    fn assert_workers(&self, _primary: &str, _fallback: &str) -> Result<(), String> {
+        let remaining_successes = self.startup_successes.get();
+        if remaining_successes > 0 {
+            self.startup_successes.set(remaining_successes - 1);
+            return Ok(());
+        }
+        let mut failures = self.failures.lock().unwrap();
+        if failures.is_empty() {
+            Ok(())
+        } else {
+            Err(failures.remove(0))
+        }
+    }
+
+    fn assert_executor(&self) -> Result<(), String> {
+        Ok(())
     }
 }
 
@@ -164,6 +277,7 @@ struct ProcessGit;
 static PROCESS_GIT: ProcessGit = ProcessGit;
 static ALLOW_ALL: AllowAllPolicy = AllowAllPolicy;
 static WORKERS: StaticWorkers = StaticWorkers;
+static NOOP_SLEEPER: NoopSleeper = NoopSleeper;
 
 struct FailingReviewer;
 static FAILING_REVIEWER: FailingReviewer = FailingReviewer;
@@ -956,6 +1070,7 @@ fn recovery_after_accepted_step_does_not_repeat_commit() {
         workers: &WORKERS,
         health: &Healthy,
         clock: &clock,
+        sleeper: &NOOP_SLEEPER,
         state_root: fx.root.clone(),
         container_tracker: None,
     });
@@ -1674,6 +1789,7 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
         workers: &WORKERS,
         health: &Healthy,
         clock: &clock,
+        sleeper: &NOOP_SLEEPER,
         state_root: fx.root.clone(),
         container_tracker: None,
     })
@@ -1762,6 +1878,145 @@ fn fail_closed_on_expiry_lease_digest_dirty_executor_and_worker() {
     );
     let error = runner.start(&campaign).unwrap_err();
     assert!(error.contains("unhealthy"));
+}
+
+#[test]
+fn recovery_retries_worker_health_until_endpoint_recovers_without_consuming_attempts() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-waits",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(1, vec!["io: Peer disconnected", "io: Peer disconnected"]);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let completed = runner.run("recovery-waits").unwrap();
+
+    assert_eq!(completed.state, CampaignState::Completed);
+    assert_eq!(completed.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(sleeper.sleeps(), vec![2, 4]);
+    let events = fs::read_to_string(runner.events_path("recovery-waits")).unwrap();
+    assert!(events.contains("dependency_recovery_waiting"));
+    assert!(events.contains("dependency_recovery_ready"));
+}
+
+#[test]
+fn recovery_blocks_after_bounded_worker_health_wait_without_consuming_attempts() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
+    let campaign = make_campaign(
+        "recovery-blocks",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = RecordingSleeper::new(&clock);
+    let health = FlakyWorkerHealth::new(
+        1,
+        vec![
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+            "io: Peer disconnected",
+        ],
+    );
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let blocked = runner.run("recovery-blocks").unwrap();
+
+    assert_eq!(blocked.state, CampaignState::Blocked);
+    assert_eq!(blocked.blocked_reason.as_deref(), Some("model_unavailable"));
+    assert!(
+        blocked
+            .error_message
+            .as_deref()
+            .unwrap()
+            .contains("bounded recovery wait")
+    );
+    assert!(blocked.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 0);
+    assert_eq!(sleeper.sleeps(), vec![2, 4, 8, 16, 30]);
+}
+
+#[test]
+fn recovery_wait_honors_pause_before_any_attempt_runs() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }\n",
+        )],
+    );
+    let campaign = make_campaign(
+        "recovery-pause",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        default_policy(),
+    );
+    let clock = TestClock {
+        now: Cell::new(1_000),
+    };
+    let sleeper = PauseRequestSleeper::new(&clock, fx.root.clone(), "recovery-pause");
+    let health = FlakyWorkerHealth::new(1, vec!["io: Peer disconnected", "io: Peer disconnected"]);
+    let runner = make_runner_with_support(
+        &fx,
+        &campaign,
+        &implementer,
+        &executor,
+        &health,
+        &clock,
+        &sleeper,
+    );
+    runner.start(&campaign).unwrap();
+
+    let paused = runner.run("recovery-pause").unwrap();
+
+    assert_eq!(paused.state, CampaignState::Paused);
+    assert!(paused.pause_requested);
+    assert!(paused.steps[0].attempts.is_empty());
+    assert_eq!(implementer.seen_tasks().len(), 0);
 }
 
 #[test]
@@ -2053,6 +2308,34 @@ fn make_runner<'a>(
         clock: Box::leak(Box::new(TestClock {
             now: Cell::new(now),
         })),
+        sleeper: &NOOP_SLEEPER,
+        state_root: fx.root.clone(),
+        container_tracker: None,
+    })
+}
+
+fn make_runner_with_support<'a>(
+    fx: &'a Fixture,
+    _campaign: &Campaign,
+    implementer: &'a ScriptedChangeImplementer<'a>,
+    executor: &'a HostExecutor,
+    health: &'a dyn CampaignHealth,
+    clock: &'a dyn UnixClock,
+    sleeper: &'a dyn RecoverySleeper,
+) -> CampaignRunner<'a> {
+    CampaignRunner::new(CampaignRunnerDependencies {
+        registry: Box::leak(Box::new(TestRegistry::new(
+            fx.repo.clone(),
+            fx.workspaces.clone(),
+        ))),
+        command_policy: &ALLOW_ALL,
+        git: &PROCESS_GIT,
+        implementer,
+        executor,
+        workers: &WORKERS,
+        health,
+        clock,
+        sleeper,
         state_root: fx.root.clone(),
         container_tracker: None,
     })

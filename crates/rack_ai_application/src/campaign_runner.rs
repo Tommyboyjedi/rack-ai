@@ -42,6 +42,7 @@ use crate::ImplementChangeResult;
 use crate::ImplementationReviewer;
 use crate::ModelReviewRequest;
 use crate::ReadFileRequest;
+use crate::RecoverySleeper;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
 use crate::ReviewInput;
@@ -60,6 +61,10 @@ use crate::repair_instruction;
 use crate::review_attempt;
 use crate::source_paths;
 
+const RECOVERY_HEALTH_MAX_ATTEMPTS: usize = 6;
+const RECOVERY_HEALTH_MAX_WAIT_SECONDS: u64 = 90;
+const RECOVERY_DELAY_SECONDS: [u64; 5] = [2, 4, 8, 16, 30];
+
 pub struct CampaignRunnerDependencies<'a> {
     pub registry: &'a dyn RepositoryRegistry,
     pub command_policy: &'a dyn CommandPolicy,
@@ -69,6 +74,7 @@ pub struct CampaignRunnerDependencies<'a> {
     pub workers: &'a dyn CampaignWorkerCatalog,
     pub health: &'a dyn CampaignHealth,
     pub clock: &'a dyn UnixClock,
+    pub sleeper: &'a dyn RecoverySleeper,
     pub state_root: PathBuf,
     pub container_tracker: Option<Arc<CampaignContainerTracker>>,
 }
@@ -82,6 +88,7 @@ pub struct CampaignRunner<'a> {
     workers: &'a dyn CampaignWorkerCatalog,
     health: &'a dyn CampaignHealth,
     clock: &'a dyn UnixClock,
+    sleeper: &'a dyn RecoverySleeper,
     state_root: PathBuf,
     leases: CampaignLeaseStore,
     container_tracker: Option<Arc<CampaignContainerTracker>>,
@@ -136,6 +143,7 @@ impl<'a> CampaignRunner<'a> {
             workers: dependencies.workers,
             health: dependencies.health,
             clock: dependencies.clock,
+            sleeper: dependencies.sleeper,
             state_root: dependencies.state_root,
             leases,
             container_tracker: dependencies.container_tracker,
@@ -1777,11 +1785,23 @@ impl<'a> CampaignRunner<'a> {
         if let Err(error) = self.health.assert_executor() {
             return self.block(state, FailureClassification::ExecutorUnavailable, error);
         }
-        if let Err(error) = self.health.assert_workers(
-            &campaign.worker_policy.primary,
-            &campaign.worker_policy.fallback,
-        ) {
-            return self.block(state, FailureClassification::ModelUnavailable, error);
+        let waited_for_workers = match self.recover_worker_health(campaign, &mut state)? {
+            RecoveryHealthOutcome::Healthy { waited } => waited,
+            RecoveryHealthOutcome::Stopped(stopped) => return Ok(stopped),
+        };
+        if waited_for_workers {
+            state.current_action = Some("recovering".to_string());
+            state.error_message = None;
+            self.save_state(&state)?;
+            self.emit(
+                &state.campaign_id,
+                None,
+                None,
+                None,
+                "dependency_recovery_ready",
+                "worker endpoint recovery completed within bound",
+                Some(&state),
+            )?;
         }
         self.emit(
             &state.campaign_id,
@@ -1793,6 +1813,113 @@ impl<'a> CampaignRunner<'a> {
             Some(&state),
         )?;
         Ok(state)
+    }
+
+    fn recover_worker_health(
+        &self,
+        campaign: &Campaign,
+        state: &mut CampaignStatus,
+    ) -> Result<RecoveryHealthOutcome, String> {
+        let recovery_started_at = self.clock.now_unix();
+        let mut attempts = 0usize;
+        let mut waited = false;
+        loop {
+            match self.health.assert_workers(
+                &campaign.worker_policy.primary,
+                &campaign.worker_policy.fallback,
+            ) {
+                Ok(()) => return Ok(RecoveryHealthOutcome::Healthy { waited }),
+                Err(error) => {
+                    attempts += 1;
+                    let elapsed = self.clock.now_unix().saturating_sub(recovery_started_at);
+                    if attempts >= RECOVERY_HEALTH_MAX_ATTEMPTS
+                        || elapsed >= RECOVERY_HEALTH_MAX_WAIT_SECONDS
+                    {
+                        let blocked = self.block(
+                            state.clone(),
+                            FailureClassification::ModelUnavailable,
+                            format!(
+                                "worker endpoints unavailable after bounded recovery wait (attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}, elapsed {elapsed}s): {error}"
+                            ),
+                        )?;
+                        *state = blocked.clone();
+                        return Ok(RecoveryHealthOutcome::Stopped(blocked));
+                    }
+                    waited = true;
+                    state.current_action = Some("dependency_recovery_wait".to_string());
+                    state.error_message = Some(format!(
+                        "worker endpoint recovery pending after attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}: {error}"
+                    ));
+                    self.save_state(state)?;
+                    self.emit(
+                        &state.campaign_id,
+                        None,
+                        None,
+                        None,
+                        "dependency_recovery_waiting",
+                        format!(
+                            "worker endpoint recovery pending after attempt {attempts}/{RECOVERY_HEALTH_MAX_ATTEMPTS}: {error}"
+                        ),
+                        Some(state),
+                    )?;
+                    if self.recovery_checkpoint(campaign, state)?.is_some() {
+                        return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
+                    }
+                    let delay = recovery_delay_seconds(attempts);
+                    self.sleeper.sleep_seconds(delay);
+                    if self.recovery_checkpoint(campaign, state)?.is_some() {
+                        return Ok(RecoveryHealthOutcome::Stopped(state.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    fn recovery_checkpoint(
+        &self,
+        campaign: &Campaign,
+        state: &mut CampaignStatus,
+    ) -> Result<Option<CampaignStatus>, String> {
+        if let Ok(Some(disk)) = self.load_state(&state.campaign_id) {
+            state.pause_requested = disk.pause_requested;
+            state.cancel_requested = disk.cancel_requested;
+        }
+        self.refresh_budget(campaign, state);
+        self.heartbeat(state)?;
+        if state.cancel_requested {
+            let finished = self.finish(
+                state.clone(),
+                FailureClassification::OperatorCancelled,
+                "cancelled",
+            )?;
+            *state = finished.clone();
+            return Ok(Some(finished));
+        }
+        if state.remaining_seconds == 0 {
+            let finished = self.finish(
+                state.clone(),
+                FailureClassification::CampaignExpired,
+                "campaign expired",
+            )?;
+            *state = finished.clone();
+            return Ok(Some(finished));
+        }
+        if state.pause_requested {
+            state.state = CampaignState::Paused;
+            state.current_action = Some("paused".to_string());
+            self.save_state(state)?;
+            self.emit(
+                &state.campaign_id,
+                None,
+                None,
+                None,
+                "campaign_paused",
+                "paused during dependency recovery wait",
+                Some(state),
+            )?;
+            return Ok(Some(state.clone()));
+        }
+        Ok(None)
     }
 
     fn preflight_live(&self, campaign: &Campaign, state: &CampaignStatus) -> Result<(), String> {
@@ -1996,6 +2123,11 @@ enum StepOutcome {
     Stopped,
 }
 
+enum RecoveryHealthOutcome {
+    Healthy { waited: bool },
+    Stopped(CampaignStatus),
+}
+
 fn update_background_state_heartbeat(
     state_root: &PathBuf,
     campaign_id: &str,
@@ -2113,4 +2245,11 @@ fn empty_evidence(sha: &str) -> Result<GitEvidence, String> {
 fn write_json(path: PathBuf, value: &impl Serialize) -> Result<(), String> {
     let json = serde_json::to_string_pretty(value).map_err(|error| error.to_string())?;
     fs::write(path, format!("{json}\n")).map_err(|error| error.to_string())
+}
+
+fn recovery_delay_seconds(attempt: usize) -> u64 {
+    let index = attempt
+        .saturating_sub(1)
+        .min(RECOVERY_DELAY_SECONDS.len().saturating_sub(1));
+    RECOVERY_DELAY_SECONDS[index]
 }
