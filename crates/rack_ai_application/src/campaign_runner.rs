@@ -43,6 +43,17 @@ use crate::ImplementChangeResult;
 use crate::ImplementationReviewer;
 use crate::ModelReviewRequest;
 use crate::ReadFileRequest;
+use crate::RecoveryAttemptSummary;
+use crate::RecoveryContext;
+use crate::RecoveryDecision;
+use crate::RecoveryDecisionKind;
+use crate::RecoveryFailureKind;
+use crate::RecoveryReasoner;
+use crate::RecoveryReasoningRequest;
+use crate::RecoveryReasoningResult;
+use crate::RecoveryToolAttempt;
+use crate::RecoveryWorkerAction;
+use crate::RecoveryCommandFailure;
 use crate::RecoverySleeper;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
@@ -101,6 +112,7 @@ pub struct CampaignRunner<'a> {
     leases: CampaignLeaseStore,
     container_tracker: Option<Arc<CampaignContainerTracker>>,
     reviewer: Option<&'a dyn ImplementationReviewer>,
+    recovery_reasoner: Option<&'a dyn RecoveryReasoner>,
 }
 
 struct StateHeartbeatGuard {
@@ -160,6 +172,23 @@ struct ReviewerFailure {
     rationale: String,
 }
 
+#[derive(Clone)]
+struct RecoveryTrace {
+    request: RecoveryReasoningRequest,
+    result: Result<RecoveryReasoningResult, String>,
+    fingerprint: String,
+    repeated_failure_count: usize,
+}
+
+struct RecoveryPlanningOutcome {
+    review: CoordinatorReview,
+    next_instruction: Option<String>,
+    prefer_fallback_worker: bool,
+    trace: Option<RecoveryTrace>,
+    fingerprint: String,
+    repeated_failure_count: usize,
+}
+
 fn classify_reviewer_error(error: &str) -> FailureClassification {
     let lower = error.to_lowercase();
     if lower.contains("timeout")
@@ -195,11 +224,20 @@ impl<'a> CampaignRunner<'a> {
             leases,
             container_tracker: dependencies.container_tracker,
             reviewer: None,
+            recovery_reasoner: None,
         }
     }
 
     pub fn with_reviewer(mut self, reviewer: &'a dyn ImplementationReviewer) -> Self {
         self.reviewer = Some(reviewer);
+        self
+    }
+
+    pub fn with_recovery_reasoner(
+        mut self,
+        recovery_reasoner: &'a dyn RecoveryReasoner,
+    ) -> Self {
+        self.recovery_reasoner = Some(recovery_reasoner);
         self
     }
 
@@ -975,6 +1013,10 @@ impl<'a> CampaignRunner<'a> {
         let mut last_evidence_summary = String::new();
         let mut last_commands: Vec<CommandEvidence> = Vec::new();
         let mut last_attempt = 0usize;
+        let mut next_instruction: Option<String> = None;
+        let mut prefer_fallback_next = false;
+        let mut last_failure_fingerprint: Option<String> = None;
+        let mut last_repeated_failure_count = 0usize;
         loop {
             if let Some(stopped) = self.checkpoint(campaign, state, step, None)? {
                 return Ok(stopped_from(stopped));
@@ -987,7 +1029,7 @@ impl<'a> CampaignRunner<'a> {
                 )?;
                 return Ok(StepOutcome::Stopped);
             }
-            let (kind, worker_id, repair_of, fallback_of) = if primary_left > 0 {
+            let (kind, worker_id, repair_of, fallback_of) = if last_review.is_none() && primary_left > 0 {
                 primary_left -= 1;
                 (
                     AttemptKind::Primary,
@@ -995,8 +1037,18 @@ impl<'a> CampaignRunner<'a> {
                     None,
                     None,
                 )
+            } else if prefer_fallback_next && fallback_left > 0 {
+                fallback_left -= 1;
+                prefer_fallback_next = false;
+                (
+                    AttemptKind::Fallback,
+                    campaign.worker_policy.fallback.clone(),
+                    None,
+                    Some(last_attempt),
+                )
             } else if repair_left > 0 {
                 repair_left -= 1;
+                prefer_fallback_next = false;
                 (
                     AttemptKind::Repair,
                     campaign.worker_policy.primary.clone(),
@@ -1005,6 +1057,7 @@ impl<'a> CampaignRunner<'a> {
                 )
             } else if fallback_left > 0 {
                 fallback_left -= 1;
+                prefer_fallback_next = false;
                 (
                     AttemptKind::Fallback,
                     campaign.worker_policy.fallback.clone(),
@@ -1048,12 +1101,14 @@ impl<'a> CampaignRunner<'a> {
             )?;
             let task = match kind {
                 AttemptKind::Primary => step.task.clone(),
-                _ => match &last_review {
-                    Some(review) => {
-                        repair_instruction(step, review, &last_evidence_summary, &last_commands)
-                    }
-                    None => step.task.clone(),
-                },
+                _ => next_instruction
+                    .clone()
+                    .or_else(|| {
+                        last_review.as_ref().map(|review| {
+                            repair_instruction(step, review, &last_evidence_summary, &last_commands)
+                        })
+                    })
+                    .unwrap_or_else(|| step.task.clone()),
             };
             let launch_instruction = if kind == AttemptKind::Primary {
                 None
@@ -1066,8 +1121,8 @@ impl<'a> CampaignRunner<'a> {
                     Some(&step.id),
                     Some(attempt_number),
                     Some(runtime.worker_id.as_str()),
-                    "repair_instruction_recorded",
-                    "bounded repair instruction persisted",
+                    "recovery_instruction_recorded",
+                    "bounded recovery instruction persisted",
                     Some(state),
                 )?;
             }
@@ -1238,6 +1293,7 @@ impl<'a> CampaignRunner<'a> {
                 tool_calls: implement_result.tool_calls().len(),
                 used_host_shell: implement_result.used_host_shell(),
             });
+            let mut recovery_trace: Option<RecoveryTrace> = None;
             if review.disposition == CoordinatorReviewDisposition::Accepted {
                 if let Some(reviewer) = self.reviewer {
                     let previous_rejection = last_review
@@ -1322,14 +1378,33 @@ impl<'a> CampaignRunner<'a> {
                     }
                     review.evidence_refs.push("model-review.json".to_string());
                 }
+                next_instruction = None;
+                last_failure_fingerprint = None;
+                last_repeated_failure_count = 0;
             }
             if review.disposition == CoordinatorReviewDisposition::RejectedRetryable {
-                review.repair_instruction = Some(repair_instruction(
+                let planning = self.plan_retry_from_failure(
+                    campaign,
+                    state,
                     step,
+                    attempt_number,
+                    runtime.worker_id.as_str(),
+                    launch_instruction.as_deref(),
                     &review,
-                    evidence.diff_stat(),
+                    &evidence,
                     &commands,
-                ));
+                    &implement_result,
+                    last_failure_fingerprint.as_deref(),
+                    last_repeated_failure_count,
+                    repair_left + fallback_left,
+                    fallback_left,
+                )?;
+                review = planning.review;
+                next_instruction = planning.next_instruction.clone();
+                prefer_fallback_next = planning.prefer_fallback_worker;
+                last_failure_fingerprint = Some(planning.fingerprint);
+                last_repeated_failure_count = planning.repeated_failure_count;
+                recovery_trace = planning.trace;
             }
             if review.disposition == CoordinatorReviewDisposition::RejectedRetryable {
                 if let Some(classification) = review.classification {
@@ -1375,49 +1450,59 @@ impl<'a> CampaignRunner<'a> {
                     used_host_shell: implement_result.used_host_shell(),
                 });
                 if pre_commit_review.disposition != CoordinatorReviewDisposition::Accepted {
-                    review = pre_commit_review;
-                    last_review = Some(review.clone());
-                } else {
-                    if let Some(stopped) =
-                        self.checkpoint(campaign, state, step, Some(attempt_number))?
-                    {
-                        self.persist_attempt(
-                            state,
-                            step,
-                            attempt_number,
-                            kind,
-                            runtime.worker_id.as_str(),
-                            &start,
-                            launch_instruction.as_deref(),
-                            repair_of,
-                            fallback_of,
-                            Some(&implement_result),
-                            &commands,
-                            &pre_commit,
-                            &review,
-                            None,
-                        )?;
+                    if let Some(stopped) = self.checkpoint(campaign, state, step, Some(attempt_number))? {
                         return Ok(stopped_from(stopped));
                     }
-
-                    let sha = self.git.commit_local(&CampaignCommitRequest::new(
-                        PathBuf::from(&state.worktree_path),
-                        &campaign.campaign_id,
-                        &step.id,
-                        source_paths(pre_commit.changed_paths()),
-                    ))?;
-                    commit_sha = Some(sha.value().to_string());
-                    state.current_head_sha = sha.value().to_string();
-                    self.emit(
-                        &state.campaign_id,
-                        Some(&step.id),
-                        Some(attempt_number),
-                        Some(runtime.worker_id.as_str()),
-                        "git_commit",
-                        format!("created local commit {}", sha.value()),
-                        Some(state),
+                    self.persist_attempt(
+                        state,
+                        step,
+                        attempt_number,
+                        kind,
+                        runtime.worker_id.as_str(),
+                        &start,
+                        launch_instruction.as_deref(),
+                        repair_of,
+                        fallback_of,
+                        Some(&implement_result),
+                        &commands,
+                        &pre_commit,
+                        &pre_commit_review,
+                        None,
                     )?;
+                    self.block_in_place(
+                        state,
+                        pre_commit_review
+                            .classification
+                            .unwrap_or(FailureClassification::PathPolicyFailed),
+                        pre_commit_review.rationale,
+                    )?;
+                    return Ok(StepOutcome::Stopped);
                 }
+                state.current_action = Some("git_commit".to_string());
+                self.heartbeat(state)?;
+                let changed = source_paths(pre_commit.changed_paths());
+                commit_sha = Some(
+                    self.git
+                        .commit_local(&CampaignCommitRequest::new(
+                            Path::new(&state.worktree_path).to_path_buf(),
+                            &campaign.campaign_id,
+                            &step.id,
+                            changed.clone(),
+                        ))?
+                        .value()
+                        .to_string(),
+                );
+                let head = self.git.current_head(Path::new(&state.worktree_path))?;
+                state.current_head_sha = head.value().to_string();
+                self.emit(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(attempt_number),
+                    Some(runtime.worker_id.as_str()),
+                    "step_accepted",
+                    format!("accepted step {}", step.id),
+                    Some(state),
+                )?;
             }
             self.persist_attempt(
                 state,
@@ -1435,6 +1520,9 @@ impl<'a> CampaignRunner<'a> {
                 &review,
                 commit_sha.clone(),
             )?;
+            if let Some(trace) = recovery_trace.as_ref() {
+                self.persist_recovery_trace(&state.campaign_id, &step.id, attempt_number, trace)?;
+            }
             match review.disposition {
                 CoordinatorReviewDisposition::Accepted => {
                     if commit_sha.is_none() && matches!(step.kind, CampaignStepKind::Implementation)
@@ -1469,9 +1557,191 @@ impl<'a> CampaignRunner<'a> {
                         self.block_in_place(state, classification, review.rationale)?;
                         return Ok(StepOutcome::Stopped);
                     }
+                    self.reset_rejected_attempt(state, step, attempt_number, &evidence)?;
                 }
             }
         }
+    }
+
+    fn plan_retry_from_failure(
+        &self,
+        campaign: &Campaign,
+        state: &mut CampaignStatus,
+        step: &CampaignStep,
+        attempt_number: usize,
+        worker_id: &str,
+        launch_instruction: Option<&str>,
+        review: &CoordinatorReview,
+        evidence: &GitEvidence,
+        commands: &[CommandEvidence],
+        implement_result: &ImplementChangeResult,
+        last_failure_fingerprint: Option<&str>,
+        last_repeated_failure_count: usize,
+        remaining_attempt_budget: usize,
+        fallback_left: usize,
+    ) -> Result<RecoveryPlanningOutcome, String> {
+        let classification = review
+            .classification
+            .unwrap_or(FailureClassification::InadequateImplementation);
+        let fingerprint = self.failure_fingerprint(classification, evidence, commands, implement_result);
+        let repeated_failure_count = if last_failure_fingerprint == Some(fingerprint.as_str()) {
+            last_repeated_failure_count + 1
+        } else {
+            0
+        };
+        let mut planned_review = review.clone();
+        let default_instruction = repair_instruction(step, &planned_review, evidence.diff_stat(), commands);
+        if !should_diagnose_retryable_failure(classification, repeated_failure_count) {
+            planned_review.repair_instruction = Some(default_instruction.clone());
+            return Ok(RecoveryPlanningOutcome {
+                review: planned_review,
+                next_instruction: Some(default_instruction),
+                prefer_fallback_worker: false,
+                trace: None,
+                fingerprint,
+                repeated_failure_count,
+            });
+        }
+        let Some(reasoner) = self.recovery_reasoner else {
+            planned_review.repair_instruction = Some(default_instruction.clone());
+            return Ok(RecoveryPlanningOutcome {
+                review: planned_review,
+                next_instruction: Some(default_instruction),
+                prefer_fallback_worker: false,
+                trace: None,
+                fingerprint,
+                repeated_failure_count,
+            });
+        };
+        state.current_action = Some("recovery_diagnosis".to_string());
+        self.heartbeat(state)?;
+        let request = RecoveryReasoningRequest::new(
+            self.build_recovery_context(
+                campaign,
+                state,
+                step,
+                worker_id,
+                launch_instruction,
+                &planned_review,
+                evidence,
+                commands,
+                implement_result,
+                classification,
+                fingerprint.clone(),
+                repeated_failure_count,
+                remaining_attempt_budget,
+            ),
+            self.reviewer_timeout_seconds(state, step),
+        );
+        self.emit(
+            &state.campaign_id,
+            Some(&step.id),
+            Some(attempt_number),
+            Some(worker_id),
+            "recovery_diagnosis_started",
+            "local-primary recovery diagnosis",
+            Some(state),
+        )?;
+        let diagnosis = reasoner.diagnose(&request);
+        let mut trace = RecoveryTrace {
+            request: request.clone(),
+            result: diagnosis.clone(),
+            fingerprint: fingerprint.clone(),
+            repeated_failure_count,
+        };
+        let mut prefer_fallback_worker = false;
+        match diagnosis {
+            Ok(result) => {
+                let mut decision = result.decision.clone();
+                if repeated_failure_count > 0
+                    && decision.kind == RecoveryDecisionKind::Repair
+                    && decision.worker_action == RecoveryWorkerAction::SameWorker
+                {
+                    decision = self.force_stagnation_replan(step, review, commands, evidence);
+                    trace.result = Ok(RecoveryReasoningResult {
+                        decision: decision.clone(),
+                        prompt: result.prompt,
+                        raw_output: result.raw_output,
+                    });
+                }
+                prefer_fallback_worker =
+                    decision.worker_action == RecoveryWorkerAction::FallbackWorker;
+                if prefer_fallback_worker && fallback_left == 0 {
+                    planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
+                    planned_review.classification = Some(FailureClassification::RecoveryFailure);
+                    planned_review.rationale =
+                        "recovery requested fallback worker but fallback budget is exhausted"
+                            .to_string();
+                    planned_review.repair_instruction = None;
+                } else {
+                    match decision.kind {
+                        RecoveryDecisionKind::Repair
+                        | RecoveryDecisionKind::Replan
+                        | RecoveryDecisionKind::RetryTransient => {
+                            let instruction = decision.next_instruction.clone().unwrap_or_else(|| {
+                                self.default_recovery_instruction(
+                                    step,
+                                    &planned_review,
+                                    evidence,
+                                    commands,
+                                    &decision,
+                                )
+                            });
+                            planned_review.repair_instruction = Some(instruction);
+                        }
+                        RecoveryDecisionKind::BlockInsufficientAuthority => {
+                            planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
+                            planned_review.classification = Some(FailureClassification::InsufficientAuthority);
+                            planned_review.rationale = decision.rationale.clone();
+                            planned_review.repair_instruction = None;
+                        }
+                        RecoveryDecisionKind::BlockTerminal => {
+                            planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
+                            planned_review.classification = Some(FailureClassification::RecoveryFailure);
+                            planned_review.rationale = decision.rationale.clone();
+                            planned_review.repair_instruction = None;
+                        }
+                    }
+                }
+                self.emit(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(attempt_number),
+                    Some(worker_id),
+                    "recovery_decision_recorded",
+                    format!(
+                        "recovery decision {}: {}",
+                        recovery_decision_name(decision.kind),
+                        decision.rationale
+                    ),
+                    Some(state),
+                )?;
+            }
+            Err(error) => {
+                planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
+                planned_review.classification = Some(FailureClassification::RecoveryFailure);
+                planned_review.rationale = format!("recovery diagnosis failed closed: {error}");
+                planned_review.repair_instruction = None;
+                self.emit(
+                    &state.campaign_id,
+                    Some(&step.id),
+                    Some(attempt_number),
+                    Some(worker_id),
+                    "recovery_decision_failed",
+                    error,
+                    Some(state),
+                )?;
+            }
+        }
+        let next_instruction = planned_review.repair_instruction.clone();
+        Ok(RecoveryPlanningOutcome {
+            review: planned_review,
+            next_instruction,
+            prefer_fallback_worker,
+            trace: Some(trace),
+            fingerprint,
+            repeated_failure_count,
+        })
     }
 
     fn persist_partial_failure(
@@ -1707,6 +1977,243 @@ impl<'a> CampaignRunner<'a> {
             .timeout_seconds
             .min(state.remaining_seconds.max(1))
             .min(u64::from(u32::MAX)) as u32
+    }
+
+    fn reset_rejected_attempt(
+        &self,
+        state: &mut CampaignStatus,
+        step: &CampaignStep,
+        attempt_number: usize,
+        evidence: &GitEvidence,
+    ) -> Result<(), String> {
+        if evidence.changed_paths().is_empty() {
+            return Ok(());
+        }
+        let head = GitSha::new(state.current_head_sha.clone())?;
+        self.git
+            .reset_managed_worktree(
+                Path::new(&state.worktree_path),
+                &head,
+                evidence.changed_paths(),
+            )
+            .map_err(|error| format!("failed to reset rejected attempt worktree: {error}"))?;
+        self.emit(
+            &state.campaign_id,
+            Some(&step.id),
+            Some(attempt_number),
+            state.current_worker.as_deref(),
+            "rejected_attempt_reset",
+            "reset rejected worktree changes back to the last accepted head",
+            Some(state),
+        )?;
+        Ok(())
+    }
+
+    fn persist_recovery_trace(
+        &self,
+        campaign_id: &str,
+        step_id: &str,
+        attempt: usize,
+        trace: &RecoveryTrace,
+    ) -> Result<(), String> {
+        let dir = self.attempt_dir(campaign_id, step_id, attempt);
+        fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let packet = match &trace.result {
+            Ok(result) => serde_json::json!({
+                "request": trace.request.context(),
+                "prompt": result.prompt,
+                "fingerprint": trace.fingerprint,
+                "repeated_failure_count": trace.repeated_failure_count,
+                "result": {
+                    "decision": result.decision,
+                    "raw_output": result.raw_output,
+                }
+            }),
+            Err(error) => serde_json::json!({
+                "request": trace.request.context(),
+                "prompt": trace.request.prompt(),
+                "fingerprint": trace.fingerprint,
+                "repeated_failure_count": trace.repeated_failure_count,
+                "result": {
+                    "error": error,
+                }
+            }),
+        };
+        write_json(dir.join("recovery-decision.json"), &packet)
+    }
+
+    fn build_recovery_context(
+        &self,
+        campaign: &Campaign,
+        state: &CampaignStatus,
+        step: &CampaignStep,
+        _worker_id: &str,
+        _launch_instruction: Option<&str>,
+        review: &CoordinatorReview,
+        evidence: &GitEvidence,
+        commands: &[CommandEvidence],
+        implement_result: &ImplementChangeResult,
+        classification: FailureClassification,
+        fingerprint: String,
+        repeated_failure_count: usize,
+        remaining_attempt_budget: usize,
+    ) -> RecoveryContext {
+        let step_index = find_step_index(&state.steps, &step.id).unwrap_or(0);
+        let previous_attempts = state.steps[step_index]
+            .attempts
+            .iter()
+            .map(|attempt| RecoveryAttemptSummary {
+                attempt: attempt.attempt,
+                worker_id: attempt.worker_id.clone(),
+                attempt_kind: attempt_kind_name(attempt.kind).to_string(),
+                classification: attempt.classification,
+                rationale: bounded_chars(&attempt.rationale, 240),
+                launch_instruction: attempt.repair_instruction.clone(),
+                next_instruction: attempt.next_repair_instruction.clone(),
+                recovery_decision: self.load_attempt_recovery_decision(
+                    &state.campaign_id,
+                    &step.id,
+                    attempt.attempt,
+                ),
+                fingerprint: self.load_attempt_recovery_fingerprint(
+                    &state.campaign_id,
+                    &step.id,
+                    attempt.attempt,
+                ),
+            })
+            .collect();
+        RecoveryContext {
+            campaign_id: state.campaign_id.clone(),
+            step_id: step.id.clone(),
+            original_task: step.task.clone(),
+            campaign_permitted_paths: campaign.permitted_paths.clone(),
+            allowed_paths: step.allowed_paths.clone(),
+            required_changed_paths: step.required_changed_paths.clone(),
+            acceptance_commands: step.acceptance.commands.clone(),
+            changed_paths: source_paths(evidence.changed_paths()),
+            git_status: bounded_chars(evidence.status(), 800),
+            diff_stat: bounded_chars(evidence.diff_stat(), 800),
+            diff_excerpt: bounded_chars(evidence.diff(), 1600),
+            failure_classification: classification,
+            failure_rationale: bounded_chars(&review.rationale, 320),
+            command_failure: command_failure(commands),
+            tool_attempts: tool_attempts(step, implement_result),
+            previous_attempts,
+            repeated_failure_count,
+            current_fingerprint: fingerprint,
+            remaining_attempt_budget,
+        }
+    }
+
+    fn load_attempt_recovery_decision(
+        &self,
+        campaign_id: &str,
+        step_id: &str,
+        attempt: usize,
+    ) -> Option<RecoveryDecisionKind> {
+        let value = self.load_recovery_trace_value(campaign_id, step_id, attempt)?;
+        serde_json::from_value(value.get("result")?.get("decision")?.get("kind")?.clone()).ok()
+    }
+
+    fn load_attempt_recovery_fingerprint(
+        &self,
+        campaign_id: &str,
+        step_id: &str,
+        attempt: usize,
+    ) -> Option<String> {
+        self.load_recovery_trace_value(campaign_id, step_id, attempt)?
+            .get("fingerprint")?
+            .as_str()
+            .map(str::to_string)
+    }
+
+    fn load_recovery_trace_value(
+        &self,
+        campaign_id: &str,
+        step_id: &str,
+        attempt: usize,
+    ) -> Option<serde_json::Value> {
+        let path = self
+            .attempt_dir(campaign_id, step_id, attempt)
+            .join("recovery-decision.json");
+        let content = fs::read_to_string(path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
+    fn failure_fingerprint(
+        &self,
+        classification: FailureClassification,
+        evidence: &GitEvidence,
+        commands: &[CommandEvidence],
+        implement_result: &ImplementChangeResult,
+    ) -> String {
+        let changed = source_paths(evidence.changed_paths()).join(",");
+        let command = command_failure(commands)
+            .map(|failure| format!(
+                "{}:{}:{}",
+                failure.command,
+                failure.exit_code,
+                first_non_empty_line(&failure.stderr_excerpt)
+            ))
+            .unwrap_or_else(|| "no-command-failure".to_string());
+        let forbidden = tool_attempts_for_fingerprint(implement_result);
+        format!(
+            "{}|{}|{}|{}",
+            classification.as_str(),
+            changed,
+            command,
+            forbidden.join(",")
+        )
+    }
+
+    fn default_recovery_instruction(
+        &self,
+        step: &CampaignStep,
+        review: &CoordinatorReview,
+        evidence: &GitEvidence,
+        commands: &[CommandEvidence],
+        decision: &RecoveryDecision,
+    ) -> String {
+        let base = repair_instruction(step, review, evidence.diff_stat(), commands);
+        match decision.kind {
+            RecoveryDecisionKind::Replan => format!(
+                "Replan the implementation for step {}. Preserve existing callers and behavior outside allowed_paths, and revise the implementation strategy only within allowed_paths.
+Diagnosis: {}
+{}",
+                step.id, decision.rationale, base
+            ),
+            _ => base,
+        }
+    }
+
+    fn force_stagnation_replan(
+        &self,
+        step: &CampaignStep,
+        review: &CoordinatorReview,
+        commands: &[CommandEvidence],
+        evidence: &GitEvidence,
+    ) -> RecoveryDecision {
+        RecoveryDecision {
+            kind: RecoveryDecisionKind::Replan,
+            failure_kind: RecoveryFailureKind::RepeatedFailure,
+            rationale: "repeated equivalent failure requires a strategy change instead of another same-strategy repair".to_string(),
+            evidence_refs: vec![
+                "git-evidence.json".to_string(),
+                "command-evidence.json".to_string(),
+                "worker-transcript.json".to_string(),
+            ],
+            constraint_conflict: true,
+            same_strategy_viable: false,
+            worker_action: RecoveryWorkerAction::FallbackWorker,
+            next_instruction: Some(format!(
+                "Replan the implementation for step {}. The previous strategy repeated the same failure. Preserve out-of-scope callers and modify only allowed_paths.
+{}",
+                step.id,
+                repair_instruction(step, review, evidence.diff_stat(), commands)
+            )),
+            insufficient_authority: false,
+            stagnation_detected: true,
+        }
     }
 
     fn reviewer_timeout_seconds(&self, state: &CampaignStatus, step: &CampaignStep) -> u32 {
@@ -2588,6 +3095,111 @@ fn find_step_index(steps: &[StepStatusRecord], step_id: &str) -> Result<usize, S
 
 fn total_attempts(state: &CampaignStatus) -> usize {
     state.steps.iter().map(|step| step.attempts.len()).sum()
+}
+
+fn attempt_kind_name(kind: AttemptKind) -> &'static str {
+    match kind {
+        AttemptKind::Primary => "primary",
+        AttemptKind::Repair => "repair",
+        AttemptKind::Fallback => "fallback",
+        AttemptKind::Verification => "verification",
+    }
+}
+
+fn recovery_decision_name(kind: RecoveryDecisionKind) -> &'static str {
+    match kind {
+        RecoveryDecisionKind::Repair => "repair",
+        RecoveryDecisionKind::Replan => "replan",
+        RecoveryDecisionKind::BlockInsufficientAuthority => "block_insufficient_authority",
+        RecoveryDecisionKind::BlockTerminal => "block_terminal",
+        RecoveryDecisionKind::RetryTransient => "retry_transient",
+    }
+}
+
+fn should_diagnose_retryable_failure(
+    classification: FailureClassification,
+    repeated_failure_count: usize,
+) -> bool {
+    matches!(
+        classification,
+        FailureClassification::AcceptanceFailed
+            | FailureClassification::ArtifactMissing
+            | FailureClassification::InadequateImplementation
+    ) || (classification == FailureClassification::NoChange && repeated_failure_count > 0)
+        || (classification == FailureClassification::ToolProtocolViolation
+            && repeated_failure_count > 0)
+}
+
+fn command_failure(commands: &[CommandEvidence]) -> Option<RecoveryCommandFailure> {
+    let failed = commands.iter().find(|command| !command.succeeded())?;
+    Some(RecoveryCommandFailure {
+        command: failed.argv().join(" "),
+        exit_code: failed.exit_code(),
+        stdout_excerpt: bounded_chars(failed.stdout(), 600),
+        stderr_excerpt: bounded_chars(failed.stderr(), 600),
+    })
+}
+
+fn tool_attempts(step: &CampaignStep, result: &ImplementChangeResult) -> Vec<RecoveryToolAttempt> {
+    result
+        .tool_calls()
+        .iter()
+        .map(|call| {
+            let target_path = extract_target_path(&call.arguments);
+            let allowed = target_path
+                .as_deref()
+                .and_then(|path| path_is_authorized(path, &step.allowed_paths).ok());
+            RecoveryToolAttempt {
+                name: call.name.clone(),
+                target_path,
+                allowed,
+                result_excerpt: bounded_chars(&call.result, 240),
+            }
+        })
+        .collect()
+}
+
+fn tool_attempts_for_fingerprint(result: &ImplementChangeResult) -> Vec<String> {
+    result
+        .tool_calls()
+        .iter()
+        .filter_map(|call| {
+            let path = extract_target_path(&call.arguments)?;
+            Some(format!("{}:{}", call.name, path))
+        })
+        .collect()
+}
+
+fn extract_target_path(arguments: &str) -> Option<String> {
+    let value = serde_json::from_str::<serde_json::Value>(arguments).ok()?;
+    value
+        .get("file_path")
+        .or_else(|| value.get("path"))
+        .or_else(|| value.get("target_path"))
+        .and_then(|item| item.as_str())
+        .map(str::to_string)
+}
+
+fn bounded_chars(value: &str, max_chars: usize) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let mut output = trimmed.chars().take(max_chars).collect::<String>();
+    if trimmed.chars().count() > max_chars {
+        output.push_str("
+[truncated]");
+    }
+    output
+}
+
+fn first_non_empty_line(value: &str) -> String {
+    value
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("no-detail")
+        .to_string()
 }
 
 fn allowed_paths(values: &[String]) -> Result<AllowedPaths, String> {
