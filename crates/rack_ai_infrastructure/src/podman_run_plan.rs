@@ -47,7 +47,7 @@ impl PodmanRunPlan {
             "--env".to_string(),
             format!("TMPDIR={build}"),
             "--env".to_string(),
-            format!("CARGO_HOME={build}/cargo"),
+            "CARGO_HOME=/usr/local/cargo".to_string(),
             "--env".to_string(),
             format!("CARGO_TARGET_DIR={build}/target"),
             "--env".to_string(),
@@ -104,7 +104,7 @@ mod tests {
         assert!(plan.contains("/tmp/work.cid"));
         assert!(plan.contains("HOME=/rack-build"));
         assert!(plan.contains("TMPDIR=/rack-build"));
-        assert!(plan.contains("CARGO_HOME=/rack-build/cargo"));
+        assert!(plan.contains("CARGO_HOME=/usr/local/cargo"));
         assert!(plan.contains("CARGO_TARGET_DIR=/rack-build/target"));
         assert!(!plan.contains("/workspace/.rack-cargo"));
         assert!(!plan.contains("/workspace/target"));
