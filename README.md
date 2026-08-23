@@ -187,6 +187,181 @@ JCode remains available as a tool/backend where useful, but Rack AI does not rel
 
 JCode v0.78.1 demonstrated provider/endpoint rebinding problems on this rack, so the current architecture deliberately keeps orchestration and safety behaviour inside Rack AI. If upstream swarm behaviour becomes reliable in future, the integration can be simplified without changing the control-plane contract.
 
+## Validated Local Model and Serving Specifications
+
+This section records the exact local model/runtime combinations that have been proven on the physical rack. These values are operational specifications, not approximate recommendations. If a model is changed, re-quantized, served with materially different vLLM flags, or moved to different hardware, it must be treated as a new qualification target.
+
+### Hardware mapping
+
+| Role | GPU | VRAM | GPU UUID | Endpoint |
+| --- | --- | ---: | --- | --- |
+| `local-primary` | NVIDIA RTX 4060 Ti | 16 GB | `GPU-042e18f2-bf9f-c8f6-6975-6f25b15ac71c` | `http://127.0.0.1:8017/v1` |
+| `local-coder` | NVIDIA RTX 2060 | 6 GB (5.60 GiB usable reported by vLLM) | `GPU-357ef569-8fac-7c7d-ee1c-51677efb174f` | `http://127.0.0.1:8018/v1` |
+
+### `local-primary` — validated production configuration
+
+The primary model is:
+
+```text
+cyankiwi/gemma-4-12B-it-AWQ-INT4
+```
+
+Validated serving specification:
+
+```yaml
+model: cyankiwi/gemma-4-12B-it-AWQ-INT4
+served_model_name: local-primary
+port: 8017
+max_model_len: 131072
+kv_cache_dtype: fp8_e4m3
+kv_cache_memory_bytes: 3221225472
+enable_auto_tool_choice: true
+tool_call_parser: gemma4
+reasoning_parser: gemma4
+chat_template: examples/tool_chat_template_gemma4.jinja
+```
+
+The production compose service is pinned to the vLLM image digest recorded in `compose.yaml`. Do not silently replace the image tag/digest while treating the model as already qualified.
+
+### `local-coder` — validated Qwen3.5 4B text-only serving configuration
+
+The validated replacement candidate for the 6 GB RTX 2060 is:
+
+```text
+NotaMG/eqaq-v2
+```
+
+This is a **Qwen3.5 4B text-only, 4-bit compressed-tensors** checkpoint. vLLM resolves it as:
+
+```text
+Qwen3_5ForCausalLM
+```
+
+The proven runtime used:
+
+```text
+vLLM 0.27.1
+```
+
+with the existing stable image digest:
+
+```text
+vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967
+```
+
+The exact serving parameters that successfully start and serve on the RTX 2060 are:
+
+```yaml
+model: NotaMG/eqaq-v2
+served_model_name: local-coder
+port: 8018
+gpu_memory_utilization: 0.98
+max_model_len: 16368
+max_num_seqs: 1
+enable_auto_tool_choice: true
+tool_call_parser: qwen3_coder
+reasoning_parser: qwen3
+```
+
+Equivalent vLLM arguments:
+
+```text
+NotaMG/eqaq-v2
+--served-model-name local-coder
+--port 8018
+--gpu-memory-utilization 0.98
+--max-model-len 16368
+--max-num-seqs 1
+--enable-auto-tool-choice
+--tool-call-parser qwen3_coder
+--reasoning-parser qwen3
+```
+
+The corresponding compose override shape is:
+
+```yaml
+services:
+  vllm-coder:
+    image: vllm/vllm-openai@sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967
+    command:
+      - NotaMG/eqaq-v2
+      - --served-model-name
+      - local-coder
+      - --port
+      - "8018"
+      - --gpu-memory-utilization
+      - "0.98"
+      - --max-model-len
+      - "16368"
+      - --max-num-seqs
+      - "1"
+      - --enable-auto-tool-choice
+      - --tool-call-parser
+      - qwen3_coder
+      - --reasoning-parser
+      - qwen3
+```
+
+#### Why the apparently unusual limits are required
+
+The RTX 2060 exposes approximately 5.60 GiB usable VRAM to vLLM. With this checkpoint:
+
+- checkpoint size reported by vLLM: **3.14 GiB**
+- loaded model memory reported by vLLM: **3.2 GiB**
+- CUDA graphs remain **enabled**; `--enforce-eager` is **not** used
+- `--max-num-seqs 1` reduces unnecessary graph/batching overhead for a dedicated single coding worker
+- CUDA graph capture is limited to sizes `[1, 2]`
+- available KV cache at the proven settings: **0.56 GiB**
+- proven KV cache capacity: **16,368 tokens**
+- maximum concurrency at that length: **1.00x**
+
+A requested length of 16,384 tokens missed the available KV-cache capacity by only 16 tokens. The validated length is therefore **16,368**, which preserves the practical 16K context target without CPU offload, eager mode, or a meaningful context reduction.
+
+Do not increase `max_num_seqs`, raise `max_model_len`, or assume that a different Qwen3.5 4B quantization will fit simply because this one does. The current fit is specific to this text-only 4-bit checkpoint and these serving parameters.
+
+#### Tool-call validation
+
+The Qwen3.5 configuration has passed a direct OpenAI-compatible tool-call probe through vLLM. Given a function tool named `get_weather` and an instruction to use it for Cork, the endpoint returned a native structured `tool_calls` entry with:
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_weather",
+    "arguments": "{\"city\": \"Cork\"}"
+  }
+}
+```
+
+This is materially different from printing JSON-like intent in ordinary assistant text. Native structured tool calling is required for the coding harnesses used by Rack AI.
+
+This validates the **serving and tool-call layer**. Full JCode/Abacus repository-edit qualification remains a separate gate and must still prove real file mutation, deterministic checks, repair behaviour, and truthful reporting before the model is considered fully qualified as the autonomous implementation worker.
+
+### Superseded / unqualified coder configuration
+
+`compose.yaml` on `main` may still show the earlier coder model until the Qwen3.5 qualification work is deliberately promoted:
+
+```text
+Qwen/Qwen2.5-Coder-3B-Instruct-AWQ
+```
+
+That configuration is **not considered qualified for autonomous coding**. In live harness testing it could emit JSON-like tool intent as plain text, produce false-success/no-diff outcomes, and make incorrect claims about repository changes. It must not be treated as equivalent to the validated Qwen3.5 structured-tool configuration above.
+
+### Qualification rule
+
+A model/runtime combination is only Rack-AI-qualified after proving all of the following on the target GPU and chosen coding harness:
+
+1. stable vLLM startup on the target GPU;
+2. required practical context length;
+3. native OpenAI-compatible structured tool calls;
+4. genuine repository edits rather than no-op or fabricated success;
+5. deterministic compile/test/check execution;
+6. repair after a deliberately introduced failure;
+7. truthful stop/reporting behaviour;
+8. independent Rack AI acceptance/review of the resulting change.
+
+The serving specification above for Qwen3.5 has cleared items 1–3. Harness qualification is the next stage.
+
 ## Python Policy
 
 The live control-plane path is Rust-owned.
