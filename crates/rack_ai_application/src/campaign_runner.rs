@@ -54,6 +54,10 @@ use crate::StepStatusRecord;
 use crate::UnixClock;
 use crate::WorkspaceExecutor;
 use crate::WorkspacePath;
+
+const REVIEWER_MIN_TIMEOUT_SECONDS: u32 = 180;
+const REVIEWER_MAX_ATTEMPTS: usize = 3;
+const REVIEWER_RETRY_DELAYS_SECONDS: [u64; 2] = [2, 5];
 use crate::assert_step_paths_permitted;
 use crate::atomic_write;
 use crate::campaign_digest;
@@ -147,6 +151,26 @@ struct RecoveryResetEvidenceDocument {
     diff_excerpt: String,
     current_head_sha: String,
     worktree_path: String,
+}
+
+struct ReviewerFailure {
+    classification: FailureClassification,
+    rationale: String,
+}
+
+fn classify_reviewer_error(error: &str) -> FailureClassification {
+    let lower = error.to_lowercase();
+    if lower.contains("timeout")
+        || lower.contains("timed out")
+        || lower.contains("peer disconnected")
+        || lower.contains("connection refused")
+        || lower.contains("connection reset")
+        || lower.contains("transport")
+    {
+        FailureClassification::ReviewerTimeout
+    } else {
+        FailureClassification::ReviewerFailure
+    }
 }
 
 impl<'a> CampaignRunner<'a> {
@@ -1231,10 +1255,18 @@ impl<'a> CampaignRunner<'a> {
                         &evidence,
                         &commands,
                         previous_rejection,
-                        self.action_timeout_seconds(state, step),
+                        self.reviewer_timeout_seconds(state, step),
                     );
                     self.add_untracked_review_evidence(state, &mut model_request);
-                    let model_review = reviewer.review(&model_request);
+                    let model_review = self.review_with_retries(
+                        campaign,
+                        state,
+                        step,
+                        runtime.worker_id.as_str(),
+                        attempt_number,
+                        reviewer,
+                        &model_request,
+                    );
                     drop(_review_heartbeat);
 
                     let review_dir = self.attempt_dir(&state.campaign_id, &step.id, attempt_number);
@@ -1256,9 +1288,9 @@ impl<'a> CampaignRunner<'a> {
                             "request": model_request,
                             "prompt": model_request.prompt(),
                             "result": {
-                                "disposition": CoordinatorReviewDisposition::RejectedRetryable,
-                                "classification": FailureClassification::ModelUnavailable,
-                                "rationale": format!("model reviewer failed closed: {error}"),
+                                "disposition": CoordinatorReviewDisposition::RejectedTerminal,
+                                "classification": error.classification,
+                                "rationale": error.rationale,
                                 "raw_output": null,
                                 "used_host_shell": false,
                             }
@@ -1274,9 +1306,9 @@ impl<'a> CampaignRunner<'a> {
                             review.rationale = result.rationale;
                         }
                         Err(error) => {
-                            review.disposition = CoordinatorReviewDisposition::RejectedRetryable;
-                            review.classification = Some(FailureClassification::ModelUnavailable);
-                            review.rationale = format!("model reviewer failed closed: {error}");
+                            review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
+                            review.classification = Some(error.classification);
+                            review.rationale = error.rationale;
                         }
                     }
                     review.evidence_refs.push("model-review.json".to_string());
@@ -1651,6 +1683,104 @@ impl<'a> CampaignRunner<'a> {
             .timeout_seconds
             .min(state.remaining_seconds.max(1))
             .min(u64::from(u32::MAX)) as u32
+    }
+
+    fn reviewer_timeout_seconds(&self, state: &CampaignStatus, step: &CampaignStep) -> u32 {
+        let remaining = state.remaining_seconds.max(1).min(u64::from(u32::MAX)) as u32;
+        self.action_timeout_seconds(state, step)
+            .max(REVIEWER_MIN_TIMEOUT_SECONDS)
+            .min(remaining)
+    }
+
+    fn review_with_retries(
+        &self,
+        campaign: &Campaign,
+        state: &mut CampaignStatus,
+        step: &CampaignStep,
+        worker_id: &str,
+        attempt_number: usize,
+        reviewer: &dyn ImplementationReviewer,
+        request: &ModelReviewRequest,
+    ) -> Result<crate::ModelReviewResult, ReviewerFailure> {
+        let mut attempts = 0usize;
+        loop {
+            attempts += 1;
+            match reviewer.review(request) {
+                Ok(result) => return Ok(result),
+                Err(error) => {
+                    let classification = classify_reviewer_error(&error);
+                    if classification != FailureClassification::ReviewerTimeout
+                        || attempts >= REVIEWER_MAX_ATTEMPTS
+                    {
+                        return Err(ReviewerFailure {
+                            classification,
+                            rationale: format!("model reviewer failed closed: {error}"),
+                        });
+                    }
+                    state.current_action = Some("coordinator_review_retry_wait".to_string());
+                    state.error_message = Some(format!(
+                        "model reviewer transient failure after attempt {attempts}/{}: {error}",
+                        REVIEWER_MAX_ATTEMPTS
+                    ));
+                    self.save_state(state)
+                        .map_err(|save_error| ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: save_error,
+                        })?;
+                    self.emit(
+                        &state.campaign_id,
+                        Some(&step.id),
+                        Some(attempt_number),
+                        Some(worker_id),
+                        "coordinator_review_retrying",
+                        format!(
+                            "model reviewer transient failure after attempt {attempts}/{}: {error}",
+                            REVIEWER_MAX_ATTEMPTS
+                        ),
+                        Some(state),
+                    )
+                    .map_err(|emit_error| ReviewerFailure {
+                        classification: FailureClassification::ReviewerFailure,
+                        rationale: emit_error,
+                    })?;
+                    if self
+                        .recovery_checkpoint(campaign, state)
+                        .map_err(|checkpoint_error| ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: checkpoint_error,
+                        })?
+                        .is_some()
+                    {
+                        return Err(ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: "review interrupted by operator checkpoint".to_string(),
+                        });
+                    }
+                    let delay = recovery_delay_seconds(&REVIEWER_RETRY_DELAYS_SECONDS, attempts);
+                    self.sleeper.sleep_seconds(delay);
+                    if self
+                        .recovery_checkpoint(campaign, state)
+                        .map_err(|checkpoint_error| ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: checkpoint_error,
+                        })?
+                        .is_some()
+                    {
+                        return Err(ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: "review interrupted by operator checkpoint".to_string(),
+                        });
+                    }
+                    state.current_action = Some("coordinator_review".to_string());
+                    state.error_message = None;
+                    self.save_state(state)
+                        .map_err(|save_error| ReviewerFailure {
+                            classification: FailureClassification::ReviewerFailure,
+                            rationale: save_error,
+                        })?;
+                }
+            }
+        }
     }
 
     /// `git diff` omits untracked files. Read them through the workspace executor so the

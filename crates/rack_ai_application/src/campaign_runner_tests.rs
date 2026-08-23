@@ -335,6 +335,31 @@ impl ImplementationReviewer for FailingReviewer {
     }
 }
 
+struct ScriptedReviewer {
+    responses: Mutex<Vec<Result<ModelReviewResult, String>>>,
+    calls: Cell<usize>,
+}
+
+impl ScriptedReviewer {
+    fn new(responses: Vec<Result<ModelReviewResult, String>>) -> Self {
+        Self {
+            responses: Mutex::new(responses),
+            calls: Cell::new(0),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+}
+
+impl ImplementationReviewer for ScriptedReviewer {
+    fn review(&self, _request: &ModelReviewRequest) -> Result<ModelReviewResult, String> {
+        self.calls.set(self.calls.get() + 1);
+        self.responses.lock().unwrap().remove(0)
+    }
+}
+
 impl GitWorktree for ProcessGit {
     fn resolve_sha(&self, request: &ResolveGitShaRequest) -> Result<GitSha, String> {
         GitSha::new(git(
@@ -1065,7 +1090,7 @@ fn reviewer_failure_fails_closed_and_persists_request_evidence() {
     assert_eq!(state.state, CampaignState::Blocked);
     assert_eq!(
         state.steps[0].attempts[0].classification,
-        Some(FailureClassification::ModelUnavailable)
+        Some(FailureClassification::ReviewerTimeout)
     );
     let packet = fs::read_to_string(
         runner
@@ -1079,6 +1104,137 @@ fn reviewer_failure_fails_closed_and_persists_request_evidence() {
     assert!(packet.contains("changed_paths"));
 }
 
+#[test]
+fn transient_reviewer_timeout_retries_then_accepts_without_rerunning_implementation() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let reviewer = ScriptedReviewer::new(vec![
+        Err("coordinator review request failed or timed out: timeout: global".to_string()),
+        Ok(ModelReviewResult {
+            disposition: CoordinatorReviewDisposition::Accepted,
+            classification: None,
+            rationale: "review accepted after retry".to_string(),
+            prompt: "prompt".to_string(),
+            raw_output: r#"{"disposition":"accepted","classification":null,"rationale":"ok"}"#
+                .to_string(),
+            used_host_shell: false,
+        }),
+    ]);
+    let campaign = make_campaign(
+        "review-retry-accept",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(state.steps[0].attempts.len(), 1);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(reviewer.calls(), 2);
+}
+
+#[test]
+fn repeated_reviewer_timeouts_fail_closed_without_worker_timeout_classification() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/alpha.rs",
+            "pub fn alpha() -> u8 { 1 }
+",
+        )],
+    );
+    let reviewer = ScriptedReviewer::new(vec![
+        Err("coordinator review request failed or timed out: timeout: global".to_string()),
+        Err("coordinator review request failed or timed out: timeout: global".to_string()),
+        Err("coordinator review request failed or timed out: timeout: global".to_string()),
+    ]);
+    let campaign = make_campaign(
+        "review-retry-fail",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::ReviewerTimeout)
+    );
+    assert_ne!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::WorkerTimeout)
+    );
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(reviewer.calls(), 3);
+}
+
+#[test]
+fn semantic_rejection_is_not_retried() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt(
+            "src/domain/mod.rs",
+            "pub struct DomainId;
+",
+        )],
+    );
+    let reviewer = ScriptedReviewer::new(vec![Ok(ModelReviewResult {
+        disposition: CoordinatorReviewDisposition::RejectedRetryable,
+        classification: Some(FailureClassification::InadequateImplementation),
+        rationale: "missing requested file".to_string(),
+        prompt: "prompt".to_string(),
+        raw_output: r#"{"disposition":"rejected_retryable","classification":"inadequate_implementation","rationale":"missing requested file"}"#.to_string(),
+        used_host_shell: false,
+    })]);
+    let mut step = sample_step("domain", "src/domain/mod.rs", "Add domain identifiers.");
+    step.required_changed_paths = vec!["src/domain/".to_string()];
+    step.acceptance.required_artifacts.clear();
+    let campaign = make_campaign(
+        "review-reject-no-retry",
+        &fx.sha,
+        vec![step],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(reviewer.calls(), 1);
+}
 #[test]
 fn inadequate_change_with_passing_tests_is_retryable_review() {
     let fx = fixture();
