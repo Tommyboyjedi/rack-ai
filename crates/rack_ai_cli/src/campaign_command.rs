@@ -30,6 +30,7 @@ use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
+use rack_ai_infrastructure::LocalPrimaryRecoveryReasoner;
 use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
 use rack_ai_infrastructure::PodmanChangeImplementer;
@@ -636,6 +637,7 @@ where
     let clock = SystemUnixClock;
     let sleeper = SystemRecoverySleeper;
     let reviewer = LocalPrimaryReviewer::local_default();
+    let recovery_reasoner = LocalPrimaryRecoveryReasoner::local_default();
 
     let runner = CampaignRunner::new(CampaignRunnerDependencies {
         registry: &registry,
@@ -658,7 +660,9 @@ where
     });
 
     let runner = if fixture_document.is_none() && !skip_live {
-        runner.with_reviewer(&reviewer)
+        runner
+            .with_reviewer(&reviewer)
+            .with_recovery_reasoner(&recovery_reasoner)
     } else {
         runner
     };

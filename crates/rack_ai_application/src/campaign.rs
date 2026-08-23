@@ -112,12 +112,14 @@ pub enum FailureClassification {
     WorkerTimeout,
     ReviewerTimeout,
     ReviewerFailure,
+    RecoveryFailure,
     ExecutorUnavailable,
     ModelUnavailable,
     CampaignExpired,
     OperatorPaused,
     OperatorCancelled,
     ContinuityFailed,
+    InsufficientAuthority,
     InadequateImplementation,
 }
 
@@ -141,12 +143,14 @@ impl FailureClassification {
             Self::WorkerTimeout => "worker_timeout",
             Self::ReviewerTimeout => "reviewer_timeout",
             Self::ReviewerFailure => "reviewer_failure",
+            Self::RecoveryFailure => "recovery_failure",
             Self::ExecutorUnavailable => "executor_unavailable",
             Self::ModelUnavailable => "model_unavailable",
             Self::CampaignExpired => "campaign_expired",
             Self::OperatorPaused => "operator_paused",
             Self::OperatorCancelled => "operator_cancelled",
             Self::ContinuityFailed => "continuity_failed",
+            Self::InsufficientAuthority => "insufficient_authority",
             Self::InadequateImplementation => "inadequate_implementation",
         }
     }

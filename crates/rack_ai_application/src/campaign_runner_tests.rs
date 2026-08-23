@@ -10,6 +10,7 @@ use rack_ai_domain::ChangeId;
 use rack_ai_domain::GitSha;
 use rack_ai_domain::RepositoryId;
 
+use crate::AcceptingReviewer;
 use crate::AttemptKind;
 use crate::Campaign;
 use crate::CampaignCommitRequest;
@@ -41,7 +42,14 @@ use crate::ModelReviewRequest;
 use crate::ModelReviewResult;
 use crate::OperationsConfig;
 use crate::ReadFileRequest;
+use crate::RecoveryDecision;
+use crate::RecoveryDecisionKind;
+use crate::RecoveryFailureKind;
+use crate::RecoveryReasoner;
+use crate::RecoveryReasoningRequest;
+use crate::RecoveryReasoningResult;
 use crate::RecoverySleeper;
+use crate::RecoveryWorkerAction;
 use crate::RegisteredRepository;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
@@ -340,6 +348,30 @@ struct ScriptedReviewer {
     calls: Cell<usize>,
 }
 
+struct ScriptedRecoveryReasoner {
+    responses: Mutex<Vec<Result<RecoveryDecision, String>>>,
+    calls: Cell<usize>,
+    requests: Mutex<Vec<RecoveryReasoningRequest>>,
+}
+
+impl ScriptedRecoveryReasoner {
+    fn new(responses: Vec<Result<RecoveryDecision, String>>) -> Self {
+        Self {
+            responses: Mutex::new(responses),
+            calls: Cell::new(0),
+            requests: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn calls(&self) -> usize {
+        self.calls.get()
+    }
+
+    fn requests(&self) -> Vec<RecoveryReasoningRequest> {
+        self.requests.lock().unwrap().clone()
+    }
+}
+
 impl ScriptedReviewer {
     fn new(responses: Vec<Result<ModelReviewResult, String>>) -> Self {
         Self {
@@ -357,6 +389,24 @@ impl ImplementationReviewer for ScriptedReviewer {
     fn review(&self, _request: &ModelReviewRequest) -> Result<ModelReviewResult, String> {
         self.calls.set(self.calls.get() + 1);
         self.responses.lock().unwrap().remove(0)
+    }
+}
+
+impl RecoveryReasoner for ScriptedRecoveryReasoner {
+    fn diagnose(
+        &self,
+        request: &RecoveryReasoningRequest,
+    ) -> Result<RecoveryReasoningResult, String> {
+        self.calls.set(self.calls.get() + 1);
+        self.requests.lock().unwrap().push(request.clone());
+        match self.responses.lock().unwrap().remove(0) {
+            Ok(decision) => Ok(RecoveryReasoningResult {
+                raw_output: serde_json::to_string(&decision).unwrap(),
+                prompt: request.prompt(),
+                decision,
+            }),
+            Err(error) => Err(error),
+        }
     }
 }
 
@@ -473,6 +523,7 @@ struct HostExecutor {
     command_stdout: Option<String>,
     command_stderr: Option<String>,
     command_exit_code: i32,
+    passthrough_commands: bool,
 }
 
 impl HostExecutor {
@@ -484,8 +535,21 @@ impl HostExecutor {
             command_stdout: None,
             command_stderr: None,
             command_exit_code: 0,
+            passthrough_commands: false,
         }
     }
+    fn with_process_commands() -> Self {
+        Self {
+            writes: Mutex::new(Vec::new()),
+            poison_path: None,
+            read_error: None,
+            command_stdout: None,
+            command_stderr: None,
+            command_exit_code: 0,
+            passthrough_commands: true,
+        }
+    }
+
     fn with_poison(path: &str) -> Self {
         Self {
             writes: Mutex::new(Vec::new()),
@@ -494,6 +558,7 @@ impl HostExecutor {
             command_stdout: None,
             command_stderr: None,
             command_exit_code: 0,
+            passthrough_commands: false,
         }
     }
     fn with_read_error(error: &str) -> Self {
@@ -504,6 +569,7 @@ impl HostExecutor {
             command_stdout: None,
             command_stderr: None,
             command_exit_code: 0,
+            passthrough_commands: false,
         }
     }
 
@@ -515,6 +581,7 @@ impl HostExecutor {
             command_stdout: Some(stdout.to_string()),
             command_stderr: Some(stderr.to_string()),
             command_exit_code: exit_code,
+            passthrough_commands: false,
         }
     }
 }
@@ -547,6 +614,18 @@ impl WorkspaceExecutor for HostExecutor {
         )
     }
     fn run_command(&self, request: &RunCommandRequest) -> Result<WorkspaceExecutionResult, String> {
+        if self.passthrough_commands {
+            let output = Command::new(&request.argv()[0])
+                .args(&request.argv()[1..])
+                .current_dir(request.worktree_path())
+                .output()
+                .map_err(|error| error.to_string())?;
+            let code = output.status.code().unwrap_or(1);
+            let evidence = CommandEvidence::new(request.argv().to_vec(), code)
+                .with_stdout(String::from_utf8_lossy(&output.stdout).to_string())
+                .with_stderr(String::from_utf8_lossy(&output.stderr).to_string());
+            return Ok(WorkspaceExecutionResult::new(evidence));
+        }
         if let Some(poison) = &self.poison_path {
             let path = request.worktree_path().join(poison);
             fs::write(path, "poison\n").map_err(|error| error.to_string())?;
@@ -595,6 +674,93 @@ fn fixture() -> Fixture {
         repo,
         workspaces,
         sha,
+    }
+}
+
+fn cargo_fixture(service_source: &str) -> Fixture {
+    let fx = fixture();
+    let cargo = r#"[package]
+name = "fixture"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+"#;
+    let main = r#"mod service;
+
+use service::AssessmentService;
+
+fn main() {
+    let service = AssessmentService;
+    println!("{}", service.open_case());
+}
+"#;
+    fs::write(fx.repo.join("Cargo.toml"), cargo).unwrap();
+    fs::write(fx.repo.join("src/main.rs"), main).unwrap();
+    fs::write(fx.repo.join("src/service.rs"), service_source).unwrap();
+    let _ = fs::remove_file(fx.repo.join("src/lib.rs"));
+    assert!(Command::new("cargo")
+        .args(["generate-lockfile", "--offline"])
+        .current_dir(&fx.repo)
+        .status()
+        .unwrap()
+        .success());
+    git(&fx.repo, &["add", "."]).unwrap();
+    git(&fx.repo, &["commit", "-m", "cargo fixture"]).unwrap();
+    let sha = git(&fx.repo, &["rev-parse", "HEAD"]).unwrap();
+    Fixture { sha, ..fx }
+}
+
+fn compatibility_service_source() -> &'static str {
+    r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self) -> u32 {
+        1
+    }
+}
+"#
+}
+
+fn compatibility_step(task: &str) -> CampaignStep {
+    CampaignStep {
+        id: "service".to_string(),
+        kind: CampaignStepKind::Implementation,
+        task: task.to_string(),
+        allowed_paths: vec!["src/service.rs".to_string()],
+        required_changed_paths: vec!["src/service.rs".to_string()],
+        acceptance: StepAcceptance {
+            commands: vec![vec![
+                "cargo".to_string(),
+                "check".to_string(),
+                "--offline".to_string(),
+            ]],
+            required_artifacts: vec!["src/service.rs".to_string()],
+        },
+        limits: StepLimits {
+            timeout_seconds: 60,
+            network: "disabled".to_string(),
+        },
+    }
+}
+
+fn decision(
+    kind: RecoveryDecisionKind,
+    failure_kind: RecoveryFailureKind,
+    worker_action: RecoveryWorkerAction,
+    next_instruction: Option<&str>,
+) -> RecoveryDecision {
+    RecoveryDecision {
+        kind,
+        failure_kind,
+        rationale: "diagnosed by scripted recovery reasoner".to_string(),
+        evidence_refs: vec!["git-evidence.json".to_string(), "command-evidence.json".to_string()],
+        constraint_conflict: kind == RecoveryDecisionKind::Replan,
+        same_strategy_viable: kind == RecoveryDecisionKind::Repair,
+        worker_action,
+        next_instruction: next_instruction.map(str::to_string),
+        insufficient_authority: kind == RecoveryDecisionKind::BlockInsufficientAuthority,
+        stagnation_detected: false,
     }
 }
 
@@ -3338,6 +3504,226 @@ fn production_campaign_git_path_has_no_remote_operations() {
     assert!(!source.contains("reset --hard"));
     assert!(!source.contains("clean -fd"));
     assert!(!source.contains("\"push\""));
+}
+
+
+#[test]
+fn recovery_reasoner_repairs_same_strategy_after_local_defect() {
+    let fx = cargo_fixture(compatibility_service_source());
+    let executor = HostExecutor::with_process_commands();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            write_attempt(
+                "src/service.rs",
+                "pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self) -> u32 {
+        let broken = ;
+        broken
+    }
+}
+",
+            ),
+            write_attempt("src/service.rs", r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self) -> u32 {
+        2
+    }
+}
+"#),
+        ],
+    );
+    let campaign = make_campaign(
+        "repair-same-strategy",
+        &fx.sha,
+        vec![compatibility_step("Fix AssessmentService without changing src/main.rs.")],
+        default_policy(),
+    );
+    let reasoner = ScriptedRecoveryReasoner::new(vec![Ok(decision(
+        RecoveryDecisionKind::Repair,
+        RecoveryFailureKind::LocalImplementationDefect,
+        RecoveryWorkerAction::SameWorker,
+        Some("Repair the syntax error in src/service.rs without changing src/main.rs."),
+    ))]);
+    let reviewer = AcceptingReviewer;
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_recovery_reasoner(&reasoner)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(state.steps[0].attempts.len(), 2);
+    assert_eq!(implementer.seen_workers(), vec!["local-coder", "local-coder"]);
+    assert!(implementer.seen_tasks()[1].contains("syntax error"));
+    assert_eq!(reasoner.calls(), 1);
+}
+
+#[test]
+fn compatibility_failure_replans_within_scope_and_preserves_main() {
+    let fx = cargo_fixture(compatibility_service_source());
+    let executor = HostExecutor::with_process_commands();
+    let broken = r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self, resident: &str) -> u32 {
+        resident.len() as u32
+    }
+}
+"#;
+    let repaired = r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self) -> u32 {
+        self.open_case_for("default")
+    }
+
+    pub fn open_case_for(&self, resident: &str) -> u32 {
+        resident.len() as u32
+    }
+}
+"#;
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![write_attempt("src/service.rs", broken), write_attempt("src/service.rs", repaired)],
+    );
+    let task = "Extend AssessmentService, but preserve the existing CLI caller in src/main.rs and do not modify src/main.rs.";
+    let campaign = make_campaign(
+        "compatibility-replan",
+        &fx.sha,
+        vec![compatibility_step(task)],
+        default_policy(),
+    );
+    let reasoner = ScriptedRecoveryReasoner::new(vec![Ok(decision(
+        RecoveryDecisionKind::Replan,
+        RecoveryFailureKind::CompatibilityConstraint,
+        RecoveryWorkerAction::SameWorker,
+        Some("Preserve the existing src/main.rs caller contract. Revise only src/service.rs inside allowed_paths."),
+    ))]);
+    let reviewer = AcceptingReviewer;
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_recovery_reasoner(&reasoner)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(state.steps[0].attempts.len(), 2);
+    assert_eq!(fs::read_to_string(Path::new(&state.worktree_path).join("src/main.rs")).unwrap(), r#"mod service;
+
+use service::AssessmentService;
+
+fn main() {
+    let service = AssessmentService;
+    println!("{}", service.open_case());
+}
+"#);
+    let recovery = fs::read_to_string(runner.attempt_dir(&campaign.campaign_id, "service", 1).join("recovery-decision.json")).unwrap();
+    assert!(recovery.contains(r#""kind": "replan""#));
+    assert!(implementer.seen_tasks()[1].contains("src/main.rs"));
+    let request = &reasoner.requests()[0];
+    assert!(request.prompt().contains("compatibility"));
+}
+
+#[test]
+fn insufficient_authority_decision_blocks_safely() {
+    let fx = cargo_fixture(compatibility_service_source());
+    let executor = HostExecutor::with_process_commands();
+    let broken = r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self, resident: &str) -> u32 {
+        resident.len() as u32
+    }
+}
+"#;
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![write_attempt("src/service.rs", broken)]);
+    let campaign = make_campaign(
+        "insufficient-authority",
+        &fx.sha,
+        vec![compatibility_step("Change AssessmentService if possible.")],
+        default_policy(),
+    );
+    let reasoner = ScriptedRecoveryReasoner::new(vec![Ok(decision(
+        RecoveryDecisionKind::BlockInsufficientAuthority,
+        RecoveryFailureKind::InsufficientAuthority,
+        RecoveryWorkerAction::SameWorker,
+        None,
+    ))]);
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_recovery_reasoner(&reasoner);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(state.steps[0].attempts.len(), 1);
+    assert_eq!(state.steps[0].attempts[0].classification, Some(FailureClassification::InsufficientAuthority));
+}
+
+#[test]
+fn repeated_equivalent_failure_forces_fallback_replan() {
+    let fx = cargo_fixture(compatibility_service_source());
+    let executor = HostExecutor::with_process_commands();
+    let broken = r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self, resident: &str) -> u32 {
+        resident.len() as u32
+    }
+}
+"#;
+    let repaired = r#"pub struct AssessmentService;
+
+impl AssessmentService {
+    pub fn open_case(&self) -> u32 {
+        self.open_case_for("default")
+    }
+
+    pub fn open_case_for(&self, resident: &str) -> u32 {
+        resident.len() as u32
+    }
+}
+"#;
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            write_attempt("src/service.rs", broken),
+            write_attempt("src/service.rs", broken),
+            write_attempt("src/service.rs", repaired),
+        ],
+    );
+    let campaign = make_campaign(
+        "stagnation-fallback",
+        &fx.sha,
+        vec![compatibility_step("Extend AssessmentService without touching src/main.rs.")],
+        default_policy(),
+    );
+    let reasoner = ScriptedRecoveryReasoner::new(vec![
+        Ok(decision(
+            RecoveryDecisionKind::Repair,
+            RecoveryFailureKind::StrategyFailure,
+            RecoveryWorkerAction::SameWorker,
+            Some("Try again in src/service.rs."),
+        )),
+        Ok(decision(
+            RecoveryDecisionKind::Repair,
+            RecoveryFailureKind::StrategyFailure,
+            RecoveryWorkerAction::SameWorker,
+            Some("Try again in src/service.rs."),
+        )),
+    ]);
+    let reviewer = AcceptingReviewer;
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_recovery_reasoner(&reasoner)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(implementer.seen_workers(), vec!["local-coder", "local-coder", "local-primary"]);
+    assert!(implementer.seen_tasks()[2].contains("Replan the implementation"));
+    let recovery = fs::read_to_string(runner.attempt_dir(&campaign.campaign_id, "service", 2).join("recovery-decision.json")).unwrap();
+    assert!(recovery.contains(r#""repeated_failure_count": 1"#));
+    assert!(recovery.contains(r#""kind": "replan""#));
 }
 
 fn run_campaign(
