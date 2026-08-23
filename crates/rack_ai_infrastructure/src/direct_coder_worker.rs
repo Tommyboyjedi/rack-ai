@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::HostCoderToolRunner;
 
 const DEFAULT_REQUEST_TIMEOUT: Duration = Duration::from_secs(330);
-const MAX_MODEL_TURN_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_MODEL_TURN_TIMEOUT: Duration = Duration::from_secs(180);
 const DEFAULT_MODEL_RESPONSE_TOKENS: u32 = 3072;
 const MAX_CONSECUTIVE_CORRECTABLE_TOOL_ERRORS: usize = 3;
 const TOOL_ARGUMENT_ERROR_PREFIX: &str = "missing string field: ";
