@@ -1,165 +1,267 @@
-# PR14 Contract — Rust Coding Harness Qualification
+# PR14 Contract — Rust Coding Harness Qualification and Routing Policy
 
 ## Status
 
-Architecture-reset qualification contract. This PR is documentation/experiment focused and must not turn into another bespoke Rack AI coding-agent implementation.
+Architecture-reset qualification contract. This PR is documentation/experiment focused and must not become another bespoke Rack AI coding-agent implementation.
 
-PR14 is the first active PR after the architecture reset. It exists to make one production decision: which Rust-native coding harness Rack AI will supervise going forward.
+PR14 is the first active PR after the architecture reset. Its purpose is to qualify the Rust-native coding harnesses Rack AI can supervise, determine the capability envelope of each harness against the actual rack workers/models, and establish the initial deterministic harness-routing policy.
 
-## Strategic reset
+PR14 is no longer winner-takes-all. Rack AI may deliberately use different coding harnesses for different registered workers/models when evidence shows that this is materially better.
 
-Rack AI is the Rust control plane above coding harnesses and inference backends. It owns orchestration, authority, isolation, verification, recovery, evidence and promotion policy. It should not implement general-purpose coding-agent mechanics when a suitable Rust-native harness already provides them.
+## Strategic boundary
 
-The selected coding harness owns model-facing source-code interaction: repository navigation, coding tool loops, edit/patch mechanics, implementation-time command use and harness-local context management.
+Rack AI is the Rust control plane above coding harnesses and inference backends.
 
-Rack AI remains responsible for deciding whether harness output is acceptable.
+Rack AI owns:
 
-## Preconditions
+- orchestration and campaign/task state;
+- worker/model/GPU registration and placement;
+- target repository/worktree authority;
+- isolation/network/process policy;
+- deterministic acceptance and no-change rejection;
+- independent review;
+- recovery/replan/fallback;
+- durable evidence;
+- Git/commit/promotion policy;
+- selection of the appropriate qualified coding harness for a worker/task.
 
-Before starting PR14 work:
+A coding harness owns model-facing implementation mechanics inside its bounded workspace:
 
-- current `main` must include merged PR7;
-- the production comparison is Rust-native only;
-- JCode swarm must not be used as a dependency or workaround;
-- existing local vLLM endpoints remain the model runtime:
-  - `local-primary` on `127.0.0.1:8017`;
-  - `local-coder` on `127.0.0.1:8018`;
-- use disposable target worktrees/clones; do not experiment against the live Rack AI checkout;
-- preserve existing Rack AI path, Git, Podman, timeout and no-remote-promotion safety rules.
+- coding-agent loop;
+- source navigation/search;
+- edit/patch mechanics;
+- implementation-time command/tool use;
+- harness-local context management;
+- model/tool-call parsing/correction provided by that harness.
+
+The harness may report success. Rack AI remains responsible for deciding whether work is accepted.
+
+## Rust requirement
+
+Production coding harnesses in the trusted long-running Rack AI stack must be Rust-native.
+
+Target-project compilers/interpreters may be non-Rust. The requirement applies to Rack AI and its coding-harness layer, not to the languages Rack AI can develop.
 
 ## Candidate set
 
-The qualification is deliberately narrow:
+Qualify initially:
 
 1. **JCode direct/non-swarm execution**.
 2. **Abacus**.
 
-JCode has incumbent advantage because it is already installed, Rust-native, and direct endpoint execution has worked on the rack. The previously observed JCode defect was in swarm provider/endpoint rebinding; PR14 must not depend on JCode swarm.
+Do not introduce a third harness unless both fail a documented material requirement that cannot reasonably be solved through configuration or upstream capability.
 
-Abacus is the challenger because it is Rust-native, supports OpenAI-compatible/vLLM endpoints, and explicitly handles several open-weight textual tool-call formats client-side.
+### JCode hypothesis
 
-Do not broaden the bake-off unless both candidates fail a material requirement. If another candidate is considered, first document exactly which required property both JCode and Abacus failed.
+JCode is expected to be especially useful for stronger models because it is mature, already installed on the rack, has rich coding/navigation capabilities and direct local-provider execution has worked.
 
-## Qualification principle
+Do not use JCode swarm as part of PR14. The previously observed swarm provider/endpoint rebinding defect is not required to be fixed for the direct-harness architecture.
 
-Use identical disposable target repositories, tasks, models, authority and acceptance wherever practical. The objective is to choose one production harness, not to prove that multiple harnesses can work.
+### Abacus hypothesis
 
-Do not modify Rack AI to compensate for candidate shortcomings during the comparison unless the change is purely experimental instrumentation and cannot bias one harness over the other.
+Abacus is expected to be especially useful for smaller/weaker open-weight models because it is Rust-native, supports OpenAI-compatible/vLLM endpoints and explicitly handles several textual/open-weight tool-call formats client-side.
+
+This is a hypothesis to test, not a hard-coded parameter-count rule.
+
+## Preconditions
+
+Before starting PR14:
+
+- current `main` includes merged PR7;
+- vLLM remains the inference runtime;
+- local endpoints are available:
+  - `local-primary` on `127.0.0.1:8017`;
+  - `local-coder` on `127.0.0.1:8018`;
+- use disposable target worktrees/clones;
+- never experiment against the live executing Rack AI checkout;
+- preserve existing Rack AI path, Git, Podman, timeout and no-remote-promotion safety rules;
+- do not modify Rack AI to compensate for a candidate weakness during comparison except neutral instrumentation/reproducibility support that does not bias one harness.
+
+## Qualification objective
+
+The result of PR14 is not one global winner. The result is a **capability matrix and initial routing policy**.
+
+For each harness, establish which worker/model/task combinations are qualified, conditionally qualified or not qualified.
+
+A result may legitimately look like:
+
+```text
+JCode:
+  local-primary: qualified
+  local-coder: not qualified
+
+Abacus:
+  local-primary: qualified
+  local-coder: qualified
+
+Initial routing:
+  local-coder -> abacus
+  local-primary -> jcode
+```
+
+If both harnesses perform well for a worker, choose one preferred harness and optionally one fallback based on evidence and operational simplicity.
+
+Do not route solely from raw GPU size or model parameter count. Route from registered worker/model capability evidence.
 
 ## Required experiments
 
-At minimum test both harnesses against:
+Run both JCode direct and Abacus against both current model roles wherever each harness can be configured:
 
 - `local-coder` on port 8018;
-- `local-primary` on port 8017;
-- a small localized edit task;
-- a multi-file compatibility-preserving task;
-- malformed/textual tool-call behaviour representative of the current local-coder;
-- compiler/test feedback and repair;
-- a task requiring repository search/navigation;
-- a bounded failure/timeout case;
-- a network-disabled disposable worktree;
-- two independent sessions targeting different local endpoints without cross-binding.
+- `local-primary` on port 8017.
 
-Where practical reuse the historical PR8 `semantic-contract` task as one neutral proving task, but PR14 does not implement PR8.
+At minimum exercise:
 
-At least one task should be non-trivial enough that a successful run requires inspecting existing code, preserving an existing contract and repairing a compiler/test failure if the initial change is imperfect.
+1. a small localized edit;
+2. an additive edit to an existing Rust module/export surface;
+3. a multi-file compatibility-preserving task;
+4. repository search/navigation;
+5. compiler/test feedback and repair;
+6. malformed or textual tool-call behaviour representative of current `local-coder`;
+7. a bounded failure/timeout case;
+8. network-disabled disposable worktree operation;
+9. explicit endpoint/model binding;
+10. two independent sessions targeting different local endpoints without cross-binding;
+11. final worktree/diff inspection independent of the harness.
+
+Where practical reuse the historical PR8 `semantic-contract` step as one neutral proving task, but PR14 does not implement PR8.
+
+At least one task must require inspecting existing code, preserving an existing contract, making substantive edits and reacting correctly to compiler/test feedback.
+
+## Fairness rules
+
+For comparable experiments, keep these equal wherever practical:
+
+- target base SHA;
+- task wording;
+- acceptance commands;
+- model endpoint;
+- context/output limits;
+- network policy;
+- runtime/resource limits;
+- target authority.
+
+Candidate-specific configuration that is part of the harness's normal supported operation is allowed and must be recorded.
+
+Do not give one harness bespoke Rack AI repair logic that the other does not receive.
 
 ## Required measurements
 
-Record for each candidate:
+For each `(harness, worker/model, task)` combination record:
 
-- whether a substantive diff was produced;
-- correctness against deterministic acceptance;
+- substantive diff produced: yes/no;
+- deterministic acceptance result;
 - preservation of unrelated APIs/behaviour;
-- model/tool protocol failures;
-- number of model turns/tool calls where available;
+- tool/protocol failures;
+- textual/malformed tool-call handling;
+- turns/tool calls where available;
 - wall time;
 - context/output truncation behaviour;
-- ability to repair compiler/test failures;
-- quality and structure of headless output/transcripts;
-- process exit/timeout/cancellation behaviour;
-- offline/network-disabled operation;
-- ease of selecting a specific local vLLM endpoint/model;
-- behaviour when two independent sessions target different endpoints;
-- ability for Rack AI to inspect the final worktree/diff independently;
-- operational complexity of installation, configuration and upgrades;
-- amount of Rack AI-native coding-agent code that the candidate would allow us to delete.
+- compiler/test repair quality;
+- repository navigation quality;
+- headless transcript/evidence quality;
+- timeout/cancel/process behaviour;
+- network-disabled operation;
+- endpoint/model-binding reliability;
+- installation/configuration/upgrade complexity;
+- ability for Rack AI to inspect the final worktree independently;
+- amount of Rack AI-native coding-agent functionality that the harness can replace.
+
+## Capability classification
+
+Classify each relevant harness/worker pairing as:
+
+- `qualified` — suitable for production use for the tested class of work;
+- `qualified_with_constraints` — usable with clearly documented bounded configuration/limitations;
+- `not_qualified` — fails a material requirement.
+
+Do not hide failures behind aggregate scores.
+
+## Initial routing policy
+
+PR14 must commit an explicit initial routing policy suitable for PR15 implementation.
+
+The routing policy should be data/config driven and expressed in terms of registered worker/model capabilities, not embedded rules such as `parameter_count < 7B`.
+
+It should support at least:
+
+- preferred harness per worker/model profile;
+- optional fallback harness when qualified;
+- explicit `none` when no harness is qualified;
+- reason/evidence reference for the route.
+
+For the current rack, the expected-but-unproven starting hypothesis is:
+
+```text
+local-coder   -> Abacus preferred
+local-primary -> JCode preferred
+```
+
+PR14 evidence is allowed to overturn that hypothesis.
 
 ## Required repository artifacts
 
 Commit a qualification report under `docs/` containing:
 
-- exact JCode and Abacus versions/SHAs tested;
-- exact Rack AI SHA used as controller/reference;
+- exact JCode version/SHA;
+- exact Abacus version/SHA;
+- exact Rack AI SHA used;
 - exact local model names/configuration;
-- the tasks and acceptance commands;
-- concise result table for every required measurement;
-- important raw evidence locations/transcript references;
-- material failures and workarounds;
-- final decision and rationale.
+- task definitions and acceptance commands;
+- result matrix for every required test;
+- evidence/transcript references;
+- material failures and candidate-specific constraints;
+- capability classification for each harness/worker pairing;
+- initial routing policy and rationale.
 
-The report must end with exactly one of:
+The report must end with a machine-readable summary equivalent to:
 
-`SELECTED_HARNESS = jcode`
+```text
+QUALIFIED_HARNESSES = jcode,abacus
+LOCAL_CODER_PREFERRED_HARNESS = <jcode|abacus|none>
+LOCAL_PRIMARY_PREFERRED_HARNESS = <jcode|abacus|none>
+```
 
-`SELECTED_HARNESS = abacus`
+If a harness is not qualified anywhere, state that explicitly rather than forcing dual-harness adoption.
 
-or, only if both materially fail:
+## Security and authority requirements
 
-`SELECTED_HARNESS = none`
+A qualifying harness must be invokable without receiving Rack AI promotion authority.
 
-## Selection rule
+Rack AI must remain able to enforce the outer worktree/container/network/runtime boundary and independently run final Git/path, acceptance and review gates.
 
-Do not choose based on familiarity alone. JCode is the incumbent, so Abacus should displace it only when it is materially better for the actual rack requirements. Conversely, JCode does not win merely because it is already installed: it must work reliably with the real local-coder and local-primary paths.
+A harness must not require remote Git credentials or automatic push/merge authority for normal Rack AI operation.
 
-The most important selection criteria are:
-
-1. reliable operation with the small local coder;
-2. clean programmatic/headless integration;
-3. predictable endpoint/model binding;
-4. robust source editing and repository navigation;
-5. bounded process control and evidence capture;
-6. compatibility with Rack AI's outer isolation/acceptance/review boundary;
-7. ability to reduce, not expand, Rack AI's own coding-agent implementation.
-
-## Security and ownership requirements
-
-A qualifying harness must be invokable without receiving Rack AI promotion authority. Rack AI must remain able to enforce the outer worktree/container/network/runtime boundary and independently run final path, Git, acceptance and review gates.
-
-The harness must not require remote credentials or automatic push/merge authority for normal Rack AI operation.
-
-## Rust requirement
-
-The production coding harness must be Rust-native. Target-project compilers/interpreters may of course be non-Rust; this requirement applies to the trusted long-running Rack AI/harness software layer, not to languages Rack AI can develop.
-
-## Explicit non-goals
+## Non-goals
 
 - no JCode swarm dependency;
+- no production PR15 integration yet;
 - no new Rack AI edit tools;
-- no Rack AI-owned LSP/semantic backend;
+- no Rack AI-owned LSP/semantic coding backend;
 - no objective planning;
-- no adaptive scheduling;
+- no adaptive task scheduling;
 - no web research system;
 - no frontend;
 - no automatic remote Git promotion;
-- no production integration of the winner yet — that is PR15.
+- no dynamic self-learning harness scheduler yet.
 
 ## Implementation-agent handoff
 
-An implementation/research agent assigned PR14 should:
+An agent assigned PR14 should:
 
-1. read this contract and the current Rack AI architecture/engineering docs;
-2. inspect how local model endpoints are configured today;
-3. install or prepare only the minimum candidate tooling required for the comparison;
-4. create reproducible disposable fixtures/tasks;
-5. run the same qualification matrix against JCode direct and Abacus;
-6. preserve evidence rather than hand-waving around failures;
-7. commit the comparison report and any neutral test scripts/fixtures needed to reproduce it;
-8. make exactly one harness selection.
-
-Do not implement PR15 while doing PR14.
+1. read this contract and current architecture/engineering docs;
+2. inspect current worker/model endpoint configuration;
+3. identify exact JCode and Abacus versions to test;
+4. prepare only the minimum tooling/configuration needed for reproducible comparison;
+5. create disposable fixtures/tasks from known clean SHAs;
+6. run the same matrix against both harnesses and both worker roles;
+7. preserve raw failure evidence;
+8. classify each harness/worker pairing;
+9. commit the comparison report and initial routing policy;
+10. stop without implementing PR15.
 
 ## Merge gate
 
-Merge PR14 only when both candidates have been tested sufficiently to make the production decision, the evidence is committed, and exactly one production harness is selected unless both fail a documented material requirement.
+Merge PR14 only when the current worker/model roles have been tested sufficiently to establish a defensible capability matrix and initial harness-routing policy.
+
+It is acceptable for one harness to be unqualified for one or all worker profiles. It is not acceptable to guess routing from model size without evidence.
