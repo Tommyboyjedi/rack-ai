@@ -24,7 +24,7 @@ impl ChangeLayout {
     }
 
     pub fn coder_max_turns() -> usize {
-        8
+        16
     }
 
     pub fn is_ephemeral_path(path: &str) -> bool {
@@ -54,6 +54,7 @@ mod tests {
             ChangeLayout::worktree_path(&root, &change_id),
             PathBuf::from("/srv/rack-workspaces/adaptos-001/repo")
         );
+        assert_eq!(ChangeLayout::coder_max_turns(), 16);
         assert!(ChangeLayout::is_ephemeral_path("target/debug/fixture"));
         assert!(!ChangeLayout::is_ephemeral_path("src/lib.rs"));
     }

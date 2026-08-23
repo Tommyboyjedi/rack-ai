@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use rack_ai_domain::AllowedPaths;
 
+use crate::ChangeLayout;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementChangeRequest {
     worktree_path: PathBuf,
@@ -22,7 +24,7 @@ impl ImplementChangeRequest {
             task,
             allowed_paths: None,
             timeout_seconds: 900,
-            max_turns: 8,
+            max_turns: ChangeLayout::coder_max_turns(),
             worker_id: None,
             worker_endpoint: None,
             worker_model_id: None,
@@ -85,6 +87,7 @@ impl ImplementChangeRequest {
 #[cfg(test)]
 mod tests {
     use super::ImplementChangeRequest;
+    use crate::ChangeLayout;
     use rack_ai_domain::AllowedPath;
     use rack_ai_domain::AllowedPaths;
     use std::path::PathBuf;
@@ -99,5 +102,6 @@ mod tests {
                 );
         assert_eq!(request.timeout_seconds(), 120);
         assert_eq!(request.task(), "Add a feature.");
+        assert_eq!(request.max_turns(), ChangeLayout::coder_max_turns());
     }
 }

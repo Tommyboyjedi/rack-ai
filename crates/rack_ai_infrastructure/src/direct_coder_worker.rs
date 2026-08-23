@@ -178,6 +178,9 @@ impl DirectCoderWorker {
     - `bash` requires `command`.\n\
     - If a tool returns an argument or tool error, correct the arguments and retry with another real tool call.\n\
     - Do not merely describe the correction in prose.\n\
+    - When editing an existing file, preserve unrelated existing behavior, exports, and content unless the task explicitly requires changing them.\n\
+    - If the task or provided instructions include an acceptance or test command, run it with `bash` after your edits when feasible before replying COMPLETE.\n\
+    - If that command fails, inspect the failure and make a reasonable repair attempt within your remaining turns.\n\
     - Do not answer COMPLETE until the required filesystem changes have actually succeeded.\n\
     - After the requested file action is confirmed, reply with exactly COMPLETE and stop.\n\
     - Do not write the word COMPLETE into any project file unless explicitly asked.\n\n\
@@ -334,6 +337,9 @@ mod tests {
         assert!(prompt.contains("This model id is authoritative."));
         assert!(prompt.contains("`write` requires BOTH `file_path` and `content`."));
         assert!(prompt.contains("correct the arguments and retry"));
+        assert!(prompt.contains("preserve unrelated existing behavior, exports, and content"));
+        assert!(prompt.contains("include an acceptance or test command, run it with `bash`"));
+        assert!(prompt.contains("make a reasonable repair attempt within your remaining turns"));
     }
 
     #[test]
@@ -455,6 +461,111 @@ mod tests {
     }
 
     #[test]
+    fn supports_more_turns_than_the_previous_eight_turn_ceiling() {
+        let worker = DirectCoderWorker::local_default();
+        let cwd = temp_root();
+        let runner = HostCoderToolRunner::new(cwd.clone());
+        let client = ScriptedClient::new(vec![
+            tool_call_response(
+                "call-1",
+                "write",
+                json!({"file_path": "src/one.rs", "content": "1
+"}),
+            ),
+            tool_call_response("call-2", "read", json!({"file_path": "src/one.rs"})),
+            tool_call_response(
+                "call-3",
+                "write",
+                json!({"file_path": "src/two.rs", "content": "2
+"}),
+            ),
+            tool_call_response("call-4", "read", json!({"file_path": "src/two.rs"})),
+            tool_call_response(
+                "call-5",
+                "write",
+                json!({"file_path": "src/three.rs", "content": "3
+"}),
+            ),
+            tool_call_response("call-6", "read", json!({"file_path": "src/three.rs"})),
+            tool_call_response(
+                "call-7",
+                "write",
+                json!({"file_path": "src/four.rs", "content": "4
+"}),
+            ),
+            tool_call_response("call-8", "read", json!({"file_path": "src/four.rs"})),
+            tool_call_response("call-9", "bash", json!({"command": "cat src/four.rs"})),
+            stop_response("COMPLETE"),
+        ]);
+        let output = worker
+            .execute_with_client(
+                &CoderRunRequest::new("Perform several file operations".to_string(), 16).unwrap(),
+                &runner,
+                &client,
+            )
+            .unwrap();
+        assert_eq!(output, "COMPLETE");
+        assert_eq!(client.call_count(), 10);
+        assert_eq!(
+            fs::read_to_string(cwd.join("src/four.rs")).unwrap(),
+            "4
+"
+        );
+    }
+
+    #[test]
+    fn fails_clearly_when_the_model_never_completes_within_max_turns() {
+        let worker = DirectCoderWorker::local_default();
+        let cwd = temp_root();
+        let runner = HostCoderToolRunner::new(cwd);
+        let responses = (0..16)
+            .map(|index| {
+                tool_call_response(
+                    format!("call-{index}").as_str(),
+                    "bash",
+                    json!({"command": "printf loop"}),
+                )
+            })
+            .collect::<Vec<_>>();
+        let client = ScriptedClient::new(responses);
+        let error = worker
+            .execute_with_client(
+                &CoderRunRequest::new("Loop forever".to_string(), 16).unwrap(),
+                &runner,
+                &client,
+            )
+            .unwrap_err();
+        assert_eq!(error, "max turns exceeded");
+        assert_eq!(client.call_count(), 16);
+    }
+
+    #[test]
+    fn wall_clock_timeout_remains_bounded_even_with_a_larger_turn_budget() {
+        let worker = DirectCoderWorker::local_default();
+        let cwd = temp_root();
+        let runner = HostCoderToolRunner::new(cwd);
+        let client = DelayedClient::new(
+            Duration::from_millis(1100),
+            vec![tool_call_response(
+                "call-1",
+                "bash",
+                json!({"command": "printf slow"}),
+            )],
+        );
+        let error = worker
+            .execute_with_client(
+                &CoderRunRequest::new("Run slowly".to_string(), 16)
+                    .unwrap()
+                    .with_timeout_seconds(1),
+                &runner,
+                &client,
+            )
+            .unwrap_err();
+        assert_eq!(error, "coder wall-clock timeout exceeded");
+        assert_eq!(client.call_count(), 1);
+    }
+
+    #[test]
     fn path_policy_violations_remain_terminal() {
         let worker = DirectCoderWorker::local_default();
         let runner = WorkspaceCoderToolRunner::new(
@@ -485,6 +596,12 @@ mod tests {
         seen_messages: RefCell<Vec<Vec<Value>>>,
     }
 
+    struct DelayedClient {
+        delay: Duration,
+        responses: RefCell<VecDeque<Value>>,
+        seen_messages: RefCell<Vec<Vec<Value>>>,
+    }
+
     impl ScriptedClient {
         fn new(responses: Vec<Value>) -> Self {
             Self {
@@ -502,6 +619,20 @@ mod tests {
         }
     }
 
+    impl DelayedClient {
+        fn new(delay: Duration, responses: Vec<Value>) -> Self {
+            Self {
+                delay,
+                responses: RefCell::new(VecDeque::from(responses)),
+                seen_messages: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.seen_messages.borrow().len()
+        }
+    }
+
     impl ChatCompletionClient for ScriptedClient {
         fn complete(
             &self,
@@ -509,6 +640,21 @@ mod tests {
             _request_timeout: Duration,
         ) -> Result<Value, String> {
             self.seen_messages.borrow_mut().push(messages.to_vec());
+            self.responses
+                .borrow_mut()
+                .pop_front()
+                .ok_or("scripted client exhausted".to_string())
+        }
+    }
+
+    impl ChatCompletionClient for DelayedClient {
+        fn complete(
+            &self,
+            messages: &[Value],
+            _request_timeout: Duration,
+        ) -> Result<Value, String> {
+            self.seen_messages.borrow_mut().push(messages.to_vec());
+            std::thread::sleep(self.delay);
             self.responses
                 .borrow_mut()
                 .pop_front()
