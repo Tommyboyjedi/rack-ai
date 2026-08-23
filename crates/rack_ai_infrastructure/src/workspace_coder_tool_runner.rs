@@ -79,7 +79,7 @@ impl WorkspaceCoderToolRunner<'_> {
         let result = self.executor.run_command(
             &RunCommandRequest::new(
                 self.context.worktree_path().to_path_buf(),
-                vec!["/bin/sh".to_string(), "-lc".to_string(), command],
+                vec!["/bin/sh".to_string(), "-c".to_string(), command],
             )?
             .with_timeout_seconds(self.context.timeout_seconds()),
         )?;
@@ -98,7 +98,9 @@ fn read_required_string<'a>(value: &'a Value, key: &str) -> Result<&'a str, Stri
 
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceCoderToolRunner;
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+
     use rack_ai_application::CoderToolRunner;
     use rack_ai_application::CoderWorkspaceContext;
     use rack_ai_application::CommandEvidence;
@@ -110,7 +112,8 @@ mod tests {
     use rack_ai_domain::AllowedPath;
     use rack_ai_domain::AllowedPaths;
     use serde_json::json;
-    use std::path::PathBuf;
+
+    use super::WorkspaceCoderToolRunner;
 
     struct FakeExecutor;
 
@@ -182,9 +185,70 @@ mod tests {
             runner
                 .run(
                     "write",
-                    &json!({"file_path": "src/lib.rs", "content": "ok"}),
+                    &json!({"file_path": "src/lib.rs", "content": "ok"})
                 )
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn bash_uses_non_login_shell_argv() {
+        let executor = CapturingExecutor::default();
+        let runner = WorkspaceCoderToolRunner::new(
+            &executor,
+            CoderWorkspaceContext::new(
+                PathBuf::from("/tmp/repo"),
+                AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap(),
+            ),
+        );
+        runner
+            .run("bash", &json!({"command": "cargo test"}))
+            .unwrap();
+        assert_eq!(
+            executor.argv(),
+            vec![
+                "/bin/sh".to_string(),
+                "-c".to_string(),
+                "cargo test".to_string()
+            ]
+        );
+    }
+
+    #[derive(Default)]
+    struct CapturingExecutor {
+        argv: RefCell<Vec<String>>,
+    }
+
+    impl CapturingExecutor {
+        fn argv(&self) -> Vec<String> {
+            self.argv.borrow().clone()
+        }
+    }
+
+    impl WorkspaceExecutor for CapturingExecutor {
+        fn write_file(
+            &self,
+            _request: &WriteFileRequest,
+        ) -> Result<WorkspaceExecutionResult, String> {
+            Err("write not expected".to_string())
+        }
+
+        fn read_file(
+            &self,
+            _request: &ReadFileRequest,
+        ) -> Result<WorkspaceExecutionResult, String> {
+            Err("read not expected".to_string())
+        }
+
+        fn run_command(
+            &self,
+            request: &RunCommandRequest,
+        ) -> Result<WorkspaceExecutionResult, String> {
+            self.argv.replace(request.argv().to_vec());
+            Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
+                request.argv().to_vec(),
+                0,
+            )))
+        }
     }
 }
