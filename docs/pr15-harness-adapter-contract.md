@@ -2,17 +2,57 @@
 
 ## Status
 
-Post-PR14 implementation contract. Do not implement until PR14 has selected exactly one Rust coding harness.
+Post-PR14 implementation contract. Do not implement until PR14 has selected exactly one Rust coding harness and committed the qualification evidence.
 
-## Goal
+## Purpose
 
-Replace direct model-facing coding execution with a small Rack AI-owned adapter around the selected harness.
+Integrate the selected harness into Rack AI with the smallest practical adapter so Rack AI can supervise coding work without owning coding-agent internals.
 
-Rack AI must remain the authority boundary. The harness performs coding work inside the bounded target workspace; Rack AI owns campaign state, worker/model placement, isolation, acceptance, review, recovery, Git and promotion.
+PR15 is not a harness-development PR. Its purpose is to replace the production direct model-facing implementation path with a narrow, testable harness boundary while preserving Rack AI's existing control-plane guarantees.
 
-## Required architecture
+## Architectural boundary
 
-Introduce a small application-level abstraction representing a coding harness run. The exact names are open, but it should be equivalent to:
+Rack AI owns:
+
+- campaign/task state;
+- worker/model/GPU placement;
+- repository/worktree registration;
+- process/isolation/network policy;
+- timeout/cancel/cleanup;
+- path/Git authority;
+- deterministic acceptance;
+- no-change detection;
+- fresh independent review;
+- PR7 recovery/replan/fallback;
+- durable evidence/state;
+- commit/promotion policy.
+
+The selected Rust harness owns:
+
+- model-facing coding loop;
+- source-code navigation;
+- implementation-time edit/patch operations;
+- implementation-time repository search;
+- harness-local context management;
+- model/tool-call parsing and correction provided by the harness;
+- implementation-time command use inside its bounded workspace.
+
+The harness may report success. Only Rack AI may accept the attempt.
+
+## Preconditions
+
+Before implementation:
+
+- PR14 must be merged or its exact selected-harness decision must be incorporated onto the PR15 branch;
+- use exactly the selected harness unless new evidence proves the PR14 decision invalid;
+- do not rely on JCode swarm if JCode is selected;
+- preserve vLLM as the inference runtime;
+- preserve the current target-repository isolation model;
+- inspect current `DirectCoderWorker`, campaign runner, workspace executor, review, recovery and process-cleanup paths before changing them.
+
+## Required application boundary
+
+Introduce one small application-level abstraction equivalent in responsibility to:
 
 ```rust
 trait CodingHarness {
@@ -20,77 +60,143 @@ trait CodingHarness {
 }
 ```
 
-The request should contain only the information needed to launch bounded work, such as:
+Exact type names may follow existing repository conventions.
+
+`HarnessRequest` should contain only bounded launch information such as:
 
 - target workspace/worktree;
 - task/instruction;
 - selected local model/provider profile;
 - timeout/resource envelope;
 - approved environment/configuration;
-- any explicit harness mode required by the PR14 decision.
+- explicit harness mode/configuration selected by PR14.
 
-The result should expose enough structured evidence for Rack AI to supervise the run, such as:
+`HarnessRun` should expose structured supervision evidence such as:
 
 - process exit/termination status;
-- harness transcript or structured output reference;
-- model/harness identity;
+- harness transcript or structured-output reference;
+- harness/model identity;
 - timing/usage where available;
-- bounded error/termination reason.
+- bounded error/termination reason;
+- enough information to correlate the run with Rack AI attempt evidence.
 
-It must not expose Rack AI's Git promotion or campaign authority to the harness.
+Do not model harness-internal edit tools in the Rack AI application interface.
 
-## JCode-specific rule if selected
+## Selected-harness implementation rule
 
-Use direct/non-swarm execution. Rack AI selects the endpoint/model/session. Do not rely on JCode swarm provider rebinding unless independently proven fixed later.
+### If JCode was selected
 
-## Abacus-specific rule if selected
+Use direct/non-swarm execution. Rack AI selects the endpoint/model/session explicitly. Do not depend on native swarm provider rebinding unless a later qualification separately proves it fixed.
 
-Use its supported headless/local OpenAI-compatible path and preserve any useful open-weight tool-call parsing rather than recreating it in Rack AI.
+Prefer JCode's own source navigation/edit/tool loop rather than recreating those tools in Rack AI.
 
-## Process and isolation
+### If Abacus was selected
+
+Use its supported headless/local OpenAI-compatible execution path. Preserve useful built-in open-weight tool-call parsing and edit behaviour rather than recreating them in Rack AI.
+
+## Process and isolation requirements
 
 - launch the harness as a bounded child process or equally narrow integration;
-- keep execution inside the target worktree and existing isolation boundary;
-- mutation work remains network-disabled unless a future explicit policy says otherwise;
-- no home/SSH/remote Git credentials exposed to the harness;
+- run against the target worktree only;
+- keep mutation work network-disabled unless an explicit later policy changes this;
+- expose no home directory, SSH credentials, GitHub tokens, host sockets or unrelated host filesystem data;
 - timeout/cancel must terminate the harness and descendants predictably;
-- capture evidence before cleanup;
-- do not let harness success bypass Rack AI acceptance/review.
+- retain useful transcript/process evidence before cleanup;
+- the harness must not commit, push or merge merely because it considers itself finished unless Rack AI explicitly owns and authorizes that exact operation;
+- final Git/path inspection remains Rack AI-owned.
 
-## Required integration
+## Required integration behaviour
 
-At minimum integrate the selected harness into the current implementation-worker path while preserving:
+Integrate the harness into the real implementation-worker path while preserving all of the following:
 
-- local-coder primary assignment;
-- local-primary fallback where policy permits;
-- deterministic no-change rejection;
-- path/Git inspection;
-- deterministic acceptance commands;
-- fresh independent review;
-- PR7-style diagnosis/replan/fallback above the harness;
-- durable campaign evidence/state.
+1. `local-coder` remains the normal primary implementation role unless configuration says otherwise.
+2. `local-primary` remains available as bounded fallback where existing policy permits.
+3. A harness run that produces no substantive source diff is rejected.
+4. Rack AI inspects changed paths/Git state independently of the harness.
+5. Rack AI runs deterministic acceptance independently of the harness.
+6. A fresh reviewer evaluates accepted-looking work independently of the implementation session.
+7. PR7 recovery can diagnose/replan/reassign after harness-backed failures without broadening authority.
+8. Attempt/campaign state remains durable and restart-safe.
+9. Harness output/evidence is attached to the same attempt evidence model rather than creating a parallel orchestration architecture.
 
-## Explicit non-goal
+## Legacy path rule
 
-Do not implement general-purpose coding-agent tools in Rack AI. No new agent-facing read/write/edit/replace/insert/LSP/search tools should be added unless PR14 proved the selected harness cannot supply a material requirement and the architectural decision is documented first.
+Do not delete the old direct model-facing implementation code in PR15 unless removal is trivially necessary for correctness. PR16 owns broad cleanup/deletion.
 
-## Tests
+However, the production path being qualified at PR15 merge must actually use the selected harness. Do not leave the harness as an unused optional prototype while the legacy path remains authoritative.
 
-Add deterministic coverage for:
+## Explicit non-goals
 
-- request-to-process/config mapping;
-- selected model/endpoint mapping;
-- successful harness run evidence capture;
+- no new general-purpose Rack AI coding tools;
+- no Rack AI-owned read/edit/replace/insert/LSP/search agent surface;
+- no objective planning;
+- no adaptive multi-worker scheduling;
+- no web research;
+- no frontend;
+- no automatic cloud/frontier escalation;
+- no remote Git promotion;
+- no large cleanup/refactor of legacy harness internals beyond what integration requires.
+
+## Required tests
+
+Add deterministic coverage for at least:
+
+- request-to-harness-process/config mapping;
+- exact selected model/endpoint mapping;
+- successful harness-run evidence capture;
 - non-zero harness failure;
-- timeout/cancellation and child cleanup;
+- timeout/cancellation and descendant cleanup;
 - no-change rejection after harness completion;
+- path-policy violation remains rejected;
 - acceptance failure after harness completion;
 - independent reviewer remains separate from implementer;
-- path authority remains unchanged;
-- no automatic push/merge/default-branch mutation.
+- recovery receives harness-backed failure evidence;
+- no automatic push/merge/default-branch mutation;
+- restart/durable state does not lose the harness attempt outcome.
 
-Add at least one live-rack proof using the selected harness and actual local vLLM endpoint.
+Run the existing relevant workspace/campaign/isolation tests as well.
+
+## Required live proof
+
+Run at least one real local-vLLM implementation through the selected harness under Rack AI supervision.
+
+The retained evidence must show:
+
+- selected harness/version;
+- selected local model/endpoint;
+- target worktree;
+- substantive diff;
+- Rack AI-owned acceptance results;
+- independent review result;
+- final accepted or safely rejected disposition.
+
+A shell command that invokes the harness outside the Rack AI path is not sufficient proof.
+
+## Required documentation
+
+Update architecture/operations documentation with:
+
+- the selected harness;
+- how Rack AI launches/configures it;
+- endpoint/model mapping;
+- ownership boundary;
+- how to inspect harness evidence;
+- what remains legacy until PR16.
+
+## Implementation-agent handoff
+
+An agent assigned PR15 should:
+
+1. read PR14's decision report and this contract;
+2. inspect the existing implementation/review/recovery/process boundaries before editing;
+3. add the smallest typed harness abstraction and selected-harness adapter;
+4. route the real implementation-worker path through it;
+5. preserve existing Rack AI gates rather than delegating them into the harness;
+6. add deterministic tests and a real-rack proof;
+7. document exact residual legacy code for PR16.
+
+Do not implement PR16 cleanup or PR17 qualification in this PR.
 
 ## Merge gate
 
-PR15 merges only when Rack AI can supervise a real selected-harness implementation run end-to-end without relying on the legacy direct model coding loop for that path.
+PR15 merges only when Rack AI can supervise a real selected-harness implementation run end-to-end, using the real campaign/worker path, while all Rack AI-owned authority, acceptance, review, recovery and evidence guarantees remain intact.
