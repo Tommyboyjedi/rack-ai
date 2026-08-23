@@ -1,140 +1,199 @@
-# PR17 Contract — Harness-Backed Unattended Qualification
+# PR17 Contract — Harness-Routed Unattended Qualification
 
 ## Status
 
-Post-PR16 qualification contract. Do not run until the selected Rust harness is integrated and legacy native coding-agent duplication has been removed/simplified.
-
-PR17 is a qualification PR, not another feature PR. Its job is to prove that the architecture created by PR14–PR16 is actually good enough for unattended local software development.
+Post-PR16 qualification contract. Do not run until the qualified Rust harnesses are integrated, worker/model routing is active, and the superseded native coding-agent layer has been removed or simplified.
 
 ## Goal
 
-Prove the new architecture can complete substantive software development unattended using local models while Rack AI independently supervises and verifies the result.
+Prove the new Rack AI architecture can complete substantive software development unattended using local models while Rack AI chooses the appropriate qualified coding harness for each worker/model profile and independently supervises/verifies the result.
 
-This replaces the old PR9 qualification path because the underlying architecture has changed.
+This replaces the old PR9 qualification path.
 
 ## Stack under test
 
 ```text
 Rack AI control plane
-    -> selected Rust coding harness
-        -> local vLLM model(s)
-            -> isolated target worktree
+    -> worker/model selection
+    -> qualified harness routing
+        -> JCode or Abacus
+            -> local vLLM model
+                -> isolated target worktree
     -> Rack AI deterministic acceptance
     -> independent review
     -> bounded recovery/replan/fallback
     -> controlled local commit
 ```
 
-The harness may claim success, but only Rack AI can accept the attempt.
+The harness may claim success. Only Rack AI may accept the attempt.
 
 ## Preconditions
 
-Before PR17 execution:
+Before qualification:
 
-- PR14 has selected exactly one Rust harness;
-- PR15 has integrated that harness into the real Rack AI implementation-worker path;
-- PR16 has removed/simplified superseded Rack AI-native coding-agent duplication;
-- current workspace/isolation/campaign/recovery tests are green;
-- selected harness/version/configuration is documented;
-- local vLLM endpoints are healthy;
-- qualification target uses a clean, disposable worktree/clone and known base SHA;
-- no human/frontier model is needed to operate the normal run once launched.
+- PR14 has committed harness capability classifications and initial routing policy;
+- PR15 has integrated the required harness adapters into the real production worker path;
+- PR16 has removed/simplified superseded native coding-agent duplication;
+- current safety/campaign/recovery/routing tests are green;
+- local endpoints are healthy;
+- the target starts from a clean known SHA;
+- production routing configuration is frozen for the qualification run.
 
-If any precondition is false, PR17 should not be declared started.
+## What PR17 is proving
 
-## Qualification scenario
+PR17 proves the **composed control plane**, not merely that JCode or Abacus can code.
 
-Use two layers of proof:
+Evidence must show that Rack AI correctly:
 
-### 1. Deterministic regression fixture
+1. selects a worker/model role;
+2. selects that role's configured qualified harness;
+3. launches the harness against the correct endpoint/worktree;
+4. rejects invalid/no-change work independently;
+5. runs deterministic acceptance independently;
+6. obtains fresh independent review;
+7. invokes bounded recovery/replan/fallback without widening authority;
+8. records worker/model/harness identity and evidence durably;
+9. commits only after all Rack AI gates pass.
 
-Keep a small repeatable fixture that proves the core control behaviour, including at least:
+## Qualification layers
 
-- a substantive implementation change;
-- an existing compatibility constraint/caller outside the immediate edit focus;
+### 1. Deterministic regression fixtures
+
+Provide repeatable fixtures proving:
+
+- correct worker/model -> harness routing;
+- explicit endpoint binding;
+- substantive change;
+- compatibility preservation;
 - deterministic acceptance;
 - independent review;
-- at least one rejected/failure path that exercises bounded recovery/replan/fallback;
-- no unauthorized mutation.
+- rejected/no-change path;
+- bounded recovery/replan/fallback;
+- no unauthorized mutation;
+- safe timeout/cancel/process cleanup.
 
-### 2. Real substantive target task
+Where current routing uses different harnesses for `local-coder` and `local-primary`, fixtures should exercise both routes.
 
-Run at least one clean, real external-repository task that we would genuinely keep if completed correctly. It must be large enough to require:
+### 2. Real substantive target
 
-- repository inspection/navigation;
-- implementation across meaningful existing code;
+Run at least one real external-repository task we would genuinely keep.
+
+The task must require:
+
+- repository inspection;
+- meaningful implementation;
 - compiler/test feedback;
-- preservation of existing behaviour/API constraints;
+- preservation of an existing behaviour/API/compatibility constraint;
 - deterministic acceptance;
-- independent semantic review.
+- fresh independent review.
 
-Do not use a toy one-line edit as the primary qualification.
+A toy edit does not qualify.
+
+The task may naturally use one worker/harness route or may exercise fallback to another. Do not force an artificial cross-harness transition solely for demonstration.
 
 ## No-routine-supervision rule
 
-Once the substantive qualification run begins, no human, ChatGPT, Codex, Grok or other frontier model may supply development decisions needed to complete the task.
+Once the substantive unattended run begins, no human, ChatGPT, Codex, Grok or other frontier model may provide:
 
-Observation is allowed. Genuine infrastructure recovery may occur only if it does not provide implementation strategy, code changes, path widening, acceptance weakening or manual repair instructions. Any intervention must be recorded in the qualification report.
+- implementation strategy;
+- code changes;
+- repair instructions;
+- harness-switch instructions not already encoded in policy;
+- path widening;
+- acceptance weakening;
+- manual review acceptance.
 
-If manual development guidance is needed, the run is a qualification FAIL even if the final code later works.
+Observation is allowed.
 
-## Required behaviours
+Genuine infrastructure intervention is allowed only when it does not make a development decision and is fully recorded.
 
-The qualification must prove all of the following:
+If manual development guidance is required, the qualification is a **FAIL** even if the code is later repaired.
 
-1. The selected harness performs real implementation work through the real Rack AI worker path.
-2. Rack AI rejects no-change or invalid work even if the harness reports completion.
-3. Rack AI independently inspects Git/changed paths.
-4. Rack AI runs deterministic acceptance independently of harness-local tests.
-5. A fresh reviewer independently evaluates accepted-looking work.
-6. Rejected implementation can enter the bounded PR7 recovery/replan/fallback path without broadening authority.
-7. Model/worker fallback remains bounded and explicit.
-8. Accepted local commits are created only after Rack AI gates pass.
-9. Process timeout/cancel/liveness behaviour remains bounded.
-10. Durable campaign state can survive at least the restart/recovery scenario already promised by the production architecture.
-11. The run completes or safely blocks without routine external supervision.
-12. No remote push/merge/default-branch mutation occurs.
-13. No unauthorized path mutation occurs.
-14. Final code quality is good enough that we would genuinely keep the result.
+## Harness-routing expectations
+
+The qualification uses the deterministic routing policy established by PR14/PR15.
+
+It does not require dynamic self-learning harness selection.
+
+If routing is approximately:
+
+```text
+local-coder   -> Abacus
+local-primary -> JCode
+```
+
+then the evidence should demonstrate that Rack AI actually used those routes where the corresponding workers were selected.
+
+If PR14 established different routing, use that instead.
+
+A route may fall back to another harness only where that fallback was explicitly qualified and configured before the run.
 
 ## Required evidence
 
-Retain and reference evidence showing:
+Retain evidence showing:
 
 - exact Rack AI SHA;
-- selected harness name/version/SHA/configuration;
+- routing configuration/version;
+- JCode version/configuration if used;
+- Abacus version/configuration if used;
 - target repository/base SHA;
-- model identities/endpoints and GPU roles;
-- task/campaign definition and explicit authority;
+- model identities/endpoints/GPU roles;
+- task/campaign definition and authority;
+- selected worker and harness for every attempt;
 - harness transcript/output evidence;
-- worker selection/fallback sequence;
-- changed paths and full Git diff evidence;
+- changed paths and Git diff evidence;
 - deterministic acceptance commands/results;
 - independent review request/result;
-- recovery/replan/fallback decisions and rationale where exercised;
+- recovery/replan/fallback sequence where exercised;
+- any harness switch and the pre-existing policy reason;
 - final accepted commit(s);
 - timeout/cancel/liveness evidence where exercised;
-- restart/recovery evidence;
-- all operator/external interventions;
-- proof of no remote push/merge/default-branch mutation;
-- proof of no unauthorized path mutation.
+- no remote push/merge/default-branch mutation;
+- no unauthorized path mutation.
 
-## Qualification report
+## Required behaviours
 
-Commit a final report under `docs/` that contains:
+1. A qualified external harness produces substantive implementation work.
+2. Rack AI selects the harness according to configured worker/model policy.
+3. Rack AI rejects no-change/invalid work even if the harness reports completion.
+4. Rack AI runs deterministic acceptance independently of harness-local tests.
+5. A fresh reviewer independently evaluates accepted-looking work.
+6. Rejected implementations can enter bounded PR7 recovery/replan/fallback without authority expansion.
+7. If fallback changes worker or harness, it does so only through pre-qualified policy.
+8. Accepted commits are created only after every Rack AI gate passes.
+9. Process restart/state recovery remains safe enough for unattended operation.
+10. The run completes or safely blocks without routine external supervision.
 
-- environment and exact versions/SHAs;
-- fixture result;
-- substantive target/task description;
-- chronological attempt/recovery sequence;
-- acceptance and review results;
-- interventions, including `none` when there were none;
-- final changed paths/commit SHA;
-- explicit PASS/FAIL for every required behaviour above;
-- residual risks discovered;
-- clear statement of which architectural layer caused any failure.
+## Pass/fail rule
 
-The report must end with exactly:
+A safe block is preferable to false acceptance but is still a qualification FAIL.
+
+PASS requires:
+
+- substantive code we would genuinely keep;
+- correct harness routing;
+- no unauthorized mutation;
+- independent deterministic acceptance/review;
+- no routine external development intervention;
+- trustworthy retained evidence.
+
+## Required report
+
+Commit a qualification report containing:
+
+- exact versions/SHAs;
+- frozen routing configuration;
+- task and authority;
+- chronological attempts;
+- worker/harness route selected for each attempt;
+- acceptance and review evidence;
+- recovery/fallback sequence;
+- interventions;
+- final diff/commit;
+- residual risks;
+- explicit PASS/FAIL against every requirement.
+
+It must end with exactly:
 
 `PR17_QUALIFICATION = PASS`
 
@@ -142,58 +201,37 @@ or
 
 `PR17_QUALIFICATION = FAIL`
 
-Do not redefine the pass criteria after seeing the result.
+Do not move the goalposts after seeing the result.
 
-## Pass/fail rule
+## What an implementation agent may do
 
-A safe block is operationally preferable to false acceptance, but it is still a qualification FAIL.
+A Codex/Grok agent assigned PR17 may:
 
-PASS requires:
+- prepare the minimum deterministic fixtures;
+- prepare qualification scripts/reporting support;
+- verify preconditions;
+- launch the qualification.
 
-- the real substantive task completes;
-- resulting code is code we would genuinely keep;
-- no routine development intervention occurred outside the local Rack AI + selected-harness stack;
-- deterministic acceptance and independent review both pass;
-- authority/path/promotion boundaries remain intact;
-- retained evidence is sufficient to reconstruct what happened.
+Once the real substantive unattended run begins, that agent must stop supervising or repairing development and allow the local Rack AI + routed-harness stack to succeed or fail on its own.
 
-## What PR17 may implement
+If the qualification exposes a product defect, preserve evidence and identify the responsible layer (`rack_control_plane`, `routing`, `jcode_adapter`, `abacus_adapter`, `model`, `runtime`, etc.). Do not quietly turn PR17 into a broad repair PR. Normally repair the earlier layer separately and rerun from a clean state.
 
-PR17 may add only the minimum test/fixture/reporting/qualification scaffolding necessary to run and record the proof.
-
-If the qualification exposes a product defect in PR14–PR16 architecture, preserve the failure and identify the responsible layer. Do not quietly turn PR17 into a broad repair PR. Material fixes should normally go into a separate corrective PR, then PR17 should be rerun from a clean qualification state.
-
-## Explicit non-goals
+## Non-goals
 
 PR17 does not require:
 
-- freeform objective-to-campaign planning;
+- objective-to-campaign planning;
+- dynamic/learned harness selection;
 - adaptive multi-worker concurrency;
 - web research;
 - automatic cloud/frontier escalation;
 - Telegram/web UI;
 - automatic remote PR/merge;
 - self-modification of the executing Rack AI checkout;
-- new coding-agent tools inside Rack AI;
-- improvements merely intended to make a failing qualification easier after the fact.
+- new Rack AI coding-agent tools.
 
-Those capabilities remain future decisions tracked in PR18.
-
-## Implementation-agent handoff
-
-An agent assigned PR17 should:
-
-1. read PR14 selection evidence, PR15 integration docs, PR16 cleanup report and this contract;
-2. verify all preconditions before modifying anything;
-3. add only the minimum deterministic fixture/qualification/reporting support required;
-4. execute the deterministic regression proof;
-5. execute the real substantive unattended qualification through the production Rack AI path;
-6. do not manually rescue implementation failures;
-7. collect durable evidence;
-8. commit the qualification report with explicit PASS/FAIL against every requirement.
-
-A Codex/Grok implementation agent preparing PR17 may build the qualification scaffolding, but once the substantive unattended run begins it must not supervise or repair that run.
+Those remain future decisions tracked in PR18.
 
 ## Merge gate
 
-Merge PR17 only with a committed qualification report. A passing merge requires `PR17_QUALIFICATION = PASS`. If the run fails, preserve the PR/evidence as diagnostic material and fix the responsible earlier architectural layer before rerunning qualification.
+Merge only with a committed report stating `PR17_QUALIFICATION = PASS` and evidence supporting that result.
