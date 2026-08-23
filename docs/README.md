@@ -19,3 +19,5 @@ The target repository is the workload; Rack AI remains the control plane and doe
 
 
 `docs/rack-operations.md` is the headless operating runbook for unattended supervision, restart, retention, and safe upgrade behavior.
+
+`docs/pr14-harness-qualification-report.md` records the live qualification evidence and initial routing policy for JCode direct versus Abacus.
