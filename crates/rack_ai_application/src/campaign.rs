@@ -189,6 +189,8 @@ pub struct StepAttemptRecord {
     #[serde(default)]
     pub repair_instruction: Option<String>,
     #[serde(default)]
+    pub next_repair_instruction: Option<String>,
+    #[serde(default)]
     pub repair_of: Option<usize>,
     #[serde(default)]
     pub fallback_of: Option<usize>,

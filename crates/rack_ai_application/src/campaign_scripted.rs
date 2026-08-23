@@ -101,8 +101,9 @@ impl ChangeImplementer for ScriptedChangeImplementer<'_> {
                 ));
             }
         }
-        if let Some(error) = spec.error {
-            return Err(error);
+        let deferred_error = spec.error.clone();
+        if deferred_error.is_some() && spec.writes.is_empty() {
+            return Err(deferred_error.unwrap());
         }
         let executor_kind = spec
             .executor_kind
@@ -135,6 +136,9 @@ impl ChangeImplementer for ScriptedChangeImplementer<'_> {
         .with_executor_kind(executor_kind);
         if let Some(protocol_error) = spec.protocol_error {
             result = result.with_protocol_error(protocol_error);
+        }
+        if let Some(error) = deferred_error {
+            result = result.with_worker_error(error);
         }
         Ok(result)
     }

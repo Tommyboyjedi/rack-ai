@@ -998,7 +998,8 @@ fn acceptance_stderr_reaches_bounded_repair_instruction_and_fallback_task() {
     let state = run_campaign(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
 
     assert_eq!(state.steps[0].attempts.len(), 3);
-    let repair_instruction = state.steps[0].attempts[0]
+    assert!(state.steps[0].attempts[0].repair_instruction.is_none());
+    let repair_instruction = state.steps[0].attempts[1]
         .repair_instruction
         .as_deref()
         .unwrap();
@@ -1192,6 +1193,288 @@ fn repeated_reviewer_timeouts_fail_closed_without_worker_timeout_classification(
     );
     assert_eq!(implementer.seen_tasks().len(), 1);
     assert_eq!(reviewer.calls(), 3);
+}
+
+#[test]
+fn finalization_timeout_with_valid_change_runs_semantic_review_and_commits_once() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let reviewer = ScriptedReviewer::new(vec![Ok(ModelReviewResult {
+        disposition: CoordinatorReviewDisposition::Accepted,
+        classification: None,
+        rationale: "review accepted after worker finalization timeout".to_string(),
+        prompt: "prompt".to_string(),
+        raw_output: r#"{"disposition":"accepted","classification":null,"rationale":"ok"}"#
+            .to_string(),
+        used_host_shell: false,
+    })]);
+    let mut attempt = write_attempt("src/fallback.rs", "pub fn fallback() -> i32 { 2 }\n");
+    attempt.output = String::new();
+    attempt.error = Some("model request failed or timed out: timeout: global".to_string());
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![attempt]);
+    let campaign = make_campaign(
+        "finalization-timeout-accepted",
+        &fx.sha,
+        vec![sample_step("fallback", "src/fallback.rs", "Add fallback.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(state.steps[0].attempts.len(), 1);
+    assert_eq!(state.steps[0].attempts[0].commit_sha.is_some(), true);
+    assert_eq!(state.steps[0].attempts[0].classification, None);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(reviewer.calls(), 1);
+    let transcript = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "fallback", 1)
+            .join("worker-transcript.json"),
+    )
+    .unwrap();
+    assert!(transcript.contains("timeout: global"));
+}
+
+#[test]
+fn finalization_timeout_with_acceptance_failure_is_rejected_without_review() {
+    let fx = fixture();
+    let stderr = "compile error";
+    let stdout = "";
+    let executor = HostExecutor::with_command_failure(stdout, stderr, 101);
+    let mut attempt = write_attempt("src/fallback.rs", "pub fn fallback() -> i32 { 2 }\n");
+    attempt.output = String::new();
+    attempt.error = Some("model request failed or timed out: timeout: global".to_string());
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![attempt]);
+    let reviewer = ScriptedReviewer::new(vec![]);
+    let campaign = make_campaign(
+        "finalization-timeout-acceptance-fail",
+        &fx.sha,
+        vec![sample_step("fallback", "src/fallback.rs", "Add fallback.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::AcceptanceFailed)
+    );
+    assert_eq!(reviewer.calls(), 0);
+}
+
+#[test]
+fn finalization_timeout_with_no_meaningful_diff_is_rejected_without_review() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![error_attempt(
+            "model request failed or timed out: timeout: global",
+        )],
+    );
+    let reviewer = ScriptedReviewer::new(vec![]);
+    let campaign = make_campaign(
+        "finalization-timeout-no-diff",
+        &fx.sha,
+        vec![sample_step("fallback", "src/fallback.rs", "Add fallback.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::WorkerTimeout)
+    );
+    assert_eq!(reviewer.calls(), 0);
+}
+
+#[test]
+fn finalization_timeout_with_out_of_policy_diff_fails_closed_without_review() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let mut attempt = write_attempt("src/forbidden.rs", "pub fn forbidden() -> i32 { 2 }\n");
+    attempt.output = String::new();
+    attempt.error = Some("model request failed or timed out: timeout: global".to_string());
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![attempt]);
+    let reviewer = ScriptedReviewer::new(vec![]);
+    let mut step = sample_step("fallback", "src/fallback.rs", "Add fallback.");
+    step.allowed_paths = vec!["src/fallback.rs".to_string()];
+    let campaign = make_campaign(
+        "finalization-timeout-path-policy",
+        &fx.sha,
+        vec![step],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::PathPolicyFailed)
+    );
+    assert_eq!(reviewer.calls(), 0);
+}
+
+#[test]
+fn finalization_timeout_followed_by_reviewer_rejection_does_not_commit() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let mut attempt = write_attempt("src/fallback.rs", "pub fn fallback() -> i32 { 2 }\n");
+    attempt.output = String::new();
+    attempt.error = Some("model request failed or timed out: timeout: global".to_string());
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![attempt]);
+    let reviewer = ScriptedReviewer::new(vec![Ok(ModelReviewResult {
+        disposition: CoordinatorReviewDisposition::RejectedRetryable,
+        classification: Some(FailureClassification::InadequateImplementation),
+        rationale: "semantic rejection".to_string(),
+        prompt: "prompt".to_string(),
+        raw_output: r#"{"disposition":"rejected_retryable","classification":"inadequate_implementation","rationale":"semantic rejection"}"#.to_string(),
+        used_host_shell: false,
+    })]);
+    let campaign = make_campaign(
+        "finalization-timeout-review-reject",
+        &fx.sha,
+        vec![sample_step("fallback", "src/fallback.rs", "Add fallback.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Blocked);
+    assert!(state.steps[0].attempts[0].commit_sha.is_none());
+    assert_eq!(reviewer.calls(), 1);
+}
+
+#[test]
+fn finalization_timeout_reviewer_transport_retry_does_not_rerun_implementation() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let mut attempt = write_attempt("src/fallback.rs", "pub fn fallback() -> i32 { 2 }\n");
+    attempt.output = String::new();
+    attempt.error = Some("model request failed or timed out: timeout: global".to_string());
+    let implementer = ScriptedChangeImplementer::new(&executor, vec![attempt]);
+    let reviewer = ScriptedReviewer::new(vec![
+        Err("coordinator review request failed or timed out: timeout: global".to_string()),
+        Ok(ModelReviewResult {
+            disposition: CoordinatorReviewDisposition::Accepted,
+            classification: None,
+            rationale: "review accepted after retry".to_string(),
+            prompt: "prompt".to_string(),
+            raw_output: r#"{"disposition":"accepted","classification":null,"rationale":"ok"}"#
+                .to_string(),
+            used_host_shell: false,
+        }),
+    ]);
+    let campaign = make_campaign(
+        "finalization-timeout-review-retry",
+        &fx.sha,
+        vec![sample_step("fallback", "src/fallback.rs", "Add fallback.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 0,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
+        .with_reviewer(&reviewer);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    assert_eq!(state.state, CampaignState::Completed);
+    assert_eq!(implementer.seen_tasks().len(), 1);
+    assert_eq!(reviewer.calls(), 2);
+}
+
+#[test]
+fn attempt_repair_instruction_preserves_launch_causality_after_later_failure() {
+    let fx = fixture();
+    let executor = HostExecutor::new();
+    let implementer = ScriptedChangeImplementer::new(
+        &executor,
+        vec![
+            empty_attempt("COMPLETE"),
+            error_attempt("model request failed or timed out: timeout: global"),
+        ],
+    );
+    let campaign = make_campaign(
+        "attempt-launch-causality",
+        &fx.sha,
+        vec![sample_step("add-alpha", "src/alpha.rs", "Add alpha.")],
+        WorkerPolicy {
+            primary_attempts: 1,
+            repair_attempts: 1,
+            fallback_attempts: 0,
+            ..default_policy()
+        },
+    );
+    let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000);
+    runner.start(&campaign).unwrap();
+    let state = runner.run(&campaign.campaign_id).unwrap();
+    let attempt_one_instruction = state.steps[0].attempts[0]
+        .next_repair_instruction
+        .as_deref()
+        .unwrap()
+        .to_string();
+    let attempt_two = &state.steps[0].attempts[1];
+    assert_eq!(
+        attempt_two.classification,
+        Some(FailureClassification::WorkerTimeout)
+    );
+    assert_eq!(
+        attempt_two.repair_instruction.as_deref(),
+        Some(attempt_one_instruction.as_str())
+    );
+    let transcript = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "add-alpha", 2)
+            .join("worker-transcript.json"),
+    )
+    .unwrap();
+    assert!(transcript.contains("implementation produced no source diff"));
+    assert!(transcript.contains("timeout: global"));
+    let packet = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "add-alpha", 2)
+            .join("review-packet.json"),
+    )
+    .unwrap();
+    assert!(packet.contains("implementation produced no source diff"));
+    assert!(packet.contains("next_repair_instruction"));
 }
 
 #[test]
@@ -2868,6 +3151,7 @@ fn load_state_migrates_historical_attempt_without_kind_from_verification_step() 
                 "rationale": "verified",
                 "commit_sha": null,
                 "repair_instruction": null,
+                "next_repair_instruction": null,
                 "repair_of": null,
                 "fallback_of": null
             }],

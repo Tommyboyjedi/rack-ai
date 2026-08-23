@@ -134,6 +134,8 @@ struct ReviewPacketDocument {
     attempt: usize,
     worker_id: String,
     attempt_kind: AttemptKind,
+    repair_instruction: Option<String>,
+    next_repair_instruction: Option<String>,
     review: CoordinatorReview,
     changed_paths: Vec<String>,
     commit_sha: Option<String>,
@@ -939,6 +941,7 @@ impl<'a> CampaignRunner<'a> {
             None,
             None,
             None,
+            None,
             &commands,
             &evidence,
             &review,
@@ -1052,6 +1055,11 @@ impl<'a> CampaignRunner<'a> {
                     None => step.task.clone(),
                 },
             };
+            let launch_instruction = if kind == AttemptKind::Primary {
+                None
+            } else {
+                Some(task.clone())
+            };
             if kind != AttemptKind::Primary {
                 self.emit(
                     &state.campaign_id,
@@ -1144,6 +1152,7 @@ impl<'a> CampaignRunner<'a> {
                     kind,
                     &runtime.worker_id,
                     &start,
+                    launch_instruction.as_deref(),
                     repair_of,
                     fallback_of,
                     &implement_result,
@@ -1340,6 +1349,7 @@ impl<'a> CampaignRunner<'a> {
                         kind,
                         runtime.worker_id.as_str(),
                         &start,
+                        launch_instruction.as_deref(),
                         repair_of,
                         fallback_of,
                         Some(&implement_result),
@@ -1378,6 +1388,7 @@ impl<'a> CampaignRunner<'a> {
                             kind,
                             runtime.worker_id.as_str(),
                             &start,
+                            launch_instruction.as_deref(),
                             repair_of,
                             fallback_of,
                             Some(&implement_result),
@@ -1415,6 +1426,7 @@ impl<'a> CampaignRunner<'a> {
                 kind,
                 runtime.worker_id.as_str(),
                 &start,
+                launch_instruction.as_deref(),
                 repair_of,
                 fallback_of,
                 Some(&implement_result),
@@ -1470,6 +1482,7 @@ impl<'a> CampaignRunner<'a> {
         kind: AttemptKind,
         worker_id: &str,
         start: &str,
+        launch_instruction: Option<&str>,
         repair_of: Option<usize>,
         fallback_of: Option<usize>,
         result: &ImplementChangeResult,
@@ -1493,6 +1506,7 @@ impl<'a> CampaignRunner<'a> {
             kind,
             worker_id,
             start,
+            launch_instruction,
             repair_of,
             fallback_of,
             Some(result),
@@ -1513,6 +1527,7 @@ impl<'a> CampaignRunner<'a> {
         kind: AttemptKind,
         worker_id: &str,
         start: &str,
+        launch_instruction: Option<&str>,
         repair_of: Option<usize>,
         fallback_of: Option<usize>,
         implement_result: Option<&ImplementChangeResult>,
@@ -1523,12 +1538,18 @@ impl<'a> CampaignRunner<'a> {
     ) -> Result<(), String> {
         let dir = self.attempt_dir(&state.campaign_id, &step.id, attempt);
         fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+        let launch_instruction = launch_instruction.map(str::to_string);
+        let next_repair_instruction = review.repair_instruction.clone();
+        let mut packet_review = review.clone();
+        packet_review.repair_instruction = launch_instruction.clone();
         let packet = ReviewPacketDocument {
             step_id: step.id.clone(),
             attempt,
             worker_id: worker_id.to_string(),
             attempt_kind: kind,
-            review: review.clone(),
+            repair_instruction: launch_instruction.clone(),
+            next_repair_instruction: next_repair_instruction.clone(),
+            review: packet_review,
             changed_paths: source_paths(evidence.changed_paths()),
             commit_sha: commit_sha.clone(),
         };
@@ -1538,6 +1559,7 @@ impl<'a> CampaignRunner<'a> {
             "attempt_kind": kind,
             "output": implement_result.map(|item| item.output().to_string()),
             "protocol_error": implement_result.and_then(|item| item.protocol_error().map(|value| value.to_string())),
+            "worker_error": implement_result.and_then(|item| item.worker_error().map(|value| value.to_string())),
             "executor_kind": implement_result.map(|item| item.executor_kind().to_string()),
             "used_host_shell": implement_result.map(|item| item.used_host_shell()).unwrap_or(false),
             "tool_calls": implement_result.map(|item| item.tool_calls().iter().map(|call| serde_json::json!({
@@ -1545,7 +1567,8 @@ impl<'a> CampaignRunner<'a> {
                 "arguments": call.arguments,
                 "result": call.result,
             })).collect::<Vec<_>>()).unwrap_or_default(),
-            "repair_instruction": review.repair_instruction,
+            "repair_instruction": launch_instruction,
+            "next_repair_instruction": next_repair_instruction,
             "repair_of": repair_of,
             "fallback_of": fallback_of,
         });
@@ -1571,7 +1594,8 @@ impl<'a> CampaignRunner<'a> {
             classification: review.classification,
             rationale: review.rationale.clone(),
             commit_sha,
-            repair_instruction: review.repair_instruction.clone(),
+            repair_instruction: launch_instruction,
+            next_repair_instruction,
             repair_of,
             fallback_of,
         };

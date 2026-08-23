@@ -138,28 +138,43 @@ pub fn review_attempt(input: ReviewInput<'_>) -> CoordinatorReview {
             evidence_refs,
         );
     }
+
+    let changed = source_paths(input.evidence.changed_paths());
+    if let Err(error) = assert_allowed_paths(input.step, &changed) {
+        return terminal(
+            FailureClassification::PathPolicyFailed,
+            error,
+            evidence_refs,
+        );
+    }
+
     if let Some(error) = input.worker_error {
         let lower = error.to_lowercase();
-        if lower.contains("timeout") {
-            return retryable(
-                FailureClassification::WorkerTimeout,
-                error.to_string(),
-                evidence_refs,
-            );
-        }
-        if lower.contains("podman") || lower.contains("executor") {
-            return terminal(
-                FailureClassification::ExecutorUnavailable,
-                error.to_string(),
-                evidence_refs,
-            );
-        }
-        if lower.contains("model") || lower.contains("endpoint") {
-            return retryable(
-                FailureClassification::ModelUnavailable,
-                error.to_string(),
-                evidence_refs,
-            );
+        let reviewable_finalization_timeout = lower.contains("timeout")
+            && matches!(input.step.kind, CampaignStepKind::Implementation)
+            && !changed.is_empty();
+        if !reviewable_finalization_timeout {
+            if lower.contains("timeout") {
+                return retryable(
+                    FailureClassification::WorkerTimeout,
+                    error.to_string(),
+                    evidence_refs,
+                );
+            }
+            if lower.contains("podman") || lower.contains("executor") {
+                return terminal(
+                    FailureClassification::ExecutorUnavailable,
+                    error.to_string(),
+                    evidence_refs,
+                );
+            }
+            if lower.contains("model") || lower.contains("endpoint") {
+                return retryable(
+                    FailureClassification::ModelUnavailable,
+                    error.to_string(),
+                    evidence_refs,
+                );
+            }
         }
     }
     if let Some(error) = input.protocol_error {
@@ -187,15 +202,6 @@ pub fn review_attempt(input: ReviewInput<'_>) -> CoordinatorReview {
         && source_paths(input.evidence.changed_paths()).is_empty()
     {
         // COMPLETE with no tools and no diff is classified below as no_change.
-    }
-
-    let changed = source_paths(input.evidence.changed_paths());
-    if let Err(error) = assert_allowed_paths(input.step, &changed) {
-        return terminal(
-            FailureClassification::PathPolicyFailed,
-            error,
-            evidence_refs,
-        );
     }
 
     match input.step.kind {
