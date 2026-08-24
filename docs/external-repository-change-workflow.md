@@ -31,13 +31,9 @@ The Rust control plane already provides:
 - named model workers and per-step working directories;
 - bounded execution and artifact validation;
 - structured run state and status inspection;
-- a direct local-coder worker and a primary planner/verifier path.
+- qualified direct JCode execution for the production model-facing coding role.
 
-The current direct coder can execute a host shell command and write an absolute
-path.  Therefore a target repository supplied as a step `cwd` is a useful
-operational boundary, but **not yet a security boundary**.  A v1 change
-workflow must make the workspace boundary enforceable before it is trusted for
-unattended implementation.
+The old bespoke direct coder loop has been retired from the production path. Rack AI now uses qualified direct JCode execution against an isolated Git worktree, with deterministic post-run Git/path/acceptance inspection still acting as the trust boundary for unattended implementation.
 
 ## Non-goals for v1
 
@@ -106,31 +102,18 @@ commit.
 
 ## Enforced execution boundary
 
-The coding worker must not run commands directly on the host once it operates
-on external repositories.  Introduce a `WorkspaceExecutor` abstraction used
-by the direct coder tool loop.
+The coding harness must not receive authority over the source/default repository or Rack AI itself once it operates on external repositories. Rack AI supplies an isolated Git worktree and validates the final result independently.
 
-The production implementation should run each job in an isolated execution
-environment with:
+The production implementation should run each job with:
 
-- the job worktree mounted read/write at one fixed path;
-- the Rack AI repository, host home directory, SSH material, Docker socket,
-  and unrelated projects unavailable;
-- a fixed working directory inside the workspace;
-- an explicit environment allowlist;
-- network disabled by default;
-- resource and time limits;
-- no path escape through file tools or shell commands.
+- one Rack AI managed target-repository worktree;
+- explicit worker/provider/model binding;
+- a fixed working directory inside that worktree;
+- post-run Git/path inspection before acceptance;
+- deterministic acceptance commands executed through the bounded workspace executor;
+- no authority over the Rack AI source/default repository.
 
-The selected v1 isolation backend is a **rootless Podman container**.  Each
-job receives a fresh unprivileged container with the worktree mounted at the
-fixed workspace path.  It must not receive a Docker/Podman socket, host home
-directory, or privileged capabilities.  The Rust application must depend on
-the executor interface, not directly on Podman, so a future backend change
-does not alter workflow behaviour.
-
-Until that executor exists, jobs are suitable only for a disposable target
-branch under active human supervision.
+The purpose of this boundary is not to trust the coding harness. It is to make the harness replaceable while Rack AI continues to own isolation, evidence, and promotion decisions.
 
 ## DAG shape
 

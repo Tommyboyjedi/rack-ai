@@ -283,13 +283,13 @@ struct StaticWorkers;
 
 impl CampaignWorkerCatalog for StaticWorkers {
     fn runtime(&self, worker_id: &str) -> Result<CampaignWorkerRuntime, String> {
-        if worker_id == "local-coder-jcode" {
-            return Err("host-oriented JCode workers are rejected for campaigns".to_string());
-        }
         Ok(CampaignWorkerRuntime {
             worker_id: worker_id.to_string(),
             endpoint: format!("http://127.0.0.1/{worker_id}"),
             api_model_id: worker_id.to_string(),
+            entrypoint: "/tmp/fake-jcode".to_string(),
+            provider_profile: worker_id.to_string(),
+            tool_profile: None,
         })
     }
 }

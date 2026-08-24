@@ -136,7 +136,7 @@ support direct single-worker and explicit pipeline execution.
 
 `bin/rack-change` is the bounded implementation path for a registered target repository.
 
-It prepares an isolated Git worktree, executes the worker through rootless Podman, enforces allowed paths, runs deterministic acceptance commands, and produces review evidence and an acceptance verdict.
+It prepares an isolated Git worktree, executes the qualified JCode worker directly against that worktree, enforces allowed paths through post-run Git inspection, runs deterministic acceptance commands through rootless Podman, and produces review evidence and an acceptance verdict.
 
 ### Autonomous campaigns
 
@@ -161,8 +161,8 @@ Rack AI is intentionally conservative about **how** autonomous work is executed.
 Key invariants include:
 
 - target-repository work happens in isolated Git worktrees
-- live implementation uses rootless Podman
-- worker containers run with network disabled for repository mutation work
+- live implementation uses a qualified JCode direct harness inside a Rack AI managed worktree
+- deterministic acceptance/build commands run in rootless Podman with network disabled
 - changed files must remain inside declared allowed paths
 - path authorization uses normalized path semantics rather than raw string prefixes
 - required artifacts must exist before a step can pass
@@ -183,9 +183,9 @@ The current rack uses two local OpenAI-compatible vLLM endpoints:
 - `local-primary` — `http://127.0.0.1:8017/v1`
 - `local-coder` — `http://127.0.0.1:8018/v1`
 
-JCode remains available as a tool/backend where useful, but Rack AI does not rely on JCode swarm for core cross-provider orchestration.
+Rack AI now uses qualified direct JCode execution as the production model-facing coding harness for both local workers.
 
-JCode v0.78.1 demonstrated provider/endpoint rebinding problems on this rack, so the current architecture deliberately keeps orchestration and safety behaviour inside Rack AI. If upstream swarm behaviour becomes reliable in future, the integration can be simplified without changing the control-plane contract.
+JCode swarm remains out of scope. JCode v0.78.1 demonstrated provider/endpoint rebinding problems on this rack, so orchestration, safety policy, acceptance, review, retries, and Git promotion remain inside Rack AI even though JCode now owns repository navigation, editing, and local compile/test interaction.
 
 ## Validated Local Model and Serving Specifications
 

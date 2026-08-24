@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use rack_ai_domain::AllowedPaths;
 
 use crate::ChangeLayout;
+use crate::ImplementWorkerRuntime;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementChangeRequest {
@@ -12,9 +13,7 @@ pub struct ImplementChangeRequest {
     allowed_paths: Option<AllowedPaths>,
     timeout_seconds: u32,
     max_turns: usize,
-    worker_id: Option<String>,
-    worker_endpoint: Option<String>,
-    worker_model_id: Option<String>,
+    worker: Option<ImplementWorkerRuntime>,
 }
 
 impl ImplementChangeRequest {
@@ -25,9 +24,7 @@ impl ImplementChangeRequest {
             allowed_paths: None,
             timeout_seconds: 900,
             max_turns: ChangeLayout::coder_max_turns(),
-            worker_id: None,
-            worker_endpoint: None,
-            worker_model_id: None,
+            worker: None,
         }
     }
 
@@ -42,10 +39,8 @@ impl ImplementChangeRequest {
         self
     }
 
-    pub fn with_worker(mut self, id: String, endpoint: String, model_id: String) -> Self {
-        self.worker_id = Some(id);
-        self.worker_endpoint = Some(endpoint);
-        self.worker_model_id = Some(model_id);
+    pub fn with_worker(mut self, worker: ImplementWorkerRuntime) -> Self {
+        self.worker = Some(worker);
         self
     }
 
@@ -72,15 +67,19 @@ impl ImplementChangeRequest {
     }
 
     pub fn worker_id(&self) -> Option<&str> {
-        self.worker_id.as_deref()
+        self.worker.as_ref().map(ImplementWorkerRuntime::worker_id)
     }
 
     pub fn worker_endpoint(&self) -> Option<&str> {
-        self.worker_endpoint.as_deref()
+        self.worker.as_ref().map(ImplementWorkerRuntime::endpoint)
     }
 
     pub fn worker_model_id(&self) -> Option<&str> {
-        self.worker_model_id.as_deref()
+        self.worker.as_ref().map(ImplementWorkerRuntime::api_model_id)
+    }
+
+    pub fn worker(&self) -> Option<&ImplementWorkerRuntime> {
+        self.worker.as_ref()
     }
 }
 

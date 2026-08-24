@@ -10,4 +10,10 @@ pub struct ModelRecord {
     pub endpoint: String,
     pub port: u32,
     pub status: String,
+    #[serde(default)]
+    pub api_model_id: Option<String>,
+    #[serde(default)]
+    pub context_window: Option<u32>,
+    #[serde(default)]
+    pub max_num_seqs: Option<u32>,
 }

@@ -10,4 +10,8 @@ pub struct WorkerRecord {
     pub resource_id: String,
     pub model_id: String,
     pub enabled: bool,
+    #[serde(default)]
+    pub provider_profile: Option<String>,
+    #[serde(default)]
+    pub tool_profile: Option<String>,
 }

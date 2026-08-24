@@ -76,15 +76,17 @@ Therefore:
 
 - do not use JCode swarm as the primary orchestration mechanism
 - do not assume a future version fixes the issue without explicit rack-side verification
-- direct/manual/debug JCode use may remain available where appropriate
+- qualified direct JCode execution is the approved production coding harness for local-primary and local-coder
 
-The authoritative autonomous orchestration path is the repo-controlled campaign system.
+The authoritative autonomous orchestration path is the repo-controlled campaign system. JCode owns model-facing coding mechanics only; Rack AI still owns worktree selection, acceptance, review, retries, recovery, and Git promotion.
 
 # Trust Boundaries
 
 ## External Repository Writes
 
-External repository mutation must happen through the rootless Podman workspace executor.
+External repository mutation must happen only inside a Rack AI managed isolated Git worktree.
+
+The production model-facing coding harness is qualified direct JCode execution bound to an explicit worker/provider/model route. Deterministic acceptance and build/test execution remain rootless Podman bounded.
 
 This rule applies regardless of which model performs the implementation.
 
@@ -92,13 +94,13 @@ In particular, `local-primary` acting as fallback implementer does not gain extr
 
 Workers must not mutate external repositories via:
 
-- host shell
-- direct host filesystem writes
-- JCode shell execution
+- direct edits to the source/default repository
+- unmanaged host filesystem writes outside the campaign/change worktree
 - privileged helper processes
-- alternate write routes that bypass the workspace executor
+- alternate write routes that bypass Rack AI post-run Git/path/acceptance review
+- JCode swarm or provider-rebinding routes not explicitly qualified on this rack
 
-The purpose of this boundary is to make implementation capability explicit and constrained.
+The purpose of this boundary is to keep implementation capability explicit, observable, and rejectable after independent Rack AI inspection.
 
 # Fail-Closed Behaviour
 

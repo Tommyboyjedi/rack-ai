@@ -33,7 +33,7 @@ use rack_ai_infrastructure::GitCommandWorktree;
 use rack_ai_infrastructure::LocalPrimaryRecoveryReasoner;
 use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
-use rack_ai_infrastructure::PodmanChangeImplementer;
+use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 
@@ -43,9 +43,6 @@ struct RegistryWorkers {
 
 impl CampaignWorkerCatalog for RegistryWorkers {
     fn runtime(&self, worker_id: &str) -> Result<CampaignWorkerRuntime, String> {
-        if worker_id == "local-coder-jcode" {
-            return Err("host-oriented JCode workers are rejected for campaigns".to_string());
-        }
         let repository =
             FileSystemRegistryRepository::new(RegistryPaths::new(self.repo_root.clone()));
         let worker = repository
@@ -56,11 +53,6 @@ impl CampaignWorkerCatalog for RegistryWorkers {
         if !worker.enabled {
             return Err(format!("worker disabled: {worker_id}"));
         }
-        if worker.backend == "jcode" && worker_id != "local-primary" {
-            return Err(format!(
-                "JCode host worker is forbidden for campaigns: {worker_id}"
-            ));
-        }
         let models = repository.load_models()?;
         let model = models
             .into_iter()
@@ -69,7 +61,12 @@ impl CampaignWorkerCatalog for RegistryWorkers {
         Ok(CampaignWorkerRuntime {
             worker_id: worker_id.to_string(),
             endpoint: model.endpoint,
-            api_model_id: worker_id.to_string(),
+            api_model_id: model.api_model_id.unwrap_or_else(|| worker_id.to_string()),
+            entrypoint: worker.entrypoint,
+            provider_profile: worker
+                .provider_profile
+                .ok_or_else(|| format!("worker missing provider_profile: {worker_id}"))?,
+            tool_profile: worker.tool_profile,
         })
     }
 }
@@ -614,9 +611,7 @@ where
     let container_tracker = Arc::new(CampaignContainerTracker::new(state_root.clone()));
     let executor = PodmanWorkspaceExecutor::new(executor_config.clone())
         .with_observer(container_tracker.clone());
-    let live_implementer = PodmanChangeImplementer::new(
-        PodmanWorkspaceExecutor::new(executor_config).with_observer(container_tracker.clone()),
-    );
+    let live_implementer = JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), None);
     let fixture_document = load_fixture_document(fixture)?;
     let scripted = fixture_document
         .as_ref()

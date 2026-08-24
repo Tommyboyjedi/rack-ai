@@ -282,6 +282,22 @@ pub struct CampaignWorkerRuntime {
     pub worker_id: String,
     pub endpoint: String,
     pub api_model_id: String,
+    pub entrypoint: String,
+    pub provider_profile: String,
+    pub tool_profile: Option<String>,
+}
+
+impl CampaignWorkerRuntime {
+    pub fn implement_worker(&self) -> crate::ImplementWorkerRuntime {
+        crate::ImplementWorkerRuntime::new(
+            self.worker_id.clone(),
+            self.entrypoint.clone(),
+            self.provider_profile.clone(),
+            self.api_model_id.clone(),
+            self.endpoint.clone(),
+        )
+        .with_tool_profile(self.tool_profile.clone())
+    }
 }
 
 pub trait CampaignWorkerCatalog {

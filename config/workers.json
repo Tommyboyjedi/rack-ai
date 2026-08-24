@@ -4,31 +4,24 @@
       "id": "local-primary",
       "kind": "jcode",
       "role": "planner-verifier",
-      "entrypoint": "/srv/rack-ai/bin/rack-primary",
+      "entrypoint": "/home/tomp/.local/bin/jcode",
       "backend": "jcode",
       "resource_id": "gpu-4060ti",
       "model_id": "gemma4-12b-local-primary",
-      "enabled": true
+      "enabled": true,
+      "provider_profile": "local-primary"
     },
     {
       "id": "local-coder",
-      "kind": "direct-openai-compatible",
-      "role": "implementer-tester",
-      "entrypoint": "/srv/rack-ai/bin/rack-coder",
-      "backend": "vllm",
-      "resource_id": "gpu-2060",
-      "model_id": "qwen25-coder-3b-awq-local-coder",
-      "enabled": true
-    },
-    {
-      "id": "local-coder-jcode",
       "kind": "jcode",
-      "role": "fallback-debug",
-      "entrypoint": "/srv/rack-ai/bin/rack-coder-jcode",
+      "role": "implementer-tester",
+      "entrypoint": "/home/tomp/.local/bin/jcode",
       "backend": "jcode",
       "resource_id": "gpu-2060",
-      "model_id": "qwen25-coder-3b-awq-local-coder",
-      "enabled": false
+      "model_id": "eqaq-v2-local-coder",
+      "enabled": true,
+      "provider_profile": "local-coder",
+      "tool_profile": "minimal"
     }
   ]
 }
