@@ -28,6 +28,7 @@ mkdir -p "$fixture/src" "$rack/bin" "$rack/config" "$rack/state/campaigns"
 git -C "$rack" init -b main >/dev/null
 printf '%s\n' '[package]' 'name = "rack_live_fixture"' 'version = "0.1.0"' 'edition = "2021"' '' '[lib]' 'path = "src/lib.rs"' > "$fixture/Cargo.toml"
 printf 'pub fn seed() -> u8 { 1 }\n' > "$fixture/src/lib.rs"
+printf 'local-*-jcode-args.log\nlocal-*-probe.json\n' > "$fixture/.gitignore"
 (cd "$fixture" && cargo generate-lockfile >/dev/null)
 git -C "$fixture" init -b main >/dev/null
 git -C "$fixture" config user.email rack-live@example.invalid
@@ -253,10 +254,10 @@ Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
 PY
 exec /home/tomp/.local/bin/jcode "$@"
 WRAP
-coder_log="$evidence_root/local-coder-jcode-args.log"
-primary_log="$evidence_root/local-primary-jcode-args.log"
-coder_probe="$evidence_root/local-coder-probe.json"
-primary_probe="$evidence_root/local-primary-probe.json"
+coder_log="local-coder-jcode-args.log"
+primary_log="local-primary-jcode-args.log"
+coder_probe="local-coder-probe.json"
+primary_probe="local-primary-probe.json"
 sed -i "s|__LOG_PATH__|$coder_log|g; s|__PROBE_PATH__|$coder_probe|g; s|__ROLE__|local-coder|g" "$rack/bin/jcode-log-local-coder"
 sed -i "s|__LOG_PATH__|$primary_log|g; s|__PROBE_PATH__|$primary_probe|g; s|__ROLE__|local-primary|g" "$rack/bin/jcode-log-local-primary"
 chmod +x "$rack/bin/jcode-log-local-coder" "$rack/bin/jcode-log-local-primary"
@@ -306,6 +307,10 @@ done
 wait "$runner_pid"
 
 worktree="$evidence_root/workspaces/campaign-live-two-step-fallback/repo"
+coder_log_path="$worktree/$coder_log"
+primary_log_path="$worktree/$primary_log"
+coder_probe_path="$worktree/$coder_probe"
+primary_probe_path="$worktree/$primary_probe"
 test "$(git -C "$fixture" branch --show-current)" = main
 test "$(git -C "$fixture" rev-parse HEAD)" = "$base_sha"
 test "$(git -C "$worktree" rev-list --count HEAD ^"$base_sha")" = 2
@@ -316,19 +321,19 @@ find "$rack/state/campaigns/live-two-step-fallback/steps/alpha" -name worker-tra
 find "$rack/state/campaigns/live-two-step-fallback/steps/fallback" -name worker-transcript.json -exec grep -q '"executor_kind": "jcode-direct"' {} \;
 find "$rack/state/campaigns/live-two-step-fallback/steps/alpha" -name git-evidence.json -exec grep -q 'src/alpha.rs' {} \;
 find "$rack/state/campaigns/live-two-step-fallback/steps/fallback" -name git-evidence.json -exec grep -q 'src/fallback.rs' {} \;
-grep -Fx -- '--provider-profile' "$coder_log"
-grep -Fx -- 'local-coder' "$coder_log"
-grep -Fx -- '--model' "$coder_log"
-grep -Fx -- '--tool-profile' "$coder_log"
-grep -Fx -- 'minimal' "$coder_log"
-grep -Fx -- '--provider-profile' "$primary_log"
-grep -Fx -- 'local-primary' "$primary_log"
-grep -Fx -- '--model' "$primary_log"
-if grep -Fq -- '--tool-profile' "$primary_log"; then
+grep -Fx -- '--provider-profile' "$coder_log_path"
+grep -Fx -- 'local-coder' "$coder_log_path"
+grep -Fx -- '--model' "$coder_log_path"
+grep -Fx -- '--tool-profile' "$coder_log_path"
+grep -Fx -- 'minimal' "$coder_log_path"
+grep -Fx -- '--provider-profile' "$primary_log_path"
+grep -Fx -- 'local-primary' "$primary_log_path"
+grep -Fx -- '--model' "$primary_log_path"
+if grep -Fq -- '--tool-profile' "$primary_log_path"; then
   echo 'FAIL: local-primary should not use a tool profile override' >&2
   exit 1
 fi
-python3 - <<'PY' "$coder_probe" "$primary_probe"
+python3 - <<'PY' "$coder_probe_path" "$primary_probe_path"
 import json
 import sys
 from pathlib import Path
