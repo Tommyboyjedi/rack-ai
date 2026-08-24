@@ -1,155 +1,133 @@
 # PR14 Addendum — Qwen3.5 Local-Coder Harness Qualification
 
-Date: 2026-08-24
+Date: 2026-08-24  
 Branch: `strategy/pr14-harness-qualification`
 
 ## Purpose
 
-This addendum records the qualification evidence gathered after replacing the original `local-coder` model with `NotaMG/eqaq-v2` (Qwen3.5 4B text-only) on the RTX 2060 6 GB worker.
+This addendum records the local-coder-specific evidence behind the final PR14 routing decision. The authoritative consolidated result is in `docs/pr14-harness-qualification-report.md`.
 
-The purpose is not to select multiple harnesses for their own sake. A harness must independently qualify for Rack AI. Rack AI may support more than one harness in the future, but only if each candidate demonstrates a defensible production role.
-
-## Local-coder runtime under test
-
-- worker: `local-coder`
-- GPU: RTX 2060 6 GB
-- endpoint: `http://127.0.0.1:8018/v1`
-- model root: `NotaMG/eqaq-v2`
-- architecture: Qwen3.5 4B text-only
-- serving runtime: vLLM 0.27.1
-- model context limit: 16,368 tokens
-- native OpenAI-style tool calls: confirmed
-- tool-result continuation: confirmed
-
-## Critical context-window configuration finding
-
-Initial harness comparison was invalidated in part by incorrect harness assumptions about the local-coder context size.
-
-Observed configuration before correction:
-
-- Abacus `doctor` reported `128000 context` and compaction near roughly 364k characters.
-- JCode had no explicit `context_window` on the `local-coder` model entry.
-- the actual vLLM serving limit was 16,368 tokens.
-
-After correction:
-
-- JCode was configured with `context_window = 16368`.
-- Abacus was invoked with `--context-window 16368`.
-
-This materially changed JCode behaviour: it began enforcing the true context ceiling and reactive compaction became visible.
-
-## JCode profile-size finding
-
-The most important local-coder harness result was the difference between JCode tool profiles.
-
-### JCode `full`
-
-On the multi-file repair fixture, the first useful model/tool turn was approximately 12.8k input tokens. This left too little practical runway inside a 16,368-token context window. Reactive compaction occurred once the correct context window was configured, but the run remained context-constrained.
-
-### JCode `minimal`
-
-On the same worker and same task class, the first useful tool turn dropped to approximately 2.9k input tokens.
-
-This provided sufficient working room for:
-
-- repository inspection;
-- repeated compiler/test feedback;
-- multiple repair attempts;
-- final green `cargo test` execution.
-
-A later constraint-strengthened rerun completed around 6.8k input tokens while preserving the required public method signatures.
-
-The run did leave unnecessary source-adjacent artifacts (`src/user.rs.bak` and `src/user_debug.rs`), which Rack AI final acceptance must reject or clean. This is a harness/model quality issue, but not a context-exhaustion failure.
-
-### JCode local-coder conclusion
-
-`JCode + minimal tool profile` is the current preferred harness configuration for the Qwen3.5 local-coder worker.
-
-Classification: `qualified_with_constraints`.
-
-Current constraints include:
-
-- use the `minimal` tool profile on the 16,368-token local-coder profile;
-- Rack AI must independently validate final Git status/diff and reject unexpected artifacts;
-- Rack AI must independently enforce task constraints and deterministic acceptance;
-- broader/harder task classes still require qualification before being routed to the small worker.
-
-## Abacus evidence
-
-Abacus was retested after correcting the context limit to 16,368 and disabling session persistence with `--no-session`.
-
-Observed positive behaviour:
-
-- repository discovery worked;
-- source files were inspected;
-- failing tests were reproduced;
-- edits were attempted;
-- test feedback was interpreted;
-- Abacus built-in compaction was visible in traces.
-
-Observed material failures across repeated bounded repair runs:
-
-- repeated provider-stream timeouts before successful completion;
-- unnecessary or incorrect implementation directions after compiler/test feedback;
-- final repository left failing on the multi-file repair fixture;
-- unexpected workspace artifact creation (`AGENTS.md`);
-- no demonstrated operational advantage over JCode `minimal` on the small worker.
-
-The issue is not that Abacus cannot perform any coding actions. The qualification question is whether it is reliable enough for Rack AI's production worker role. On the RTX 2060 / Qwen3.5 4B / 16,368-token worker, current evidence says no.
-
-### Abacus local-coder conclusion
-
-Classification: `not_qualified` for the current `local-coder` worker.
-
-Rack AI should not integrate Abacus as a production harness merely to preserve multi-harness optionality. Multi-harness support remains a future capability only when another Rust-native harness independently meets Rack AI qualification requirements.
-
-## Product-level interpretation
-
-A core Rack AI product goal is to make useful smaller GPUs viable as bounded workers.
-
-The Qwen3.5 4B local-coder results support that goal when the harness is appropriately matched to the worker:
-
-- incorrect context metadata can make a viable small worker appear unusable;
-- excessive harness/tool-schema overhead can consume most of a small context window before useful work begins;
-- a lightweight harness profile materially improves the practical capability of the same model and GPU;
-- small-worker harness qualification must therefore include effective prompt/tool overhead, not merely model context size.
-
-For the current rack, the evidence supports JCode `minimal` as the practical local-coder path.
-
-## Revised local-coder routing decision
+## Local-coder runtime
 
 ```text
-local-coder -> JCode minimal preferred
-Abacus      -> not qualified for local-coder
+worker = local-coder
+GPU = RTX 2060 6 GB
+endpoint = http://127.0.0.1:8018/v1
+served_model = local-coder
+model = NotaMG/eqaq-v2
+family = Qwen3.5 4B text-only
+vLLM = 0.27.1
+context_window = 16368
+max_num_seqs = 1
 ```
 
-This does not preclude future Abacus reconsideration after upstream improvements. It also does not preclude qualifying another Rust-native harness later.
+Native OpenAI-compatible tool calls and tool-result continuation were confirmed.
 
-## Rack AI acceptance implication
+## Context/profile finding
 
-The JCode runs demonstrate why Rack AI must remain the outer acceptance authority even when the harness completes successfully.
+Initial comparison results were distorted by incorrect harness context assumptions.
 
-Rack AI final acceptance must independently inspect at least:
+- JCode originally had no explicit `context_window` for `local-coder`.
+- Abacus reported 128K against the real 16,368-token serving limit.
 
-- deterministic tests/checks;
-- Git diff;
-- Git status;
-- unexpected/unapproved files;
-- preservation of required public contracts;
-- truthful no-change behaviour;
-- final repository validity.
+After correcting JCode to `context_window = 16368`, reactive context enforcement became visible.
 
-Harness-reported success is evidence, not acceptance.
-
-## Current PR14 position
-
-For `local-coder`:
+The decisive JCode result was tool-profile overhead:
 
 ```text
-JCode minimal: qualified_with_constraints; preferred
-Abacus:        not_qualified
+JCode full:
+  first useful turn ~12.8k input tokens
+  too little practical repair runway
+
+JCode minimal:
+  first useful turn ~2.9k input tokens
+  bounded multi-step repair completed
+  strengthened rerun completed around ~6.8k
 ```
 
-For `local-primary`, retain the existing PR14 evidence pending final report consolidation.
+The small worker therefore qualifies only with the lightweight JCode profile currently tested.
 
-Abacus should not be included in PR15 production integration for the local-coder route. The project should keep monitoring Rust-native harnesses and may re-open qualification when a candidate materially improves the small-worker story.
+## Multi-file repair result
+
+JCode `minimal` successfully inspected the relevant Rust files, reproduced failures, iterated on compiler/test feedback and reached green tests.
+
+A strengthened rerun explicitly prohibited changes to the signatures of `User::new`, `User::first_name` and `User::last_name`; the final implementation preserved those method signatures and passed tests.
+
+One successful run left `src/user.rs.bak` and `src/user_debug.rs`. This is why Rack AI must independently inspect final Git status/diff and reject unexpected files. The route remains `qualified_with_constraints`.
+
+## Truthful no-change
+
+PASS.
+
+On a known-correct fixture JCode `minimal`:
+
+- inspected relevant source;
+- ran Rust tests;
+- correctly concluded no implementation change was needed;
+- explicitly reported that conclusion;
+- left an empty tracked Git diff.
+
+Only test-generated `Cargo.lock` and `target/` artifacts were present.
+
+## Network-disabled operation
+
+PASS.
+
+A qualification network guard blocked normal external IPv4/IPv6 connections while allowing loopback.
+
+Independent guard proof:
+
+```text
+127.0.0.1:8018/v1/models -> reachable
+https://example.com       -> blocked
+```
+
+JCode still completed local repository/test work through the local vLLM endpoint with no tracked source change.
+
+## Dual-endpoint isolation
+
+PASS.
+
+Two JCode sessions ran concurrently:
+
+```text
+local-primary -> 8017 -> served model local-primary
+local-coder   -> 8018 -> served model local-coder
+```
+
+Both completed successfully, ran tests and made no tracked changes. Because the endpoints expose different served model IDs, endpoint cross-binding would have produced a model-not-found failure; none occurred.
+
+## Abacus result
+
+Abacus was retested with the real 16,368-token limit and `--no-session`.
+
+It demonstrated basic repository/tool capability but repeatedly failed the bounded multi-step repair qualification through provider-stream timeout, repair drift, a failing final repository and unexpected `AGENTS.md` creation.
+
+Classification:
+
+```text
+Abacus = not_qualified
+```
+
+Abacus was uninstalled after local evidence preservation. It may be reconsidered after upstream improvements.
+
+## Final local-coder decision
+
+```text
+preferred_harness = JCode
+JCode_tool_profile = minimal
+context_window = 16368
+max_num_seqs = 1
+classification = qualified_with_constraints
+fallback_harness = none
+```
+
+The local-coder is suitable initially for bounded implementation work with deterministic acceptance and independent final worktree inspection.
+
+## Swarm decision
+
+JCode swarm is deferred.
+
+With `max_num_seqs = 1` on the current coder and only two useful concurrent worker endpoints, swarm-lite offers little advantage over Rack AI directly scheduling one task per worker. Deep/DAG swarm also overlaps with responsibilities intentionally owned by Rack AI.
+
+Future multi-GPU optimisation remains a Rack AI scheduling concern.
