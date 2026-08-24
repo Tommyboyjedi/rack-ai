@@ -2,452 +2,260 @@
 
 ## Status
 
-Architecture-reset qualification contract. This PR is documentation/experiment focused and must not become another bespoke Rack AI coding-agent implementation.
+Final qualification contract for the architecture-reset harness decision.
 
-PR14 is the first active PR after the architecture reset. Its purpose is to qualify the Rust-native coding harnesses Rack AI can supervise, determine the capability envelope of each harness against the actual rack workers/models, and establish the initial deterministic harness-routing policy.
+PR14 is documentation/experiment focused. It does not implement the production adapter.
 
-PR14 is no longer winner-takes-all. Rack AI may deliberately use different coding harnesses for different registered workers/models when evidence shows that this is materially better.
-
-A 2026-08-24 qualification finding adds a mandatory context-management gate: worker context capacity, harness compaction behaviour, safe stop/checkpoint semantics and escalation must be treated as supervised resources before PR14 may merge. A small worker must not be allowed to run blindly into its hard context limit.
+The purpose of PR14 is to establish which Rust-native coding harness is qualified against the actual rack workers and what routing constraints later implementation must preserve.
 
 ## Strategic boundary
 
-Rack AI is the Rust control plane above coding harnesses and inference backends.
+Rack AI is the control plane above coding harnesses and inference backends.
 
 Rack AI owns:
 
-- orchestration and campaign/task state;
+- campaign/task state;
 - worker/model/GPU registration and placement;
 - target repository/worktree authority;
-- isolation/network/process policy;
-- deterministic acceptance and no-change rejection;
+- filesystem, network and process isolation;
+- timeouts/cancellation;
+- deterministic acceptance;
 - independent review;
-- recovery/replan/fallback;
+- no-change rejection;
+- retry/replan/fallback/escalation;
 - durable evidence;
-- Git/commit/promotion policy;
-- selection of the appropriate qualified coding harness for a worker/task;
-- worker context-capacity registration and safe context-budget policy;
-- context-pressure stop/checkpoint/escalation policy.
+- Git commit/promotion authority;
+- selection of the qualified worker/harness route.
 
-A coding harness owns model-facing implementation mechanics inside its bounded workspace:
+The coding harness owns model-facing coding mechanics inside the bounded execution environment:
 
-- coding-agent loop;
 - source navigation/search;
 - edit/patch mechanics;
-- implementation-time command/tool use;
-- harness-local context management/compaction mechanisms;
-- model/tool-call parsing/correction provided by that harness.
+- implementation-time tool/command use;
+- compiler/test feedback loops;
+- model/tool-call handling;
+- harness-local context management.
 
-The harness may report success. Rack AI remains responsible for deciding whether work is accepted and whether continuing the current worker remains safe.
+The harness may report success. Rack AI decides whether the work is accepted.
 
 ## Rust requirement
 
 Production coding harnesses in the trusted long-running Rack AI stack must be Rust-native.
 
-Target-project compilers/interpreters may be non-Rust. The requirement applies to Rack AI and its coding-harness layer, not to the languages Rack AI can develop.
+Target-project languages are unrestricted; this requirement applies to Rack AI and its coding-harness layer.
 
-## Candidate set
+## Final candidate outcome
 
-Qualify initially:
+The initial candidate set was JCode direct/non-swarm execution and Abacus.
 
-1. **JCode direct/non-swarm execution**.
-2. **Abacus**.
-
-Do not introduce a third harness unless both fail a documented material requirement that cannot reasonably be solved through configuration or upstream capability.
-
-### JCode hypothesis
-
-JCode is expected to be especially useful for stronger models because it is mature, already installed on the rack, has rich coding/navigation capabilities and direct local-provider execution has worked.
-
-Do not use JCode swarm as part of PR14. The previously observed swarm provider/endpoint rebinding defect is not required to be fixed for the direct-harness architecture.
-
-### Abacus hypothesis
-
-Abacus is expected to be especially useful for smaller/weaker open-weight models because it is Rust-native, supports OpenAI-compatible/vLLM endpoints and explicitly handles several textual/open-weight tool-call formats client-side.
-
-This is a hypothesis to test, not a hard-coded parameter-count rule.
-
-## Preconditions
-
-Before starting or continuing PR14:
-
-- current `main` includes merged PR7;
-- vLLM remains the inference runtime;
-- local endpoints are available:
-  - `local-primary` on `127.0.0.1:8017`;
-  - `local-coder` on `127.0.0.1:8018`;
-- use disposable target worktrees/clones;
-- never experiment against the live executing Rack AI checkout;
-- preserve existing Rack AI path, Git, Podman, timeout and no-remote-promotion safety rules;
-- do not modify Rack AI to compensate for a candidate weakness during comparison except neutral instrumentation/reproducibility support that does not bias one harness;
-- every worker/model profile used in context-sensitive qualification must have its **actual served context limit** recorded and supplied to the harness when the harness supports such configuration.
-
-## Qualification objective
-
-The result of PR14 is not one global winner. The result is a **capability matrix and initial routing policy**.
-
-For each harness, establish which worker/model/task combinations are qualified, conditionally qualified or not qualified.
-
-A result may legitimately look like:
+Qualification produced:
 
 ```text
-JCode:
+JCode direct/non-swarm:
   local-primary: qualified
   local-coder: qualified_with_constraints
 
 Abacus:
-  local-primary: qualified_with_constraints
-  local-coder: qualified_with_constraints
-
-Initial routing:
-  local-coder -> harness selected from measured bounded-task/context evidence
-  local-primary -> jcode
+  not_qualified
 ```
 
-If both harnesses perform well for a worker, choose one preferred harness and optionally one fallback based on evidence and operational simplicity.
+The production harness for the next integration PR is therefore JCode.
 
-Do not route solely from raw GPU size or model parameter count. Route from registered worker/model/task capability evidence.
+Rack AI does not maintain multiple harnesses merely for optionality. A future Rust-native harness may be added only after independently passing the qualification requirements relevant to a real production role.
 
-## Required experiments
+## JCode route
 
-Run both JCode direct and Abacus against both current model roles wherever each harness can be configured:
-
-- `local-coder` on port 8018;
-- `local-primary` on port 8017.
-
-At minimum exercise:
-
-1. a small localized edit;
-2. an additive edit to an existing Rust module/export surface;
-3. a multi-file compatibility-preserving task;
-4. repository search/navigation;
-5. compiler/test feedback and repair;
-6. malformed or textual tool-call behaviour representative of the active `local-coder`;
-7. a bounded failure/timeout case;
-8. network-disabled disposable worktree operation;
-9. explicit endpoint/model binding;
-10. two independent sessions targeting different local endpoints without cross-binding;
-11. final worktree/diff inspection independent of the harness;
-12. context-pressure behaviour with the harness configured to the worker's true context limit;
-13. compaction/checkpoint behaviour before hard context exhaustion;
-14. a controlled stop/escalation experiment for a task that exceeds the small worker's safe envelope.
-
-Where practical reuse the historical PR8 `semantic-contract` step as one neutral proving task, but PR14 does not implement PR8.
-
-At least one task must require inspecting existing code, preserving an existing contract, making substantive edits and reacting correctly to compiler/test feedback.
-
-## Fairness rules
-
-For comparable experiments, keep these equal wherever practical:
-
-- target base SHA;
-- task wording;
-- acceptance commands;
-- model endpoint;
-- true context/output limits;
-- network policy;
-- runtime/resource limits;
-- target authority.
-
-Candidate-specific configuration that is part of the harness's normal supported operation is allowed and must be recorded.
-
-Do not give one harness bespoke Rack AI repair logic that the other does not receive.
-
-Do not treat a run as evidence of a model capability ceiling when the harness was configured with a materially incorrect context limit. Preserve such a run as evidence of the current configured system failure, then repeat after the context metadata is corrected.
-
-## Required measurements
-
-For each `(harness, worker/model, task)` combination record:
-
-- substantive diff produced: yes/no;
-- deterministic acceptance result;
-- preservation of unrelated APIs/behaviour;
-- tool/protocol failures;
-- textual/malformed tool-call handling;
-- turns/tool calls where available;
-- wall time;
-- configured context limit seen by the harness;
-- input/context usage by turn where available;
-- compaction trigger/behaviour where available;
-- output/context truncation behaviour;
-- compiler/test repair quality;
-- repository navigation quality;
-- headless transcript/evidence quality;
-- timeout/cancel/process behaviour;
-- network-disabled operation;
-- endpoint/model-binding reliability;
-- installation/configuration/upgrade complexity;
-- ability for Rack AI to inspect the final worktree independently;
-- amount of Rack AI-native coding-agent functionality that the harness can replace.
-
-## Capability classification
-
-Classify each relevant harness/worker pairing as:
-
-- `qualified` — suitable for production use for the tested class of work;
-- `qualified_with_constraints` — usable with clearly documented bounded configuration/limitations;
-- `not_qualified` — fails a material requirement.
-
-A `qualified_with_constraints` small worker may be intentionally limited to localized/bounded work with escalation to a stronger worker for broader or context-heavy tasks.
-
-Do not hide failures behind aggregate scores.
-
-## Context capacity is a control-plane resource
-
-Context capacity is part of worker registration and must be treated like VRAM, runtime and process budget.
-
-Rack AI must not depend on a model recognizing from natural-language introspection that it is about to run out of context.
-
-The control-plane contract is:
+### `local-primary`
 
 ```text
-Rack AI
-  -> task admission / complexity estimate
-  -> worker + harness selection
-  -> context-budget supervision
-       -> continue
-       -> compact/checkpoint
-       -> stop current worker
-       -> escalate/resume on another qualified worker
+endpoint = 127.0.0.1:8017
+served_model = local-primary
+model = cyankiwi/gemma-4-12B-it-AWQ-INT4
+context_window = 131072
+classification = qualified
 ```
 
-Harness-native context compaction remains a harness responsibility. Rack AI owns the outer policy, thresholds, evidence and escalation decision.
-
-## Context Budget Governor qualification contract
-
-PR14 is not required to implement the final PR15 production adapter, but it must define and prove enough of this contract to make PR15 unambiguous.
-
-### Exact context registration
-
-Every active worker/model profile must record its real served context capacity.
-
-For the current `local-coder` candidate the validated serving limit is:
+### `local-coder`
 
 ```text
+endpoint = 127.0.0.1:8018
+served_model = local-coder
 model = NotaMG/eqaq-v2
-max_context_tokens = 16368
+context_window = 16368
+max_num_seqs = 1
+JCode tool profile = minimal
+classification = qualified_with_constraints
 ```
 
-Harness diagnostics/configuration must be checked to ensure they use that real value rather than a generic provider/model default.
+The local-coder route is intended initially for bounded implementation work with deterministic acceptance and independent final worktree inspection.
 
-### Reserved headroom
+## Local-coder constraints
 
-A worker must not intentionally consume the entire hard model window before Rack AI/harness policy makes a continuation decision.
+The approved small-worker route must preserve these constraints until superseded by new qualification evidence:
 
-PR14 should test initial operating bands such as:
+- JCode must be configured with the real `context_window = 16368`;
+- use JCode `minimal`, not `full`, for the current 16K coder route;
+- Rack AI must inspect final Git diff/status independently;
+- unexpected/unapproved files are acceptance failures unless explicitly permitted;
+- deterministic tests/checks remain authoritative;
+- harness-reported success is not acceptance;
+- broader/harder work may be routed directly to a stronger qualified worker.
+
+These constraints are capability metadata, not permanent GPU-size or parameter-count rules.
+
+## Context conclusion
+
+PR14 demonstrated that incorrect context metadata and excessive harness/tool-profile overhead can make a viable small worker appear unusable.
+
+With the real 16,368-token context configured and JCode `minimal`, the Qwen3.5 worker had sufficient runway for the tested bounded multi-step repair class.
+
+Therefore PR14 does **not** require a bespoke Rack AI context-budget governor/checkpoint subsystem before production integration.
+
+Rack AI should continue to record true context capacity as worker/model metadata and may add more sophisticated admission, checkpoint or escalation behaviour later when measured production evidence justifies it.
+
+## Required qualification evidence satisfied
+
+The selected JCode route has evidence covering:
+
+1. localized real repository edits;
+2. compiler/test repair;
+3. multi-file compatibility work;
+4. repository navigation;
+5. native tool-call behaviour for the active local-coder model;
+6. bounded failure/recovery observations;
+7. truthful no-change behaviour;
+8. network-disabled operation while retaining local vLLM access;
+9. explicit provider/model binding;
+10. simultaneous independent sessions against `8017` and `8018` without cross-binding;
+11. independent final Git/worktree inspection;
+12. true-context configuration and comparison of JCode `full` versus `minimal` overhead.
+
+The final evidence and exact observations are recorded in `docs/pr14-harness-qualification-report.md`.
+
+## Network/isolation requirement
+
+A qualifying harness must be invokable without remote Git credentials or promotion authority and must work inside Rack AI's outer isolation boundary.
+
+PR14 proved JCode can operate while normal external TCP access is denied and loopback access to the local vLLM endpoint remains available.
+
+The PR14 `LD_PRELOAD` guard was a qualification mechanism only. Production isolation remains a Rack AI responsibility and should use the normal kernel/container/process controls of the deployed platform.
+
+## Endpoint-binding requirement
+
+Direct JCode provider/model routing must remain explicit.
+
+Current endpoints are:
 
 ```text
-0-60%    NORMAL
-60-72%   WATCH
-72-80%   COMPACT
-80-88%   CHECKPOINT / DECIDE
->88%     DO NOT START ANOTHER LARGE STEP
+local-primary -> 127.0.0.1:8017 -> served model local-primary
+local-coder   -> 127.0.0.1:8018 -> served model local-coder
 ```
 
-These are experimental starting values, not final production constants. The final report must state what was observed and what thresholds PR15 should implement/configure.
+Concurrent qualification proved both sessions can operate simultaneously without cross-binding.
 
-### Task admission classes
+## JCode swarm decision
 
-PR14 should establish an evidence-backed initial task-shape envelope. A starting hypothesis is:
+JCode swarm is not part of the current production architecture.
 
-```text
-Tier A: local-coder preferred
-- localized one-file work
-- known/narrow implementation point
-- simple deterministic failures
-- mechanical edits
+The current RTX 2060 coder is configured with `max_num_seqs = 1`. On the present two-card rack, swarm-lite therefore adds little useful hardware parallelism over Rack AI directly scheduling one independent task per worker.
 
-Tier B: local-coder conditional
-- small multi-file surface
-- limited repository discovery
-- bounded repair loop expected
-- narrow compatibility work
+Rack AI also deliberately owns worker selection, resource policy, acceptance and recovery. Deep/DAG swarm would overlap with those control-plane responsibilities.
 
-Tier C: local-primary preferred
-- broad discovery
-- architecture/refactor work
-- high ambiguity
-- many modules/files
-- repeated compiler/test repair expected
-```
+Swarm may be reconsidered later if:
 
-The final routing representation must use capability metadata rather than rules based directly on parameter count.
+- the rack has more genuinely concurrent workers;
+- a worker endpoint supports useful concurrent sequences;
+- or swarm provides a concrete capability that Rack AI cannot provide more cleanly through direct scheduling.
 
-### Compaction requirement
+No swarm qualification or dependency is required for the next production integration PR.
 
-A qualifying route must prove that context compaction occurs before hard exhaustion when continuation remains appropriate.
+## Abacus decision
 
-The experiment must record, where observable:
+Abacus is `not_qualified` for the current Rack AI production stack.
 
-- trigger point;
-- token/context usage;
-- what information was summarized/discarded;
-- whether task constraints survived;
-- whether recent compiler/test evidence survived;
-- whether the model could continue correctly.
+Although it passed small tasks, repeated bounded multi-step repair runs showed provider timeouts, repair drift, failing final repositories and unexpected workspace artifacts after the real context limit was configured.
 
-Built-in JCode/Abacus compaction must be tested before adding a third-party context layer.
+Abacus has been removed from the rack after preserving qualification evidence locally.
 
-### Optional Headroom evaluation
-
-Headroom or an equivalent compression layer may be evaluated on `gpurack` if built-in harness compaction remains inadequate or a transparent proxy materially improves the context envelope.
-
-Prefer deterministic/automatic compression over requiring the small model to notice context pressure and explicitly invoke an MCP compression tool.
-
-A Headroom experiment must use the same fixture/prompt/model and record context use, compression/retrieval events, wall time and final correctness.
-
-Sequential-thinking MCP is not a substitute for context-budget control and should not be introduced as part of this gate merely to increase reasoning steps.
-
-### Structured checkpoint requirement
-
-Before a context-pressure stop/escalation, Rack AI must be able to persist a compact handoff artifact containing at least the semantic equivalent of:
-
-```json
-{
-  "objective": "...",
-  "files_inspected": [],
-  "observed_failures": [],
-  "changes_attempted": [],
-  "current_repo_state": "...",
-  "remaining_issue": "...",
-  "recommended_next_step": "..."
-}
-```
-
-The exact schema is a PR15 implementation concern, but PR14 must prove that the information is sufficient for a stronger worker to resume without replaying the full small-worker transcript.
-
-### Controlled escalation requirement
-
-At least one qualification case must intentionally exceed the `local-coder` safe envelope and demonstrate an evidence-preserving control flow equivalent to:
-
-```text
-local-coder performs useful bounded work
--> context/repair threshold reached
--> stop without success claim
--> persist checkpoint + Git diff + latest deterministic test/compiler output
--> local-primary resumes from compact handoff
--> Rack AI independently accepts/rejects final result
-```
-
-A context-pressure stop followed by successful controlled escalation is a valid designed outcome. An opaque provider timeout, silent hang or fabricated completion is not.
-
-## Context-management merge acceptance
-
-Do not consider context management qualified until evidence supports all of the following:
-
-1. the real context capacity of each active worker is registered;
-2. each harness route is configured with that real capacity;
-3. the worker cannot silently consume the hard limit without a control decision;
-4. compaction occurs before hard exhaustion when continuation is appropriate;
-5. compaction preserves critical task state;
-6. repeated repair loops are bounded by context/repair policy;
-7. context pressure can cause a clean stop rather than an opaque timeout/hang;
-8. a structured checkpoint is preserved;
-9. a qualified stronger worker can resume from the checkpoint without replaying the entire transcript;
-10. Rack AI can represent context exhaustion/pressure as a normal recoverable control-plane event.
+It may be reconsidered after upstream improvements using the same qualification process.
 
 ## Initial routing policy
 
-PR14 must commit an explicit initial routing policy suitable for PR15 implementation.
-
-The routing policy should be data/config driven and expressed in terms of registered worker/model capabilities, task shape and resource limits, not embedded rules such as `parameter_count < 7B`.
-
-It should support at least:
-
-- preferred harness per worker/model profile;
-- optional fallback harness when qualified;
-- explicit `none` when no harness is qualified;
-- task/capability envelope for constrained workers;
-- context-capacity metadata;
-- escalation target/policy where applicable;
-- reason/evidence reference for the route.
-
-For the current rack, the expected-but-unproven direction after the Qwen3.5 replacement is:
-
 ```text
-local-coder   -> bounded implementation route, preferred harness TBD after context-corrected tests
-local-primary -> JCode preferred
+local-primary:
+  preferred_harness = jcode
+  classification = qualified
+
+local-coder:
+  preferred_harness = jcode
+  tool_profile = minimal
+  context_window = 16368
+  max_num_seqs = 1
+  classification = qualified_with_constraints
+
+fallback_harness:
+  none
 ```
 
-PR14 evidence is allowed to overturn that hypothesis.
+Routing is based on measured worker/model/task capability evidence, not raw GPU size or model parameter count.
 
-## Required repository artifacts
+## Multi-GPU scheduling boundary
 
-Commit a qualification report under `docs/` containing:
+PR14 does not implement intelligent task placement between GPUs.
 
-- exact JCode version/SHA;
-- exact Abacus version/SHA;
-- exact Rack AI SHA used;
-- exact local model names/configuration;
-- exact context limits advertised to each harness;
-- task definitions and acceptance commands;
-- result matrix for every required test;
-- evidence/transcript references;
-- material failures and candidate-specific constraints;
-- context compaction/checkpoint/escalation evidence;
-- capability classification for each harness/worker pairing;
-- initial routing policy and rationale.
+A later routing/scheduling PR may allow Rack AI to choose dynamically between the current workers and use both concurrently for independent work.
 
-The report must end with a machine-readable summary equivalent to:
+That future capability remains a Rack AI control-plane responsibility rather than a JCode swarm responsibility.
+
+## PR15 implementation contract
+
+The next production integration PR should replace the bespoke model-facing coding loop with the qualified JCode route while preserving Rack AI control.
+
+Conceptually:
 
 ```text
-QUALIFIED_HARNESSES = jcode,abacus
-LOCAL_CODER_PREFERRED_HARNESS = <jcode|abacus|none>
-LOCAL_PRIMARY_PREFERRED_HARNESS = <jcode|abacus|none>
-CONTEXT_GOVERNOR_REQUIRED = true
+Rack AI
+  -> select worker/model/task
+  -> invoke JCode with approved provider/model/tool profile
+  -> enforce outer workspace/network/process/time policy
+  -> independently run acceptance/review
+  -> own Git/promotion/evidence
 ```
 
-If a harness is not qualified anywhere, state that explicitly rather than forcing dual-harness adoption.
+The integration PR must not:
 
-## Security and authority requirements
-
-A qualifying harness must be invokable without receiving Rack AI promotion authority.
-
-Rack AI must remain able to enforce the outer worktree/container/network/runtime boundary and independently run final Git/path, acceptance and review gates.
-
-A harness must not require remote Git credentials or automatic push/merge authority for normal Rack AI operation.
-
-Context compression/checkpoint infrastructure must not weaken repository, network, credential or promotion boundaries.
-
-## Non-goals
-
-- no JCode swarm dependency;
-- no production PR15 integration yet;
-- no new Rack AI edit tools;
-- no Rack AI-owned LSP/semantic coding backend;
-- no objective planning beyond what is necessary to classify/route the current bounded qualification tasks;
-- no general adaptive/learned task scheduler;
-- no web research system;
-- no frontend;
-- no automatic remote Git promotion;
-- no dynamic self-learning harness scheduler yet.
-
-A minimal deterministic task-capability/context admission policy required to prevent known worker exhaustion is **not** excluded by the adaptive-scheduling non-goal; it is now part of the PR14 routing contract.
-
-## Implementation-agent handoff
-
-An agent assigned PR14 should:
-
-1. read this contract and current architecture/engineering docs;
-2. inspect current worker/model endpoint configuration;
-3. identify exact JCode and Abacus versions to test;
-4. verify exact context metadata seen by each harness;
-5. prepare only the minimum tooling/configuration needed for reproducible comparison;
-6. create disposable fixtures/tasks from known clean SHAs;
-7. run the same matrix against both harnesses and both worker roles;
-8. preserve raw failure evidence, including context-pressure failures;
-9. run the context-corrected compaction and controlled-escalation qualification track;
-10. classify each harness/worker/task-envelope pairing;
-11. commit the comparison report and initial routing/context policy;
-12. stop without implementing PR15.
+- add Abacus;
+- add a JCode swarm dependency;
+- give JCode remote Git promotion authority;
+- move acceptance ownership into JCode;
+- introduce another bespoke Rack AI coding-agent framework without new evidence.
 
 ## Merge gate
 
-Merge PR14 only when the current worker/model roles have been tested sufficiently to establish:
+PR14 is merge-ready when:
 
-- a defensible harness capability matrix;
-- an initial deterministic harness-routing policy;
-- correct context-capacity configuration for active routes;
-- a proven or sufficiently reproducible compaction/checkpoint/escalation contract for context pressure.
+- the final qualification report reflects the current Qwen3.5/JCode evidence;
+- truthful no-change is proven;
+- network-disabled operation is proven;
+- simultaneous dual-endpoint isolation is proven;
+- the final routing policy selects JCode and records the local-coder constraints;
+- Abacus is explicitly recorded as not qualified;
+- PR15's architectural boundary is unambiguous.
 
-It is acceptable for one harness to be unqualified for one or all worker profiles. It is acceptable for the 2060 worker to be qualified only for bounded/localized work with escalation. It is not acceptable to guess routing from model size, allow a worker to run blindly into its context ceiling, or treat an opaque context-related timeout as a normal successful completion.
+These conditions are now satisfied by the recorded qualification evidence.
+
+## Machine-readable contract summary
+
+```text
+QUALIFIED_HARNESSES = jcode
+LOCAL_PRIMARY_PREFERRED_HARNESS = jcode
+LOCAL_CODER_PREFERRED_HARNESS = jcode
+LOCAL_CODER_JCODE_TOOL_PROFILE = minimal
+LOCAL_CODER_CONTEXT_WINDOW = 16368
+LOCAL_CODER_MAX_NUM_SEQS = 1
+FALLBACK_HARNESS = none
+ABACUS = not_qualified
+JCODE_SWARM = deferred
+CONTEXT_GOVERNOR_REQUIRED_FOR_PR15 = false
+PR15_READY = true
+```
