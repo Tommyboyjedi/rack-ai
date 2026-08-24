@@ -1,567 +1,380 @@
 # PR14 Harness Qualification Report
 
 Date opened: 2026-08-23  
-Latest qualification update: 2026-08-24  
+Final qualification update: 2026-08-24  
 Branch: `strategy/pr14-harness-qualification`
 
-## Scope
+## Purpose
 
-This report executes PR14 only.
-It qualifies the current Rust-native coding harness candidates against the live rack workers and records the evidence needed for an initial harness-routing policy for later PR15 integration.
+PR14 qualifies the Rust-native coding harness layer against the actual rack workers and establishes the initial production routing policy for later Rack AI integration.
 
-This PR does **not** integrate a harness into Rack AI.
-It does **not** revive JCode swarm.
-It does **not** add a second bespoke Rack AI coding-agent implementation.
+This PR does **not** integrate the harness into Rack AI. It records the evidence and the architectural boundary that the implementation PR must follow.
 
-A material finding on 2026-08-24 changed the qualification problem: context capacity and context-management policy are now part of the routing/supervision contract. PR14 must not merge until the current workers are tested with their **true context limits advertised to the harnesses**, compaction/recovery behaviour is understood, and Rack AI has a defensible policy for stopping/escalating a small worker before hard context exhaustion.
+## Final decision
 
-## Candidate versions
+The qualification outcome is:
 
-- JCode currently installed during the 2026-08-24 Qwen3.5 tests: `v0.79.1` (`993da322e`)
-- Earlier PR14 evidence used JCode `v0.78.1` (`03ddbcfc8`)
-- Abacus installed version: `abacus-agent v0.6.1`
-- Earlier Abacus source qualification checkout recorded SHA `6519766878c8667a4e9a2103f992b0f1b7ba109b`
+```text
+JCode direct/non-swarm:
+  local-primary: qualified
+  local-coder: qualified_with_constraints
 
-Any final PR14 classification must record the exact harness revision used for the final matrix.
+Abacus:
+  not_qualified for Rack AI production use at this time
 
-## Rack model/runtime state
+Initial routing:
+  local-primary -> JCode
+  local-coder   -> JCode minimal
+```
+
+JCode swarm is not part of the current production path. The current two-card rack already has only one active sequence on the RTX 2060 coder (`max_num_seqs = 1`), so swarm-lite does not provide meaningful additional parallelism over Rack AI directly scheduling one task per worker. Swarm may be re-evaluated when the rack has more genuinely concurrent workers or a concrete capability that Rack AI cannot provide more cleanly itself.
+
+## Architectural boundary
+
+Rack AI remains the control plane.
+
+Rack AI owns:
+
+- campaign and task lifecycle;
+- worker/model/GPU registration and placement;
+- deciding which worker receives which task;
+- target repository/worktree authority;
+- filesystem, network and process isolation;
+- timeout/cancellation policy;
+- deterministic acceptance;
+- independent semantic review;
+- no-change rejection;
+- retry/replan/fallback/escalation;
+- Git commit/promotion authority;
+- final evidence and audit state.
+
+JCode owns model-facing coding mechanics inside the bounded execution environment:
+
+- source navigation/search;
+- editing and patching;
+- tool-call handling;
+- implementation-time command execution;
+- compiler/test feedback loops;
+- harness-local context management.
+
+Harness-reported success is evidence, not acceptance. Rack AI must independently inspect the final worktree and acceptance results.
+
+## Runtime under qualification
 
 ### `local-primary`
 
 - GPU: RTX 4060 Ti 16 GB
 - endpoint: `http://127.0.0.1:8017/v1`
-- model: `cyankiwi/gemma-4-12B-it-AWQ-INT4`
+- served model: `local-primary`
+- model root: `cyankiwi/gemma-4-12B-it-AWQ-INT4`
 - served context: `131072`
-- role: coordinator/planner/reviewer and stronger implementation/fallback worker
 
-### `local-coder` — superseded model
-
-Earlier PR14 evidence used:
+### `local-coder`
 
 - GPU: RTX 2060 6 GB
 - endpoint: `http://127.0.0.1:8018/v1`
-- model: `Qwen/Qwen2.5-Coder-3B-Instruct-AWQ`
-- served context: `32768`
-
-That model failed material harness tests through false-success/no-diff, raw tool JSON and incorrect claims. It is retained below only as historical evidence and is no longer the active coder candidate.
-
-### `local-coder` — current Qwen3.5 candidate
-
-Current validated serving combination:
-
-- GPU: RTX 2060 6 GB
-- endpoint: `http://127.0.0.1:8018/v1`
-- model: `NotaMG/eqaq-v2`
+- served model: `local-coder`
+- model root: `NotaMG/eqaq-v2`
 - family: Qwen3.5 4B text-only
-- quantization: 4-bit compressed-tensors
 - vLLM: `0.27.1`
-- served model name: `local-coder`
-- `max_model_len`: `16368`
-- `max_num_seqs`: `1`
-- CUDA graphs enabled; `--enforce-eager` is not used
+- quantization: 4-bit compressed-tensors
+- served context: `16368`
+- `max_num_seqs = 1`
+- CUDA graphs enabled
 - tool-call parser: `qwen3_coder`
 - reasoning parser: `qwen3`
 
-This combination has independently demonstrated native OpenAI-compatible `tool_calls` and correct tool-result continuation through the vLLM endpoint.
+The local-coder model independently demonstrated native structured OpenAI-compatible tool calls and correct continuation after tool results.
 
-## Historical Qwen2.5 qualification evidence
+## Harness versions
 
-The original PR14 disposable fixture used `/tmp/pr14-fixture-base` at base commit `a9114bf2bd118ad50b1580b8145c14768e4d912c`, with evidence under `/tmp/pr14-evidence/`.
-
-### Historical result matrix
-
-| Harness | Worker/model | Task | Result | Duration | Evidence |
-| --- | --- | --- | --- | ---: | --- |
-| JCode | `local-primary` | localized additive change | pass | 95s | `/tmp/pr14-evidence/jcode_primary_t1.*` |
-| JCode | old `local-coder` / Qwen2.5 | localized additive change | fail: false success, no source diff | 44s | `/tmp/pr14-evidence/jcode_coder_t1.*` |
-| Abacus | `local-primary` | localized additive change | pass | 50s | `/tmp/pr14-evidence/abacus_primary_t1.*` |
-| Abacus | old `local-coder` / Qwen2.5 | localized additive change | fail: false success, no source diff | 11s | `/tmp/pr14-evidence/abacus_coder_t1.*` |
-| JCode | `local-primary` | structural multi-file change | pass | 27s | `/tmp/pr14-evidence/jcode_primary_t2.log` |
-| Abacus | `local-primary` | structural multi-file change | fail: timeout, no source diff | 240s | `/tmp/pr14-evidence/abacus_primary_t2.log` |
-| JCode | old `local-coder` / Qwen2.5 | read-only navigation | fail: raw tool-call JSON | 3s | `/tmp/pr14-evidence/jcode_coder_read.log` |
-| Abacus | old `local-coder` / Qwen2.5 | read-only navigation | fail: incorrect answer and incorrect files-changed claim | 11s | `/tmp/pr14-evidence/abacus_coder_read.log` |
-
-Historical classification from that model was:
+Final JCode qualification was performed with:
 
 ```text
-JCode:
-  local-primary: qualified
-  old local-coder/Qwen2.5: not_qualified
-
-Abacus:
-  local-primary: qualified_with_constraints
-  old local-coder/Qwen2.5: not_qualified
+JCode v0.79.1 (993da322e)
 ```
 
-That old `local-coder -> none` decision is **superseded as a current conclusion** by the Qwen3.5 requalification work below.
+Earlier evidence also used JCode v0.78.1 and is retained only as historical context.
 
-## 2026-08-24 Qwen3.5 local-coder requalification
-
-The replacement coder model was tested directly against both Rust harnesses on disposable Rust repositories.
-
-### Serving/tool protocol checks
-
-`NotaMG/eqaq-v2` passed:
-
-1. stable vLLM startup on the RTX 2060;
-2. a practical 16K-class context (`16368` tokens);
-3. native structured OpenAI-compatible function/tool calls;
-4. correct continuation after a tool result.
-
-This resolves the most serious protocol defect of the old Qwen2.5 coder.
-
-### Simple real repository edit fixture
-
-Repository: `/tmp/qwen35-jcode-smoke`
-
-Initial defect:
-
-```rust
-pub fn add(a: i32, b: i32) -> i32 {
-    a - b
-}
-```
-
-Expected implementation: `a + b`.
-
-Results:
-
-| Harness | Result | Evidence/observation |
-| --- | --- | --- |
-| JCode + Qwen3.5 | PASS | inspected repo, edited real source, ran `cargo test`, tests passed, truthful completion |
-| Abacus + Qwen3.5 | PASS | inspected repo, edited real source, ran `cargo test`, tests passed, truthful completion |
-
-Independent Git inspection showed only the intended source mutation; `Cargo.lock` and `target/` were test-generated artifacts.
-
-### Single-file repair fixture
-
-Repository: `/tmp/qwen35-repair-smoke`
-
-Initial defect:
-
-```rust
-.map(|name| name.trim().to_lowercase())
-.filter(|name| name.is_empty())
-```
-
-Expected repair:
-
-```rust
-.filter(|name| !name.is_empty())
-```
-
-Results:
-
-| Harness | Result | Evidence/observation |
-| --- | --- | --- |
-| JCode + Qwen3.5 | PASS | minimal implementation-only repair; tests passed |
-| Abacus + Qwen3.5 | PASS | same minimal semantic repair; tests passed |
-
-These results establish that the RTX 2060/Qwen3.5 worker is genuinely useful for bounded coding work. It must no longer be treated as an unqualified no-op worker simply because the superseded Qwen2.5 model failed.
-
-### Multi-file compatibility/repair fixture
-
-Repository: `/tmp/qwen35-multifile-smoke`
-
-Shape:
-
-- `src/lib.rs`
-- `src/user.rs`
-- `src/formatter.rs`
-- public `User` API had to remain intact
-- test expected `User::new(" Alice ", "SMITH")` to display as `"Alice Smith"`
-- harness had to inspect relevant files, preserve the public API, make a correct implementation change and react to test feedback
-
-#### JCode result
-
-JCode successfully:
-
-- found all Rust source files;
-- ran and interpreted the initial failing test;
-- inspected `user.rs`, `lib.rs` and `formatter.rs`;
-- made real source edits;
-- reran tests and observed a second meaningful failure.
-
-However the run reached approximately:
-
-- first tool call: `12587` input tokens;
-- later repair turn: `15649` input tokens;
-- model hard limit: `16368` tokens.
-
-After the second failing test the trace repeatedly cycled through `sending request` / `waiting for response` without a new useful tool turn. The worktree remained partially modified and tests were still failing.
-
-Observed JCode outcome:
+Abacus qualification used:
 
 ```text
-multi-file compatibility/repair = FAIL
-failure mode = practical context exhaustion / no safe remaining repair runway
-repository = partially modified, tests failing
+abacus-agent v0.6.1
 ```
 
-#### Abacus result
+Abacus was removed from the rack after qualification evidence was preserved under local PR14 evidence storage.
 
-Abacus successfully:
+## Historical Qwen2.5 result
 
-- inspected all three relevant files;
-- reproduced the failing test;
-- diagnosed whitespace/casing issues;
-- made multiple source edits;
-- reran tests and responded to additional failures.
+The original `local-coder` model was `Qwen/Qwen2.5-Coder-3B-Instruct-AWQ`.
 
-It then over-expanded the repair, introduced invalid Rust (`std::iter::Itertools` and an invalid iterator-to-String conversion), and the provider stream timed out. The final worktree did not compile.
+It failed important tool/protocol and truthful-completion tests. That historical `local-coder -> none` conclusion is superseded by the Qwen3.5 qualification below.
 
-Observed Abacus outcome:
+## Qwen3.5 local-coder qualification
 
-```text
-multi-file compatibility/repair = FAIL
-failure mode = repeated repair growth followed by provider timeout
-repository = modified, does not compile
-```
+### Native tool protocol
 
-This result initially appeared to demonstrate the capability ceiling of the 4B worker. The subsequent diagnostics below show that interpretation was incomplete because neither harness was operating with the true `16368` context limit configured.
+PASS.
 
-## Critical context-window configuration finding
+The model emitted real OpenAI-compatible `tool_calls` and correctly continued from tool results through vLLM.
 
-This is now a first-class PR14 architectural finding.
+### Simple real repository edit
 
-### Abacus
+PASS through JCode.
 
-`abacus doctor` on the active local profile reported:
+The model inspected source, fixed a real implementation defect, ran `cargo test`, observed passing tests and reported completion truthfully.
 
-```text
-profile      local
-model        local-coder
-endpoint     http://127.0.0.1:8018/v1/chat/completions
-limits       128000 context · auto output · default · compacts near 364185 chars
-```
+### Single-file compiler/test repair
 
-The real vLLM model limit is only `16368` tokens.
+PASS through JCode.
 
-Therefore Abacus currently believes the coder has roughly 7.8x more token context than it actually has and schedules compaction far beyond the physical model limit. Its automatic context-management behaviour was not being exercised at the point where this worker actually needed it.
+The model repaired a semantic defect with a small implementation change and passed deterministic tests.
 
-### JCode
+### Multi-file compatibility/repair
 
-The active JCode provider profile contains:
+This fixture was the critical qualification task.
+
+The repository contained:
+
+- `src/lib.rs`;
+- `src/user.rs`;
+- `src/formatter.rs`;
+- a public `User` API that had to remain intact;
+- a failing test expecting `User::new(" Alice ", "SMITH")` to display as `"Alice Smith"`.
+
+#### Initial JCode `full` result
+
+The first useful model/tool turn was approximately 12.8k input tokens against a hard 16,368-token model window.
+
+After correcting JCode model metadata to explicitly declare:
 
 ```toml
-[providers.local-coder]
-type = "open-ai-compatible"
-base_url = "http://127.0.0.1:8018/v1"
-default_model = "local-coder"
-requires_api_key = false
-provider_routing = false
-model_catalog = false
-allow_provider_pinning = false
-
-[[providers.local-coder.models]]
-id = "local-coder"
+context_window = 16368
 ```
 
-There is no explicit `context_window = 16368` declaration for the model.
+reactive compaction became visible, proving the original configuration had been incorrect. However the `full` tool profile still consumed too much static context overhead for the small worker and left insufficient repair runway.
 
-The multi-file trace then reached `15649` input tokens without an observed successful compaction before the hard `16368` serving limit.
+`JCode full` is therefore not the approved local-coder profile.
 
-### Consequence
+#### JCode `minimal` result
 
-The 2026-08-24 multi-file failures are valid evidence that the **current configured systems fail under context pressure**, but they are **not yet valid evidence that the 4B model itself cannot complete the task under correctly configured context management**.
-
-PR14 must therefore re-run the relevant pressure test after each harness is explicitly configured with the true worker context window.
-
-## Architectural conclusion: context is a supervised resource
-
-Rack AI must treat context capacity in the same class as VRAM, wall time and process budget: a deterministic resource owned by the control plane, not an informal property left to model self-awareness.
-
-The small worker must not be expected to notice on its own that it is about to exhaust context.
-
-The required architecture is conceptually:
+The same worker with:
 
 ```text
-Rack AI
-  |
-  +-- task admission / complexity classification
-  |
-  +-- worker + harness selection
-  |
-  +-- context budget governor
-        |
-        +-- continue
-        +-- compact / checkpoint
-        +-- stop local worker
-        +-- escalate / resume on stronger worker
+tool_profile = minimal
+context_window = 16368
 ```
 
-Coding harnesses may own the mechanics of their supported local compaction, but Rack AI owns the policy and the decision about whether continuation remains safe.
+reduced the first useful interaction to roughly 2.9k input tokens.
 
-## Context Budget Governor requirements
+The worker then had enough context to:
 
-PR14 now requires a design/qualification result for the following behaviour. PR15 may implement the production adapter/control path later, but PR14 must prove the concept and define the contract.
+- inspect the repository;
+- run tests;
+- react to repeated compiler/test feedback;
+- make substantive edits;
+- complete a passing test run.
 
-### 1. Exact worker context registration
+A strengthened rerun explicitly prohibited changing the signatures of `User::new`, `User::first_name` and `User::last_name`. That run preserved the public method signatures and completed with passing tests at roughly 6.8k input tokens.
 
-Every registered worker/model profile must carry its real served context capacity.
+One successful run left unnecessary `src/user.rs.bak` and `src/user_debug.rs` artifacts. This is the reason the route remains `qualified_with_constraints` rather than unconditional: Rack AI must independently reject unexpected files and inspect final Git state.
 
-For the current coder:
+### Truthful no-change test
+
+PASS.
+
+A known-correct fixture was presented to JCode `minimal` on `local-coder`.
+
+JCode:
+
+- inspected the relevant implementation;
+- ran the relevant Rust tests;
+- correctly concluded the implementation was already correct;
+- explicitly reported that no implementation change was required;
+- made no tracked source changes.
+
+Independent result:
 
 ```text
-worker = local-coder
-model = NotaMG/eqaq-v2
-max_context_tokens = 16368
+git diff: empty
+cargo test: pass
 ```
 
-Harness configuration must not silently substitute a generic 128K/default window.
+Only generated `Cargo.lock` and `target/` artifacts were present after test execution.
 
-### 2. Reserved operating headroom
+### Network-disabled execution
 
-Rack AI must not intentionally consume the model's absolute maximum context before deciding what to do next.
+PASS.
 
-Initial bands to test for the 16,368-token coder are:
+For qualification, JCode and its child tools were launched with an `LD_PRELOAD` network guard that blocked normal external IPv4/IPv6 connections while allowing loopback.
+
+The guard was independently verified before the harness run:
 
 ```text
-0-60%    NORMAL
-60-72%   WATCH
-72-80%   COMPACT
-80-88%   CHECKPOINT / DECIDE
->88%     DO NOT START ANOTHER LARGE STEP
+127.0.0.1:8018/v1/models -> reachable
+https://example.com       -> blocked
 ```
 
-These percentages are hypotheses for qualification, not yet production constants. PR14 should tune them from observed harness behaviour.
+JCode then successfully used the local-coder endpoint, inspected the repository, ran local tests and left no tracked source diff while external network access was blocked.
 
-Approximate token boundaries:
+This proves the harness can operate under a network-denied outer policy while retaining access to the local vLLM endpoint. Production Rack AI isolation should use its normal kernel/container/process boundary rather than relying on `LD_PRELOAD`; the preload guard was only the PR14 qualification mechanism.
+
+### Dual-endpoint isolation
+
+PASS.
+
+Two independent JCode sessions were launched concurrently:
 
 ```text
-60% ~= 9,821
-72% ~= 11,785
-80% ~= 13,094
-88% ~= 14,404
+session A -> local-primary -> 127.0.0.1:8017
+session B -> local-coder   -> 127.0.0.1:8018
 ```
 
-The observed JCode first tool call at ~12,587 tokens demonstrates why harness overhead must be measured as part of task admission and routing.
-
-### 3. Task admission / capability envelope
-
-Routing must consider expected task shape, not simply `coding task -> local-coder`.
-
-A starting classification to validate is:
+The endpoints advertised distinct served model IDs:
 
 ```text
-Tier A: local-coder preferred
-- localized one-file changes
-- known/narrow implementation points
-- straightforward deterministic failures
-- small mechanical edits
-
-Tier B: local-coder conditional
-- small multi-file changes
-- limited repository discovery
-- one bounded repair iteration expected
-- compatibility changes with a narrow surface
-
-Tier C: local-primary preferred
-- architectural work
-- broad repository discovery
-- high ambiguity
-- refactors
-- many files/modules
-- repeated compile/test repair expected
+8017 -> local-primary -> cyankiwi/gemma-4-12B-it-AWQ-INT4
+8018 -> local-coder   -> NotaMG/eqaq-v2
 ```
 
-Routing must ultimately be based on measured worker/model/harness capability metadata, not hard-coded parameter-count rules.
+Both concurrent sessions successfully completed repository inspection and Rust test execution and truthfully reported that no changes were required.
 
-### 4. Compaction before exhaustion
+Because the two vLLM endpoints expose different served model IDs, cross-binding would have produced a model-not-found failure of the same class as the previously observed JCode swarm rebinding defect. Neither session produced such a failure.
 
-A qualifying harness route must demonstrate that compaction is triggered while sufficient output/tool-call runway remains.
-
-Compaction must preserve the information needed for correct continuation and must not silently discard critical task constraints or recent failure evidence.
-
-Built-in JCode/Abacus context management should be evaluated first. A third-party layer such as Headroom may be evaluated only if the built-in mechanisms are insufficient or if it provides a demonstrable operational advantage.
-
-### 5. Structured checkpoint before stop/escalation
-
-Compaction alone is not sufficient. Before a context-pressure stop or worker escalation, Rack AI must be able to persist a compact state equivalent to:
-
-```json
-{
-  "objective": "...",
-  "files_inspected": [],
-  "observed_failures": [],
-  "changes_attempted": [],
-  "current_repo_state": "...",
-  "remaining_issue": "...",
-  "recommended_next_step": "..."
-}
-```
-
-The exact schema may change, but the persisted checkpoint must be deterministic enough for another worker to continue without replaying the entire prior transcript.
-
-### 6. Escalation is a normal recovery path
-
-A small worker is not required to finish every task it starts.
-
-Useful work may include:
-
-- repository discovery;
-- reproducing the bug;
-- narrowing the cause;
-- making a bounded first-pass patch;
-- producing compiler/test feedback.
-
-If context or repair complexity exceeds the worker's safe envelope, Rack AI should stop the local-coder cleanly and allow `local-primary` to continue from:
-
-- original goal;
-- structured checkpoint;
-- current Git diff;
-- latest deterministic compiler/test output.
-
-This should be classified as controlled recovery/escalation, not as a mysterious provider crash or fabricated success.
-
-## Context-management qualification track
-
-Ordinary PR14 matrix expansion is paused until this track is resolved.
-
-### C1 — correct harness context configuration
-
-- configure JCode `local-coder` model metadata with the actual `16368` context window;
-- configure Abacus local profile/model limits so diagnostics report the actual `16368` context window rather than `128000`;
-- verify each harness reports/uses the intended value.
-
-### C2 — built-in compaction pressure test
-
-Re-run the same `/tmp/qwen35-multifile-smoke` task with:
-
-- identical repository state;
-- identical prompt;
-- identical vLLM endpoint/model;
-- correctly configured context metadata.
-
-Record:
-
-- token usage by turn where available;
-- compaction trigger point;
-- content retained/removed;
-- whether task completion improves;
-- final Git diff;
-- final tests;
-- truthful completion/failure state.
-
-This is a new experiment, not an attempt to erase the previous failures.
-
-### C3 — optional Headroom evaluation
-
-Only if built-in compaction is insufficient or operationally poor, deploy Headroom on `gpurack` and repeat the same fixture. Prefer transparent/automatic compression over requiring the 4B model to remember to invoke an MCP tool when context is already scarce.
-
-Measure at minimum:
-
-- input tokens/context occupancy;
-- tool turns;
-- compression events;
-- retrieval events;
-- wall time;
-- final correctness.
-
-Sequential-thinking MCP is not considered a context-exhaustion solution. It may later be tested for reasoning quality, but additional reasoning/tool turns can increase context consumption.
-
-### C4 — forced safe escalation
-
-Create a task intentionally beyond the 2060 worker's safe envelope and prove a control flow equivalent to:
+Independent final result:
 
 ```text
-local-coder begins bounded work
--> context/repair budget threshold reached
--> worker stops without claiming success
--> structured checkpoint + diff + latest test evidence persisted
--> local-primary resumes from compact state
--> Rack AI independently accepts/rejects final result
+tracked git diff: empty
+both test executions: pass
 ```
 
-PR14 need not implement the final production scheduler, but the contract, evidence and minimum reproducible mechanism must be sufficient for PR15/PR7 recovery integration.
+Direct JCode provider/model routing is therefore qualified for simultaneous use of the two local endpoints.
 
-## Context-management acceptance standard
+## Abacus qualification result
 
-Do not consider this problem solved until evidence supports all of the following:
+Abacus was tested against the rack and initially passed small localized tasks.
 
-1. Rack AI knows every active worker's real context capacity.
-2. Harnesses are configured with that capacity rather than a generic default.
-3. A worker is not allowed to consume the absolute hard limit without a prior control decision.
-4. Compaction occurs before hard exhaustion when continuation is appropriate.
-5. Compaction preserves enough task state for correct continuation.
-6. Repeated repair loops cannot silently burn through the context window indefinitely.
-7. Context pressure can trigger a controlled stop rather than false success or an opaque hang.
-8. A structured checkpoint is persisted before escalation.
-9. Another qualified worker can resume from that checkpoint without the complete transcript.
-10. Context exhaustion is represented as a normal recoverable Rack AI control-plane event.
+However, once the Qwen3.5 multi-step repair fixture was used, repeated material failures were observed even after correcting its context assumption to the real 16,368-token limit and using `--no-session`:
 
-## Current provisional capability classification
+- provider-stream timeouts before successful completion;
+- repair loops that drifted into unnecessary or incorrect implementation approaches;
+- final repository left failing on the bounded multi-file task;
+- unexpected `AGENTS.md` creation;
+- no operational advantage over JCode `minimal` for the small-worker role.
 
-These are **provisional** until the context-management track is complete.
+The key Rack AI requirement is not whether a harness can perform any coding action; it is whether the harness qualifies for a defensible production role in the rack.
+
+Current classification:
+
+```text
+Abacus = not_qualified
+```
+
+Rack AI will not carry a second production harness merely to preserve optionality. Abacus may be reconsidered after upstream improvements. Other Rust-native harnesses may be qualified in the future using the same evidence-driven process.
+
+## Context-management conclusion
+
+The early PR14 investigation temporarily suggested Rack AI needed a new mandatory context-budget governor/checkpoint subsystem before the small worker could be considered usable.
+
+The corrected evidence does **not** support making that a PR14 merge blocker.
+
+The material findings are simpler:
+
+1. exact served context capacity is worker/model metadata and must be configured correctly;
+2. harness/tool-profile overhead materially affects effective usable context;
+3. JCode `minimal` gives the 16,368-token worker sufficient practical runway for the tested bounded task class;
+4. Rack AI should still route broader/harder work to a stronger qualified worker when appropriate;
+5. future recovery/checkpoint sophistication may be added from measured production need rather than invented prematurely.
+
+There is therefore no requirement in PR14 to implement or prove a bespoke context-budget governor or automatic checkpoint/escalation subsystem.
+
+## Initial routing policy
+
+### `local-coder`
+
+```text
+worker: local-coder
+GPU: RTX 2060 6 GB
+model: NotaMG/eqaq-v2
+harness: JCode
+JCode tool profile: minimal
+context_window: 16368
+max_num_seqs: 1
+classification: qualified_with_constraints
+```
+
+Initial task envelope:
+
+- localized implementation work;
+- small mechanical changes;
+- bounded compiler/test repair;
+- narrow multi-file compatibility changes where deterministic acceptance exists.
+
+Rack AI must independently inspect final Git state and deterministic acceptance before accepting work.
 
 ### `local-primary`
 
-- JCode: `qualified`
-- Abacus: `qualified_with_constraints`
-
-### `local-coder` / Qwen3.5
-
-- JCode: `provisionally qualified_with_constraints` for bounded/localized work
-- Abacus: `provisionally qualified_with_constraints` for bounded/localized work
-- neither harness is yet qualified for longer multi-step repair work
-- the multi-file failures must be reinterpreted after correct context configuration and compaction testing
-
-## Provisional routing direction
-
-Do **not** freeze the final PR15 routing policy yet.
-
-The evidence currently supports this architectural direction:
-
 ```text
-local-coder
-  -> bounded/localized implementation work
-  -> harness preference TBD from context-corrected PR14 tests
-  -> compact/checkpoint before context exhaustion
-  -> escalate to local-primary when safe envelope is exceeded
-
-local-primary
-  -> JCode preferred for stronger/broader implementation and review work
-  -> Abacus remains a possible constrained fallback
+worker: local-primary
+GPU: RTX 4060 Ti 16 GB
+model: cyankiwi/gemma-4-12B-it-AWQ-INT4
+harness: JCode
+classification: qualified
 ```
 
-The final routing policy must combine:
+The primary remains the stronger route for broader reasoning, planning, review and harder implementation work.
 
-- worker/model capability envelope;
-- harness qualification;
-- true context capacity;
-- task shape/complexity;
-- recovery/escalation policy.
+## Multi-GPU scheduling
 
-## Residual PR14 gaps
+PR14 does not implement adaptive routing between the two GPUs.
 
-Still required before merge:
+The later scheduling work should let Rack AI decide when:
 
-- context-corrected C1/C2 tests;
-- context checkpoint/escalation proof or sufficiently concrete PR14 mechanism/fixture;
-- truthful no-change behaviour for the new Qwen3.5 coder;
-- hard network-disabled relevant harness execution;
-- simultaneous dual-endpoint sessions proving no cross-binding;
-- final capability matrix and deterministic routing policy based on the current Qwen3.5 coder rather than the superseded Qwen2.5 evidence.
+- a bounded implementation belongs on the 2060;
+- harder implementation belongs on the 4060 Ti;
+- two independent tasks can execute concurrently, one per worker;
+- work should be reassigned from the small worker to the stronger worker.
+
+That scheduling responsibility remains in Rack AI rather than JCode swarm.
+
+## Final capability matrix
+
+| Harness | Worker | Result | Production role |
+| --- | --- | --- | --- |
+| JCode direct | `local-primary` | `qualified` | preferred stronger worker harness |
+| JCode `minimal` | `local-coder` | `qualified_with_constraints` | preferred bounded small-worker harness |
+| JCode `full` | `local-coder` | not approved for this route | excessive static context overhead |
+| Abacus | current rack | `not_qualified` | none |
+| JCode swarm | current rack | deferred | no present value over Rack AI direct scheduling |
 
 ## PR15 gate
 
-Do not begin production PR15 harness integration until PR14 has resolved the context-budget problem sufficiently to define:
+PR15 may now implement the production JCode adapter/control path.
 
-- exact worker context metadata;
-- safe continuation/compaction/stop semantics;
-- checkpoint artifact requirements;
-- escalation/fallback expectations;
-- final harness route for each current worker/model profile.
-
-## Machine-readable summary — provisional
+PR15 must preserve the architectural boundary:
 
 ```text
-PR14_STATUS = CONTEXT_MANAGEMENT_QUALIFICATION_IN_PROGRESS
-QUALIFIED_HARNESSES = jcode,abacus
-LOCAL_CODER_MODEL = NotaMG/eqaq-v2
-LOCAL_CODER_CONTEXT = 16368
-LOCAL_CODER_PREFERRED_HARNESS = pending_context_corrected_tests
+Rack AI
+  -> selects worker/model/task
+  -> invokes JCode with the approved worker profile
+  -> enforces outer workspace/network/process/time limits
+  -> runs independent acceptance/review
+  -> owns Git/promotion/evidence
+```
+
+PR15 should not reintroduce Abacus, JCode swarm dependency, or another bespoke Rack AI coding-agent loop unless new qualification evidence justifies it.
+
+## Machine-readable summary
+
+```text
+QUALIFIED_HARNESSES = jcode
 LOCAL_PRIMARY_PREFERRED_HARNESS = jcode
-CONTEXT_GOVERNOR_REQUIRED = true
-PR15_READY = false
+LOCAL_CODER_PREFERRED_HARNESS = jcode
+LOCAL_CODER_JCODE_TOOL_PROFILE = minimal
+LOCAL_CODER_CONTEXT_WINDOW = 16368
+LOCAL_CODER_MAX_NUM_SEQS = 1
+ABACUS = not_qualified
+JCODE_SWARM = deferred
+CONTEXT_GOVERNOR_REQUIRED_FOR_PR15 = false
+PR15_READY = true
 ```
