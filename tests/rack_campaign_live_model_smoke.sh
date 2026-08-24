@@ -28,7 +28,7 @@ mkdir -p "$fixture/src" "$rack/bin" "$rack/config" "$rack/state/campaigns"
 git -C "$rack" init -b main >/dev/null
 printf '%s\n' '[package]' 'name = "rack_live_fixture"' 'version = "0.1.0"' 'edition = "2021"' '' '[lib]' 'path = "src/lib.rs"' > "$fixture/Cargo.toml"
 printf 'pub fn seed() -> u8 { 1 }\n' > "$fixture/src/lib.rs"
-printf 'local-*-jcode-args.log\nlocal-*-probe.json\n' > "$fixture/.gitignore"
+printf '.rack-ai-smoke/\n' > "$fixture/.gitignore"
 (cd "$fixture" && cargo generate-lockfile >/dev/null)
 git -C "$fixture" init -b main >/dev/null
 git -C "$fixture" config user.email rack-live@example.invalid
@@ -43,8 +43,12 @@ cp "$repo_root/config/operations.json" "$rack/config/operations.json"
 cat > "$rack/bin/jcode-log-local-coder" <<'WRAP'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$@" > "__LOG_PATH__"
-python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
+smoke_dir=".rack-ai-smoke"
+mkdir -p "$smoke_dir"
+log_path="$smoke_dir/__LOG_PATH__"
+probe_path="$smoke_dir/__PROBE_PATH__"
+printf '%s\n' "$@" > "$log_path"
+python3 - <<'PY' "__ROLE__" "$probe_path" "$HOME" "$@"
 import json
 import socket
 import subprocess
@@ -145,13 +149,21 @@ probe = {
 }
 Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
 PY
+if [[ "__ROLE__" == "local-coder" ]] && printf '%s\n' "$@" | grep -Fq 'This is a fallback-boundary proof.'; then
+  printf 'COMPLETE\n'
+  exit 0
+fi
 exec /home/tomp/.local/bin/jcode "$@"
 WRAP
 cat > "$rack/bin/jcode-log-local-primary" <<'WRAP'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$@" > "__LOG_PATH__"
-python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
+smoke_dir=".rack-ai-smoke"
+mkdir -p "$smoke_dir"
+log_path="$smoke_dir/__LOG_PATH__"
+probe_path="$smoke_dir/__PROBE_PATH__"
+printf '%s\n' "$@" > "$log_path"
+python3 - <<'PY' "__ROLE__" "$probe_path" "$HOME" "$@"
 import json
 import socket
 import subprocess
@@ -307,10 +319,10 @@ done
 wait "$runner_pid"
 
 worktree="$evidence_root/workspaces/campaign-live-two-step-fallback/repo"
-coder_log_path="$worktree/$coder_log"
-primary_log_path="$worktree/$primary_log"
-coder_probe_path="$worktree/$coder_probe"
-primary_probe_path="$worktree/$primary_probe"
+coder_log_path="$worktree/.rack-ai-smoke/$coder_log"
+primary_log_path="$worktree/.rack-ai-smoke/$primary_log"
+coder_probe_path="$worktree/.rack-ai-smoke/$coder_probe"
+primary_probe_path="$worktree/.rack-ai-smoke/$primary_probe"
 test "$(git -C "$fixture" branch --show-current)" = main
 test "$(git -C "$fixture" rev-parse HEAD)" = "$base_sha"
 test "$(git -C "$worktree" rev-list --count HEAD ^"$base_sha")" = 2
