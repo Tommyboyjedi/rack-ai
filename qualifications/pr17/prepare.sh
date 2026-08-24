@@ -28,16 +28,29 @@ if ! git -C "$root/tiny-ticket" diff --cached --quiet; then
 fi
 
 ticket_sha="$(git -C "$root/tiny-ticket" rev-parse HEAD)"
-python3 - "$root/campaigns/tiny-ticket.json" "$ticket_sha" <<'PY'
+
+# These are qualification campaigns, not one-shot model benchmarks. Give the
+# controller enough bounded recovery budget to act on its own diagnoses while
+# keeping every attempt finite and acceptance unchanged.
+python3 - "$root/campaigns/tiny-ticket.json" "$root/campaigns/tiny-dodge.json" "$ticket_sha" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-path = Path(sys.argv[1])
-sha = sys.argv[2]
-data = json.loads(path.read_text())
-data["repository"]["base_sha"] = sha
-path.write_text(json.dumps(data, indent=2) + "\n")
+ticket_path = Path(sys.argv[1])
+game_path = Path(sys.argv[2])
+ticket_sha = sys.argv[3]
+
+for path in (ticket_path, game_path):
+    data = json.loads(path.read_text())
+    data["limits"]["max_runtime_seconds"] = 14400
+    data["limits"]["max_total_attempts"] = 20
+    data["worker_policy"]["primary_attempts"] = 1
+    data["worker_policy"]["repair_attempts"] = 2
+    data["worker_policy"]["fallback_attempts"] = 2
+    if path == ticket_path:
+        data["repository"]["base_sha"] = ticket_sha
+    path.write_text(json.dumps(data, indent=2) + "\n")
 PY
 
 printf 'Prepared corrected PR17 qualification at %s\n' "$root"
