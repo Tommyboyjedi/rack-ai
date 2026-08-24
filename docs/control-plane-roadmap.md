@@ -570,7 +570,7 @@ Verification completed in this slice:
 Completed in this slice:
 - moved `rack-task` and `rack-coordinator` command ownership into the Rust CLI while preserving their shell entrypoints
 - fixed wrapper and argument parsing so repository root metadata no longer leaks into task requests or spec paths
-- replaced the live `bin/rack-coder` Python worker with a Rust direct coder worker backed by the same vLLM endpoint and tool contract
+- replaced the live `bin/rack-coder` Python worker with a Rust direct coder worker backed by the same vLLM endpoint and tool contract; this path was later superseded by qualified direct JCode execution
 - renamed the queue executor adapter from `PythonRackTaskExecutor` to `CliRackTaskExecutor` to match the actual architecture
 - removed the dead `bin/racklib.py` helper after confirming the registry and placement path already lived in Rust
 

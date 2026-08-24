@@ -34,8 +34,6 @@ use rack_ai_infrastructure::FileSystemTaskSpecRepository;
 use rack_ai_infrastructure::FileSystemWorkerCatalog;
 use rack_ai_infrastructure::HealthcheckService;
 use rack_ai_infrastructure::HealthcheckServiceDependencies;
-use rack_ai_infrastructure::JCodeProcessRunner;
-use rack_ai_infrastructure::JCodeWorkerConfigResolver;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
@@ -177,10 +175,7 @@ fn execute() -> Result<i32, String> {
     } else if command == "task" {
         run_task_from_arguments(roots.repo_root, &arguments[2..])
     } else if command == "coordinator" {
-        run_coordinator_command(roots.repo_root, &arguments[2..])
-    } else if command == "coder-worker" {
-        run_coder_worker(roots.repo_root, &arguments[2..])
-    } else if command == "healthcheck" {
+        run_coordinator_command(roots.repo_root, &arguments[2..])    } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
     } else if command == "change" {
         change_command::run(roots.repo_root, roots.state_root, &arguments[2..])
@@ -410,110 +405,6 @@ fn run_task_from_arguments(repo_root: PathBuf, arguments: &[String]) -> Result<i
     }
     let spec_path = spec_path.ok_or("expected spec path")?;
     run_task_command(repo_root, spec_path, emit_json)
-}
-
-fn run_coder_worker(repo_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
-    let mut cwd = ".".to_string();
-    let mut prompt_file: Option<String> = None;
-    let mut max_turns = 6_usize;
-    let mut prompt: Option<String> = None;
-    let mut executor_name: Option<String> = None;
-    let mut allowed_paths = Vec::new();
-    let mut index = 0;
-    while index < arguments.len() {
-        match arguments[index].as_str() {
-            "--cwd" => {
-                cwd = arguments.get(index + 1).ok_or("missing cwd value")?.clone();
-                index += 2;
-            }
-            "--executor" => {
-                executor_name = Some(
-                    arguments
-                        .get(index + 1)
-                        .ok_or("missing executor value")?
-                        .clone(),
-                );
-                index += 2;
-            }
-            "--allowed-path" => {
-                allowed_paths.push(
-                    arguments
-                        .get(index + 1)
-                        .ok_or("missing allowed-path value")?
-                        .clone(),
-                );
-                index += 2;
-            }
-            "--prompt-file" => {
-                prompt_file = Some(
-                    arguments
-                        .get(index + 1)
-                        .ok_or("missing prompt-file value")?
-                        .clone(),
-                );
-                index += 2;
-            }
-            "--max-turns" => {
-                max_turns = arguments
-                    .get(index + 1)
-                    .ok_or("missing max-turns value")?
-                    .parse::<usize>()
-                    .map_err(|error| error.to_string())?;
-                index += 2;
-            }
-            "--repo-root" | "--state-root" | "--root" => {
-                index += 2;
-            }
-            "--" => {
-                prompt = Some(arguments[index + 1..].join(" "));
-                break;
-            }
-            value if value.starts_with("--") => return Err(format!("unknown argument: {value}")),
-            _ => {
-                prompt = Some(arguments[index..].join(" "));
-                break;
-            }
-        }
-    }
-
-    let prompt_text = if let Some(path) = prompt_file {
-        fs::read_to_string(path).map_err(|error| error.to_string())?
-    } else if let Some(value) = prompt {
-        value
-    } else {
-        read_stdin_text()?
-    };
-    if prompt_text.trim().is_empty() {
-        return Err("Prompt is empty.".to_string());
-    }
-
-    let workdir = PathBuf::from(cwd);
-    fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
-    if executor_name.is_some() {
-        return Err("coder-worker no longer supports the bespoke podman tool loop".to_string());
-    }
-    if !allowed_paths.is_empty() {
-        return Err("coder-worker no longer accepts --allowed-path".to_string());
-    }
-    let runtime =
-        JCodeWorkerConfigResolver::new(RegistryPaths::new(repo_root)).resolve("local-coder")?;
-    let final_text = JCodeProcessRunner::run(
-        &runtime,
-        &prompt_text,
-        &workdir,
-        u32::try_from(max_turns.saturating_mul(60)).unwrap_or(600),
-        false,
-    )
-    .map_err(|error| error.message().to_string())?
-    .stdout()
-    .trim()
-    .to_string();
-    println!("{final_text}");
-    Ok(if final_text.trim() == "COMPLETE" {
-        0
-    } else {
-        1
-    })
 }
 
 fn run_task_command(

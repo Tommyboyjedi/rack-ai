@@ -130,7 +130,7 @@ Entry points such as:
 - `bin/rack-coordinator`
 - `bin/rack-task`
 
-support direct single-worker and explicit pipeline execution.
+support direct single-worker and explicit pipeline execution. bin/rack-coder is now a thin wrapper around the qualified direct JCode local-coder path rather than a bespoke native model/tool loop.
 
 ### External-repository change workflow
 
