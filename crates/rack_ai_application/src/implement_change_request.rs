@@ -86,7 +86,9 @@ impl ImplementChangeRequest {
     }
 
     pub fn worker_model_id(&self) -> Option<&str> {
-        self.worker.as_ref().map(ImplementWorkerRuntime::api_model_id)
+        self.worker
+            .as_ref()
+            .map(ImplementWorkerRuntime::api_model_id)
     }
 
     pub fn worker(&self) -> Option<&ImplementWorkerRuntime> {

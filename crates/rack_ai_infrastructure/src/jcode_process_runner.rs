@@ -88,7 +88,14 @@ impl JCodeProcessRunner {
         network_disabled: bool,
     ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
         let root = temp_root();
-        let result = run_with_root(runtime, task, workdir, timeout_seconds, network_disabled, &root);
+        let result = run_with_root(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            &root,
+        );
         let _ = fs::remove_dir_all(&root);
         result
     }
@@ -114,28 +121,23 @@ fn run_with_root(
     )
     .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
     prepared.command.process_group(0);
-    let mut child = prepared
-        .command
-        .spawn()
-        .map_err(|error| JCodeProcessFailure::new(error.to_string(), String::new(), String::new()))?;
-    let stdout_handle = spawn_reader(
-        child.stdout.take().ok_or_else(|| {
-            JCodeProcessFailure::new(
-                "missing JCode stdout pipe".to_string(),
-                String::new(),
-                String::new(),
-            )
-        })?,
-    );
-    let stderr_handle = spawn_reader(
-        child.stderr.take().ok_or_else(|| {
-            JCodeProcessFailure::new(
-                "missing JCode stderr pipe".to_string(),
-                String::new(),
-                String::new(),
-            )
-        })?,
-    );
+    let mut child = prepared.command.spawn().map_err(|error| {
+        JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
+    })?;
+    let stdout_handle = spawn_reader(child.stdout.take().ok_or_else(|| {
+        JCodeProcessFailure::new(
+            "missing JCode stdout pipe".to_string(),
+            String::new(),
+            String::new(),
+        )
+    })?);
+    let stderr_handle = spawn_reader(child.stderr.take().ok_or_else(|| {
+        JCodeProcessFailure::new(
+            "missing JCode stderr pipe".to_string(),
+            String::new(),
+            String::new(),
+        )
+    })?);
     let status_result = wait_for_completion(
         &mut child,
         timeout_seconds,
@@ -207,7 +209,10 @@ fn build_command(
         .arg(task)
         .current_dir(workdir)
         .env("HOME", execution_config.home_dir())
-        .env("XDG_CONFIG_HOME", execution_config.home_dir().join(".config"))
+        .env(
+            "XDG_CONFIG_HOME",
+            execution_config.home_dir().join(".config"),
+        )
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     Ok(prepared)
@@ -220,11 +225,10 @@ fn prepare_bubblewrap_command(
 ) -> Result<PreparedCommand, String> {
     let endpoint = LocalEndpoint::parse(runtime.endpoint())?;
     let socket_path = root.join("selected-vllm.sock");
-    let local_bridge_path = root.join("sandbox-local-bridge.py");
     let launcher_path = root.join("sandbox-launcher.sh");
     let host_bridge = HostUnixBridge::start(&socket_path, endpoint.port)?;
-    write_local_bridge_script(&local_bridge_path)?;
-    write_launcher_script(&launcher_path, &local_bridge_path, &socket_path, endpoint.port)?;
+    let bridge_command = bridge_command(root, &socket_path, endpoint.port)?;
+    write_launcher_script(&launcher_path, &bridge_command)?;
 
     let mut command = Command::new("bwrap");
     command
@@ -337,7 +341,8 @@ impl Drop for NetworkIsolationGuard {
 }
 
 fn bridge_unix_to_tcp(stream: UnixStream, target_port: u16) -> Result<(), String> {
-    let upstream = TcpStream::connect(("127.0.0.1", target_port)).map_err(|error| error.to_string())?;
+    let upstream =
+        TcpStream::connect(("127.0.0.1", target_port)).map_err(|error| error.to_string())?;
     let mut stream_read = stream.try_clone().map_err(|error| error.to_string())?;
     let mut stream_write = stream;
     let mut upstream_read = upstream.try_clone().map_err(|error| error.to_string())?;
@@ -352,7 +357,31 @@ fn bridge_unix_to_tcp(stream: UnixStream, target_port: u16) -> Result<(), String
     Ok(())
 }
 
-fn write_local_bridge_script(path: &Path) -> Result<(), String> {
+#[cfg(test)]
+fn bridge_command(root: &Path, socket_path: &Path, listen_port: u16) -> Result<String, String> {
+    let local_bridge_path = root.join("sandbox-local-bridge.py");
+    write_test_local_bridge_script(&local_bridge_path)?;
+    Ok(format!(
+        "python3 {} {} {}",
+        shell_quote_path(&local_bridge_path),
+        shell_quote_path(socket_path),
+        listen_port
+    ))
+}
+
+#[cfg(not(test))]
+fn bridge_command(_root: &Path, socket_path: &Path, listen_port: u16) -> Result<String, String> {
+    let current_executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    Ok(format!(
+        "{} __sandbox-tcp-bridge {} {}",
+        shell_quote_path(&current_executable),
+        shell_quote_path(socket_path),
+        listen_port
+    ))
+}
+
+#[cfg(test)]
+fn write_test_local_bridge_script(path: &Path) -> Result<(), String> {
     write_executable(
         path,
         r#"import socket
@@ -394,19 +423,14 @@ while True:
     )
 }
 
-fn write_launcher_script(
-    path: &Path,
-    local_bridge_path: &Path,
-    socket_path: &Path,
-    listen_port: u16,
-) -> Result<(), String> {
+fn write_launcher_script(path: &Path, bridge_command: &str) -> Result<(), String> {
     write_executable(
         path,
         &format!(
             concat!(
                 "#!/bin/bash\n",
                 "set -euo pipefail\n",
-                "python3 {} {} {} >/dev/null 2>&1 &\n",
+                "{} >/dev/null 2>&1 &\n",
                 "bridge_pid=$!\n",
                 "cleanup() {{\n",
                 "  kill \"$bridge_pid\" 2>/dev/null || true\n",
@@ -417,11 +441,17 @@ fn write_launcher_script(
                 "child_pid=$!\n",
                 "wait \"$child_pid\"\n"
             ),
-            local_bridge_path.display(),
-            socket_path.display(),
-            listen_port
+            bridge_command,
         ),
     )
+}
+
+fn shell_quote_path(path: &Path) -> String {
+    shell_quote(path.to_string_lossy().as_ref())
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn write_executable(path: &Path, content: &str) -> Result<(), String> {
@@ -449,8 +479,7 @@ fn wait_for_completion(
             terminate_execution(child, network_disabled)?;
             return Err(format!(
                 "jcode wall-clock timeout exceeded for worker {} after {} seconds",
-                worker_id,
-                timeout_seconds
+                worker_id, timeout_seconds
             ));
         }
         thread::sleep(Duration::from_millis(100));
@@ -481,7 +510,11 @@ fn terminate_execution(child: &mut Child, network_disabled: bool) -> Result<(), 
 fn wait_for_child_exit(child: &mut Child, grace: Duration) -> Result<bool, String> {
     let deadline = Instant::now() + grace;
     loop {
-        if child.try_wait().map_err(|error| error.to_string())?.is_some() {
+        if child
+            .try_wait()
+            .map_err(|error| error.to_string())?
+            .is_some()
+        {
             return Ok(true);
         }
         if Instant::now() >= deadline {
@@ -584,7 +617,7 @@ fn temp_root() -> PathBuf {
 mod tests {
     use std::fs;
     use std::io::Write;
-        use std::net::TcpListener;
+    use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
     use std::path::PathBuf;
@@ -701,7 +734,8 @@ PY
     }
 
     #[test]
-    fn network_isolation_keeps_selected_loopback_and_blocks_external_even_after_clearing_ld_preload() {
+    fn network_isolation_keeps_selected_loopback_and_blocks_external_even_after_clearing_ld_preload()
+     {
         let root = temp_root();
         let workdir = root.join("worktree");
         fs::create_dir_all(&workdir).unwrap();
@@ -787,7 +821,8 @@ PY
         let runtime = coder_runtime(&script, &format!("http://127.0.0.1:{selected_port}/v1"));
 
         let enabled = JCodeProcessRunner::run(&runtime, "network", &workdir, 10, false).unwrap();
-        let disabled = JCodeProcessRunner::run(&runtime, "network", &workdir, 10, true).unwrap_err();
+        let disabled =
+            JCodeProcessRunner::run(&runtime, "network", &workdir, 10, true).unwrap_err();
         selected_server.join().unwrap();
         external_server.join().unwrap();
 
@@ -796,7 +831,8 @@ PY
     }
 
     #[test]
-    fn times_out_hung_jcode_process_and_kills_descendants_that_ignore_term_and_escape_process_groups() {
+    fn times_out_hung_jcode_process_and_kills_descendants_that_ignore_term_and_escape_process_groups()
+     {
         let root = temp_root();
         let workdir = root.join("worktree");
         fs::create_dir_all(&workdir).unwrap();

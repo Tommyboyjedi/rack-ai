@@ -31,7 +31,8 @@ impl JCodeExecutionConfig {
         let home_dir = root.join("home");
         let jcode_dir = home_dir.join(".jcode");
         fs::create_dir_all(&jcode_dir).map_err(|error| error.to_string())?;
-        fs::write(jcode_dir.join("config.toml"), render(runtime)).map_err(|error| error.to_string())?;
+        fs::write(jcode_dir.join("config.toml"), render(runtime))
+            .map_err(|error| error.to_string())?;
         Ok(Self { home_dir })
     }
 

@@ -24,8 +24,6 @@ use rack_ai_domain::RunStateDraft;
 use rack_ai_domain::TaskId;
 use rack_ai_domain::TimeoutSeconds;
 use rack_ai_infrastructure::CliRackTaskExecutor;
-use rack_ai_infrastructure::JCodeProcessRunner;
-use rack_ai_infrastructure::JCodeWorkerConfigResolver;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemExecutionQueueRepository;
 use rack_ai_infrastructure::FileSystemLeaseRepository;
@@ -36,12 +34,15 @@ use rack_ai_infrastructure::FileSystemTaskSpecRepository;
 use rack_ai_infrastructure::FileSystemWorkerCatalog;
 use rack_ai_infrastructure::HealthcheckService;
 use rack_ai_infrastructure::HealthcheckServiceDependencies;
+use rack_ai_infrastructure::JCodeProcessRunner;
+use rack_ai_infrastructure::JCodeWorkerConfigResolver;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
 
 mod campaign_command;
 mod change_command;
+mod sandbox_tcp_bridge;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -149,6 +150,9 @@ fn main() {
 fn execute() -> Result<i32, String> {
     let arguments = env::args().collect::<Vec<_>>();
     let command = arguments.get(1).ok_or("expected command")?;
+    if command == "__sandbox-tcp-bridge" {
+        return sandbox_tcp_bridge::run_from_args(&arguments[2..]);
+    }
     let roots = current_roots(&arguments)?;
     let paths = RepositoryPaths::new(roots.state_root.clone());
     if command == "submit" {
@@ -491,8 +495,8 @@ fn run_coder_worker(repo_root: PathBuf, arguments: &[String]) -> Result<i32, Str
     if !allowed_paths.is_empty() {
         return Err("coder-worker no longer accepts --allowed-path".to_string());
     }
-    let runtime = JCodeWorkerConfigResolver::new(RegistryPaths::new(repo_root))
-        .resolve("local-coder")?;
+    let runtime =
+        JCodeWorkerConfigResolver::new(RegistryPaths::new(repo_root)).resolve("local-coder")?;
     let final_text = JCodeProcessRunner::run(
         &runtime,
         &prompt_text,

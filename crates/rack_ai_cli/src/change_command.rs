@@ -72,8 +72,9 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     } else {
         None
     };
-    let implementer = default_worker
-        .map(|worker| JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker)));
+    let implementer = default_worker.map(|worker| {
+        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker))
+    });
     let service = ExecuteChange::new(ExecuteChangeDependencies {
         registry: &registry,
         command_policy: &policy,

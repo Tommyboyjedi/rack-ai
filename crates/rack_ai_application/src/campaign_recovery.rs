@@ -167,10 +167,10 @@ fn extract_json_object(raw: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_recovery_output;
     use super::RecoveryDecisionKind;
     use super::RecoveryFailureKind;
     use super::RecoveryWorkerAction;
+    use super::parse_recovery_output;
 
     #[test]
     fn parses_fenced_recovery_json() {

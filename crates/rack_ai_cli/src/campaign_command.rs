@@ -30,10 +30,10 @@ use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
+use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::LocalPrimaryRecoveryReasoner;
 use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
-use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 

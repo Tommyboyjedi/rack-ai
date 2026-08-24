@@ -21,7 +21,10 @@ impl JCodeChangeImplementer {
         }
     }
 
-    fn resolve_runtime(&self, request: &ImplementChangeRequest) -> Result<ImplementWorkerRuntime, String> {
+    fn resolve_runtime(
+        &self,
+        request: &ImplementChangeRequest,
+    ) -> Result<ImplementWorkerRuntime, String> {
         if let Some(runtime) = request.worker() {
             let resolved = self.resolver.resolve(runtime.worker_id())?;
             assert_runtime_matches(runtime, &resolved)?;
@@ -45,9 +48,11 @@ impl ChangeImplementer for JCodeChangeImplementer {
             request.network_disabled(),
         );
         match output {
-            Ok(result) => Ok(ImplementChangeResult::new(result.stdout().trim().to_string())
-                .with_stderr(result.stderr().to_string())
-                .with_executor_kind("jcode-direct".to_string())),
+            Ok(result) => Ok(
+                ImplementChangeResult::new(result.stdout().trim().to_string())
+                    .with_stderr(result.stderr().to_string())
+                    .with_executor_kind("jcode-direct".to_string()),
+            ),
             Err(error) => Ok(build_failure_result(error)),
         }
     }
