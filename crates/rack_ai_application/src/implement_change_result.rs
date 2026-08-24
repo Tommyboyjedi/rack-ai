@@ -8,6 +8,7 @@ pub struct ToolCallRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementChangeResult {
     output: String,
+    stderr: Option<String>,
     tool_calls: Vec<ToolCallRecord>,
     protocol_error: Option<String>,
     worker_error: Option<String>,
@@ -18,6 +19,7 @@ impl ImplementChangeResult {
     pub fn new(output: String) -> Self {
         Self {
             output,
+            stderr: None,
             tool_calls: Vec::new(),
             protocol_error: None,
             worker_error: None,
@@ -27,6 +29,13 @@ impl ImplementChangeResult {
 
     pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallRecord>) -> Self {
         self.tool_calls = tool_calls;
+        self
+    }
+
+    pub fn with_stderr(mut self, stderr: String) -> Self {
+        if !stderr.trim().is_empty() {
+            self.stderr = Some(stderr);
+        }
         self
     }
 
@@ -49,6 +58,10 @@ impl ImplementChangeResult {
         self.output.as_str()
     }
 
+    pub fn stderr(&self) -> Option<&str> {
+        self.stderr.as_deref()
+    }
+
     pub fn tool_calls(&self) -> &[ToolCallRecord] {
         self.tool_calls.as_slice()
     }
@@ -66,7 +79,7 @@ impl ImplementChangeResult {
     }
 
     pub fn used_host_shell(&self) -> bool {
-        self.executor_kind == "host" || self.executor_kind == "jcode"
+        self.executor_kind == "host"
     }
 }
 

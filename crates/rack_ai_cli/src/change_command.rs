@@ -2,23 +2,18 @@ use std::fs;
 use std::path::PathBuf;
 
 use rack_ai_application::ChangeExecutionMode;
-use rack_ai_application::CoderRunRequest;
-use rack_ai_application::CoderWorkspaceContext;
 use rack_ai_application::ExecuteChange;
 use rack_ai_application::ExecuteChangeDependencies;
 use rack_ai_application::ExecuteChangeRequest;
 use rack_ai_application::RepositoryRegistry;
-use rack_ai_domain::AllowedPath;
-use rack_ai_domain::AllowedPaths;
-use rack_ai_infrastructure::DirectCoderWorker;
 use rack_ai_infrastructure::FileSystemChangeManifestRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
-use rack_ai_infrastructure::PodmanChangeImplementer;
+use rack_ai_infrastructure::JCodeChangeImplementer;
+use rack_ai_infrastructure::JCodeWorkerConfigResolver;
 use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
-use rack_ai_infrastructure::WorkspaceCoderToolRunner;
 
 pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
     let mut spec_path: Option<PathBuf> = None;
@@ -61,7 +56,8 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     } else {
         ChangeExecutionMode::ImplementAndVerify
     };
-    let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root));
+    let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root.clone()));
+    let runtime_resolver = JCodeWorkerConfigResolver::new(RegistryPaths::new(repo_root.clone()));
     let git = GitCommandWorktree;
     let manifests = FileSystemChangeManifestRepository::new(RepositoryPaths::new(state_root));
     let policy = registry.command_policy()?;
@@ -71,9 +67,14 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         None
     };
     let executor = executor_config.clone().map(PodmanWorkspaceExecutor::new);
-    let implementer = executor_config
-        .map(PodmanWorkspaceExecutor::new)
-        .map(PodmanChangeImplementer::new);
+    let default_worker = if mode.runs_implementer() {
+        Some(runtime_resolver.resolve_default_implementer()?)
+    } else {
+        None
+    };
+    let implementer = default_worker.map(|worker| {
+        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker))
+    });
     let service = ExecuteChange::new(ExecuteChangeDependencies {
         registry: &registry,
         command_policy: &policy,
@@ -105,27 +106,4 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         eprintln!("{error}");
     }
     Ok(if result.succeeded() { 0 } else { 1 })
-}
-
-pub fn run_coder_in_podman(
-    repo_root: PathBuf,
-    workdir: PathBuf,
-    prompt_text: &str,
-    max_turns: usize,
-    allowed_paths: Vec<String>,
-) -> Result<String, String> {
-    let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(repo_root));
-    let executor = PodmanWorkspaceExecutor::new(registry.executor_config()?);
-    let allowed = AllowedPaths::new(
-        allowed_paths
-            .into_iter()
-            .map(AllowedPath::new)
-            .collect::<Result<Vec<_>, _>>()?,
-    )?;
-    let runner =
-        WorkspaceCoderToolRunner::new(&executor, CoderWorkspaceContext::new(workdir, allowed));
-    DirectCoderWorker::local_default().execute_with_runner(
-        &CoderRunRequest::new(prompt_text.to_string(), max_turns)?,
-        &runner,
-    )
 }

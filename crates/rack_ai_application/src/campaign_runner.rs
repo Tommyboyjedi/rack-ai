@@ -44,6 +44,7 @@ use crate::ImplementationReviewer;
 use crate::ModelReviewRequest;
 use crate::ReadFileRequest;
 use crate::RecoveryAttemptSummary;
+use crate::RecoveryCommandFailure;
 use crate::RecoveryContext;
 use crate::RecoveryDecision;
 use crate::RecoveryDecisionKind;
@@ -51,10 +52,9 @@ use crate::RecoveryFailureKind;
 use crate::RecoveryReasoner;
 use crate::RecoveryReasoningRequest;
 use crate::RecoveryReasoningResult;
+use crate::RecoverySleeper;
 use crate::RecoveryToolAttempt;
 use crate::RecoveryWorkerAction;
-use crate::RecoveryCommandFailure;
-use crate::RecoverySleeper;
 use crate::RepositoryRegistry;
 use crate::ResolveGitShaRequest;
 use crate::ReviewInput;
@@ -233,10 +233,7 @@ impl<'a> CampaignRunner<'a> {
         self
     }
 
-    pub fn with_recovery_reasoner(
-        mut self,
-        recovery_reasoner: &'a dyn RecoveryReasoner,
-    ) -> Self {
+    pub fn with_recovery_reasoner(mut self, recovery_reasoner: &'a dyn RecoveryReasoner) -> Self {
         self.recovery_reasoner = Some(recovery_reasoner);
         self
     }
@@ -1029,52 +1026,53 @@ impl<'a> CampaignRunner<'a> {
                 )?;
                 return Ok(StepOutcome::Stopped);
             }
-            let (kind, worker_id, repair_of, fallback_of) = if last_review.is_none() && primary_left > 0 {
-                primary_left -= 1;
-                (
-                    AttemptKind::Primary,
-                    campaign.worker_policy.primary.clone(),
-                    None,
-                    None,
-                )
-            } else if prefer_fallback_next && fallback_left > 0 {
-                fallback_left -= 1;
-                prefer_fallback_next = false;
-                (
-                    AttemptKind::Fallback,
-                    campaign.worker_policy.fallback.clone(),
-                    None,
-                    Some(last_attempt),
-                )
-            } else if repair_left > 0 {
-                repair_left -= 1;
-                prefer_fallback_next = false;
-                (
-                    AttemptKind::Repair,
-                    campaign.worker_policy.primary.clone(),
-                    Some(last_attempt),
-                    None,
-                )
-            } else if fallback_left > 0 {
-                fallback_left -= 1;
-                prefer_fallback_next = false;
-                (
-                    AttemptKind::Fallback,
-                    campaign.worker_policy.fallback.clone(),
-                    None,
-                    Some(last_attempt),
-                )
-            } else {
-                self.block_in_place(
-                    state,
-                    last_review
-                        .as_ref()
-                        .and_then(|review| review.classification)
-                        .unwrap_or(FailureClassification::InadequateImplementation),
-                    format!("exhausted worker attempts for step {}", step.id),
-                )?;
-                return Ok(StepOutcome::Stopped);
-            };
+            let (kind, worker_id, repair_of, fallback_of) =
+                if last_review.is_none() && primary_left > 0 {
+                    primary_left -= 1;
+                    (
+                        AttemptKind::Primary,
+                        campaign.worker_policy.primary.clone(),
+                        None,
+                        None,
+                    )
+                } else if prefer_fallback_next && fallback_left > 0 {
+                    fallback_left -= 1;
+                    prefer_fallback_next = false;
+                    (
+                        AttemptKind::Fallback,
+                        campaign.worker_policy.fallback.clone(),
+                        None,
+                        Some(last_attempt),
+                    )
+                } else if repair_left > 0 {
+                    repair_left -= 1;
+                    prefer_fallback_next = false;
+                    (
+                        AttemptKind::Repair,
+                        campaign.worker_policy.primary.clone(),
+                        Some(last_attempt),
+                        None,
+                    )
+                } else if fallback_left > 0 {
+                    fallback_left -= 1;
+                    prefer_fallback_next = false;
+                    (
+                        AttemptKind::Fallback,
+                        campaign.worker_policy.fallback.clone(),
+                        None,
+                        Some(last_attempt),
+                    )
+                } else {
+                    self.block_in_place(
+                        state,
+                        last_review
+                            .as_ref()
+                            .and_then(|review| review.classification)
+                            .unwrap_or(FailureClassification::InadequateImplementation),
+                        format!("exhausted worker attempts for step {}", step.id),
+                    )?;
+                    return Ok(StepOutcome::Stopped);
+                };
             let attempt_number = total_attempts(state) + 1;
             last_attempt = attempt_number;
             let runtime = self.workers.runtime(&worker_id)?;
@@ -1131,12 +1129,9 @@ impl<'a> CampaignRunner<'a> {
             let implement_request =
                 ImplementChangeRequest::new(PathBuf::from(&state.worktree_path), task)
                     .with_policy(allowed, self.action_timeout_seconds(state, step))
+                    .with_network_disabled(step.limits.network == "disabled")
                     .with_max_turns(ChangeLayout::coder_max_turns())
-                    .with_worker(
-                        runtime.worker_id.clone(),
-                        runtime.endpoint.clone(),
-                        runtime.api_model_id.clone(),
-                    );
+                    .with_worker(runtime.implement_worker());
             let transport_recovery_started_at = self.clock.now_unix();
             let mut transport_recovery_attempts = 0usize;
             let implement_result = loop {
@@ -1450,7 +1445,9 @@ impl<'a> CampaignRunner<'a> {
                     used_host_shell: implement_result.used_host_shell(),
                 });
                 if pre_commit_review.disposition != CoordinatorReviewDisposition::Accepted {
-                    if let Some(stopped) = self.checkpoint(campaign, state, step, Some(attempt_number))? {
+                    if let Some(stopped) =
+                        self.checkpoint(campaign, state, step, Some(attempt_number))?
+                    {
                         return Ok(stopped_from(stopped));
                     }
                     self.persist_attempt(
@@ -1583,14 +1580,16 @@ impl<'a> CampaignRunner<'a> {
         let classification = review
             .classification
             .unwrap_or(FailureClassification::InadequateImplementation);
-        let fingerprint = self.failure_fingerprint(classification, evidence, commands, implement_result);
+        let fingerprint =
+            self.failure_fingerprint(classification, evidence, commands, implement_result);
         let repeated_failure_count = if last_failure_fingerprint == Some(fingerprint.as_str()) {
             last_repeated_failure_count + 1
         } else {
             0
         };
         let mut planned_review = review.clone();
-        let default_instruction = repair_instruction(step, &planned_review, evidence.diff_stat(), commands);
+        let default_instruction =
+            repair_instruction(step, &planned_review, evidence.diff_stat(), commands);
         if !should_diagnose_retryable_failure(classification, repeated_failure_count) {
             planned_review.repair_instruction = Some(default_instruction.clone());
             return Ok(RecoveryPlanningOutcome {
@@ -1678,26 +1677,31 @@ impl<'a> CampaignRunner<'a> {
                         RecoveryDecisionKind::Repair
                         | RecoveryDecisionKind::Replan
                         | RecoveryDecisionKind::RetryTransient => {
-                            let instruction = decision.next_instruction.clone().unwrap_or_else(|| {
-                                self.default_recovery_instruction(
-                                    step,
-                                    &planned_review,
-                                    evidence,
-                                    commands,
-                                    &decision,
-                                )
-                            });
+                            let instruction =
+                                decision.next_instruction.clone().unwrap_or_else(|| {
+                                    self.default_recovery_instruction(
+                                        step,
+                                        &planned_review,
+                                        evidence,
+                                        commands,
+                                        &decision,
+                                    )
+                                });
                             planned_review.repair_instruction = Some(instruction);
                         }
                         RecoveryDecisionKind::BlockInsufficientAuthority => {
-                            planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
-                            planned_review.classification = Some(FailureClassification::InsufficientAuthority);
+                            planned_review.disposition =
+                                CoordinatorReviewDisposition::RejectedTerminal;
+                            planned_review.classification =
+                                Some(FailureClassification::InsufficientAuthority);
                             planned_review.rationale = decision.rationale.clone();
                             planned_review.repair_instruction = None;
                         }
                         RecoveryDecisionKind::BlockTerminal => {
-                            planned_review.disposition = CoordinatorReviewDisposition::RejectedTerminal;
-                            planned_review.classification = Some(FailureClassification::RecoveryFailure);
+                            planned_review.disposition =
+                                CoordinatorReviewDisposition::RejectedTerminal;
+                            planned_review.classification =
+                                Some(FailureClassification::RecoveryFailure);
                             planned_review.rationale = decision.rationale.clone();
                             planned_review.repair_instruction = None;
                         }
@@ -2149,12 +2153,14 @@ impl<'a> CampaignRunner<'a> {
     ) -> String {
         let changed = source_paths(evidence.changed_paths()).join(",");
         let command = command_failure(commands)
-            .map(|failure| format!(
-                "{}:{}:{}",
-                failure.command,
-                failure.exit_code,
-                first_non_empty_line(&failure.stderr_excerpt)
-            ))
+            .map(|failure| {
+                format!(
+                    "{}:{}:{}",
+                    failure.command,
+                    failure.exit_code,
+                    first_non_empty_line(&failure.stderr_excerpt)
+                )
+            })
             .unwrap_or_else(|| "no-command-failure".to_string());
         let forbidden = tool_attempts_for_fingerprint(implement_result);
         format!(
@@ -3187,8 +3193,10 @@ fn bounded_chars(value: &str, max_chars: usize) -> String {
     }
     let mut output = trimmed.chars().take(max_chars).collect::<String>();
     if trimmed.chars().count() > max_chars {
-        output.push_str("
-[truncated]");
+        output.push_str(
+            "
+[truncated]",
+        );
     }
     output
 }

@@ -24,7 +24,6 @@ use rack_ai_domain::RunStateDraft;
 use rack_ai_domain::TaskId;
 use rack_ai_domain::TimeoutSeconds;
 use rack_ai_infrastructure::CliRackTaskExecutor;
-use rack_ai_infrastructure::DirectCoderWorker;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemExecutionQueueRepository;
 use rack_ai_infrastructure::FileSystemLeaseRepository;
@@ -35,12 +34,15 @@ use rack_ai_infrastructure::FileSystemTaskSpecRepository;
 use rack_ai_infrastructure::FileSystemWorkerCatalog;
 use rack_ai_infrastructure::HealthcheckService;
 use rack_ai_infrastructure::HealthcheckServiceDependencies;
+use rack_ai_infrastructure::JCodeProcessRunner;
+use rack_ai_infrastructure::JCodeWorkerConfigResolver;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
 
 mod campaign_command;
 mod change_command;
+mod sandbox_tcp_bridge;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -148,6 +150,9 @@ fn main() {
 fn execute() -> Result<i32, String> {
     let arguments = env::args().collect::<Vec<_>>();
     let command = arguments.get(1).ok_or("expected command")?;
+    if command == "__sandbox-tcp-bridge" {
+        return sandbox_tcp_bridge::run_from_args(&arguments[2..]);
+    }
     let roots = current_roots(&arguments)?;
     let paths = RepositoryPaths::new(roots.state_root.clone());
     if command == "submit" {
@@ -484,24 +489,25 @@ fn run_coder_worker(repo_root: PathBuf, arguments: &[String]) -> Result<i32, Str
 
     let workdir = PathBuf::from(cwd);
     fs::create_dir_all(&workdir).map_err(|error| error.to_string())?;
-    let worker = DirectCoderWorker::local_default();
-    let final_text = if let Some(name) = executor_name {
-        if name != "podman" {
-            return Err(format!("unsupported executor: {name}"));
-        }
-        if allowed_paths.is_empty() {
-            return Err("podman executor requires --allowed-path".to_string());
-        }
-        change_command::run_coder_in_podman(
-            repo_root,
-            workdir,
-            &prompt_text,
-            max_turns,
-            allowed_paths,
-        )?
-    } else {
-        worker.execute(&prompt_text, &workdir, max_turns)?
-    };
+    if executor_name.is_some() {
+        return Err("coder-worker no longer supports the bespoke podman tool loop".to_string());
+    }
+    if !allowed_paths.is_empty() {
+        return Err("coder-worker no longer accepts --allowed-path".to_string());
+    }
+    let runtime =
+        JCodeWorkerConfigResolver::new(RegistryPaths::new(repo_root)).resolve("local-coder")?;
+    let final_text = JCodeProcessRunner::run(
+        &runtime,
+        &prompt_text,
+        &workdir,
+        u32::try_from(max_turns.saturating_mul(60)).unwrap_or(600),
+        false,
+    )
+    .map_err(|error| error.message().to_string())?
+    .stdout()
+    .trim()
+    .to_string();
     println!("{final_text}");
     Ok(if final_text.trim() == "COMPLETE" {
         0

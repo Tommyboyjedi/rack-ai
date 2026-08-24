@@ -283,13 +283,14 @@ struct StaticWorkers;
 
 impl CampaignWorkerCatalog for StaticWorkers {
     fn runtime(&self, worker_id: &str) -> Result<CampaignWorkerRuntime, String> {
-        if worker_id == "local-coder-jcode" {
-            return Err("host-oriented JCode workers are rejected for campaigns".to_string());
-        }
         Ok(CampaignWorkerRuntime {
             worker_id: worker_id.to_string(),
             endpoint: format!("http://127.0.0.1/{worker_id}"),
             api_model_id: worker_id.to_string(),
+            entrypoint: "/tmp/fake-jcode".to_string(),
+            provider_profile: worker_id.to_string(),
+            tool_profile: None,
+            context_window: Some(16368),
         })
     }
 }
@@ -699,12 +700,14 @@ fn main() {
     fs::write(fx.repo.join("src/main.rs"), main).unwrap();
     fs::write(fx.repo.join("src/service.rs"), service_source).unwrap();
     let _ = fs::remove_file(fx.repo.join("src/lib.rs"));
-    assert!(Command::new("cargo")
-        .args(["generate-lockfile", "--offline"])
-        .current_dir(&fx.repo)
-        .status()
-        .unwrap()
-        .success());
+    assert!(
+        Command::new("cargo")
+            .args(["generate-lockfile", "--offline"])
+            .current_dir(&fx.repo)
+            .status()
+            .unwrap()
+            .success()
+    );
     git(&fx.repo, &["add", "."]).unwrap();
     git(&fx.repo, &["commit", "-m", "cargo fixture"]).unwrap();
     let sha = git(&fx.repo, &["rev-parse", "HEAD"]).unwrap();
@@ -754,7 +757,10 @@ fn decision(
         kind,
         failure_kind,
         rationale: "diagnosed by scripted recovery reasoner".to_string(),
-        evidence_refs: vec!["git-evidence.json".to_string(), "command-evidence.json".to_string()],
+        evidence_refs: vec![
+            "git-evidence.json".to_string(),
+            "command-evidence.json".to_string(),
+        ],
         constraint_conflict: kind == RecoveryDecisionKind::Replan,
         same_strategy_viable: kind == RecoveryDecisionKind::Repair,
         worker_action,
@@ -3506,7 +3512,6 @@ fn production_campaign_git_path_has_no_remote_operations() {
     assert!(!source.contains("\"push\""));
 }
 
-
 #[test]
 fn recovery_reasoner_repairs_same_strategy_after_local_defect() {
     let fx = cargo_fixture(compatibility_service_source());
@@ -3526,20 +3531,25 @@ impl AssessmentService {
 }
 ",
             ),
-            write_attempt("src/service.rs", r#"pub struct AssessmentService;
+            write_attempt(
+                "src/service.rs",
+                r#"pub struct AssessmentService;
 
 impl AssessmentService {
     pub fn open_case(&self) -> u32 {
         2
     }
 }
-"#),
+"#,
+            ),
         ],
     );
     let campaign = make_campaign(
         "repair-same-strategy",
         &fx.sha,
-        vec![compatibility_step("Fix AssessmentService without changing src/main.rs.")],
+        vec![compatibility_step(
+            "Fix AssessmentService without changing src/main.rs.",
+        )],
         default_policy(),
     );
     let reasoner = ScriptedRecoveryReasoner::new(vec![Ok(decision(
@@ -3556,7 +3566,10 @@ impl AssessmentService {
     let state = runner.run(&campaign.campaign_id).unwrap();
     assert_eq!(state.state, CampaignState::Completed);
     assert_eq!(state.steps[0].attempts.len(), 2);
-    assert_eq!(implementer.seen_workers(), vec!["local-coder", "local-coder"]);
+    assert_eq!(
+        implementer.seen_workers(),
+        vec!["local-coder", "local-coder"]
+    );
     assert!(implementer.seen_tasks()[1].contains("syntax error"));
     assert_eq!(reasoner.calls(), 1);
 }
@@ -3587,7 +3600,10 @@ impl AssessmentService {
 "#;
     let implementer = ScriptedChangeImplementer::new(
         &executor,
-        vec![write_attempt("src/service.rs", broken), write_attempt("src/service.rs", repaired)],
+        vec![
+            write_attempt("src/service.rs", broken),
+            write_attempt("src/service.rs", repaired),
+        ],
     );
     let task = "Extend AssessmentService, but preserve the existing CLI caller in src/main.rs and do not modify src/main.rs.";
     let campaign = make_campaign(
@@ -3600,7 +3616,9 @@ impl AssessmentService {
         RecoveryDecisionKind::Replan,
         RecoveryFailureKind::CompatibilityConstraint,
         RecoveryWorkerAction::SameWorker,
-        Some("Preserve the existing src/main.rs caller contract. Revise only src/service.rs inside allowed_paths."),
+        Some(
+            "Preserve the existing src/main.rs caller contract. Revise only src/service.rs inside allowed_paths.",
+        ),
     ))]);
     let reviewer = AcceptingReviewer;
     let runner = make_runner(&fx, &campaign, &implementer, &executor, &Healthy, 1_000)
@@ -3610,7 +3628,9 @@ impl AssessmentService {
     let state = runner.run(&campaign.campaign_id).unwrap();
     assert_eq!(state.state, CampaignState::Completed);
     assert_eq!(state.steps[0].attempts.len(), 2);
-    assert_eq!(fs::read_to_string(Path::new(&state.worktree_path).join("src/main.rs")).unwrap(), r#"mod service;
+    assert_eq!(
+        fs::read_to_string(Path::new(&state.worktree_path).join("src/main.rs")).unwrap(),
+        r#"mod service;
 
 use service::AssessmentService;
 
@@ -3618,8 +3638,14 @@ fn main() {
     let service = AssessmentService;
     println!("{}", service.open_case());
 }
-"#);
-    let recovery = fs::read_to_string(runner.attempt_dir(&campaign.campaign_id, "service", 1).join("recovery-decision.json")).unwrap();
+"#
+    );
+    let recovery = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "service", 1)
+            .join("recovery-decision.json"),
+    )
+    .unwrap();
     assert!(recovery.contains(r#""kind": "replan""#));
     assert!(implementer.seen_tasks()[1].contains("src/main.rs"));
     let request = &reasoner.requests()[0];
@@ -3638,7 +3664,8 @@ impl AssessmentService {
     }
 }
 "#;
-    let implementer = ScriptedChangeImplementer::new(&executor, vec![write_attempt("src/service.rs", broken)]);
+    let implementer =
+        ScriptedChangeImplementer::new(&executor, vec![write_attempt("src/service.rs", broken)]);
     let campaign = make_campaign(
         "insufficient-authority",
         &fx.sha,
@@ -3657,7 +3684,10 @@ impl AssessmentService {
     let state = runner.run(&campaign.campaign_id).unwrap();
     assert_eq!(state.state, CampaignState::Blocked);
     assert_eq!(state.steps[0].attempts.len(), 1);
-    assert_eq!(state.steps[0].attempts[0].classification, Some(FailureClassification::InsufficientAuthority));
+    assert_eq!(
+        state.steps[0].attempts[0].classification,
+        Some(FailureClassification::InsufficientAuthority)
+    );
 }
 
 #[test]
@@ -3695,7 +3725,9 @@ impl AssessmentService {
     let campaign = make_campaign(
         "stagnation-fallback",
         &fx.sha,
-        vec![compatibility_step("Extend AssessmentService without touching src/main.rs.")],
+        vec![compatibility_step(
+            "Extend AssessmentService without touching src/main.rs.",
+        )],
         default_policy(),
     );
     let reasoner = ScriptedRecoveryReasoner::new(vec![
@@ -3719,9 +3751,17 @@ impl AssessmentService {
     runner.start(&campaign).unwrap();
     let state = runner.run(&campaign.campaign_id).unwrap();
     assert_eq!(state.state, CampaignState::Completed);
-    assert_eq!(implementer.seen_workers(), vec!["local-coder", "local-coder", "local-primary"]);
+    assert_eq!(
+        implementer.seen_workers(),
+        vec!["local-coder", "local-coder", "local-primary"]
+    );
     assert!(implementer.seen_tasks()[2].contains("Replan the implementation"));
-    let recovery = fs::read_to_string(runner.attempt_dir(&campaign.campaign_id, "service", 2).join("recovery-decision.json")).unwrap();
+    let recovery = fs::read_to_string(
+        runner
+            .attempt_dir(&campaign.campaign_id, "service", 2)
+            .join("recovery-decision.json"),
+    )
+    .unwrap();
     assert!(recovery.contains(r#""repeated_failure_count": 1"#));
     assert!(recovery.contains(r#""kind": "replan""#));
 }

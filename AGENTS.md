@@ -18,8 +18,10 @@ For rationale, architecture detail, safety invariants, and verification guidance
 
 ## Safety Boundaries
 
-- External-repository writes must go through the rootless Podman workspace boundary.
-- Workers must not mutate external repositories through host shell, direct host filesystem writes, JCode shell execution, or other bypass paths.
+- External-repository work must stay inside a Rack AI managed isolated Git worktree.
+- Qualified JCode direct execution is the production model-facing coding harness for external repositories.
+- Deterministic acceptance and build/test execution remain rootless Podman bounded.
+- Workers must not mutate the source/default repository, bypass Rack AI worktree management, or bypass post-run Git/path/acceptance review.
 - The same rule applies to `local-primary` when acting as fallback implementer.
 - Fail closed on safety, timeout, review, path, lease, state-integrity, protocol, or evidence failures.
 - All model, Podman, command, review, and retry operations must be bounded.
