@@ -17,5 +17,19 @@ The target repository is the workload; Rack AI remains the control plane and doe
 
 `docs/autonomous-campaign-runner-contract.md` is the implementation contract for the next feature: a bounded, restartable, operator-controlled, local-only campaign runner for unattended external-repository work.
 
-
 `docs/rack-operations.md` is the headless operating runbook for unattended supervision, restart, retention, and safe upgrade behavior.
+
+PR14 harness qualification is recorded in:
+
+- `docs/pr14-rust-harness-qualification-contract.md` — final qualification/routing contract;
+- `docs/pr14-harness-qualification-report.md` — authoritative live-rack evidence and final routing decision;
+- `docs/pr14-local-coder-qwen35-qualification.md` — detailed Qwen3.5/RTX 2060 local-coder addendum.
+
+Current PR14 production direction:
+
+```text
+local-primary -> JCode
+local-coder   -> JCode minimal
+Abacus        -> not qualified
+JCode swarm   -> deferred
+```
