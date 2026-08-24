@@ -26,24 +26,6 @@ fixture="$evidence_root/fixture"
 rack="$evidence_root/rack"
 mkdir -p "$fixture/src" "$rack/bin" "$rack/config" "$rack/state/campaigns"
 git -C "$rack" init -b main >/dev/null
-python3 - <<'PY' "$HOME/.jcode/config.toml"
-import sys, tomllib
-from pathlib import Path
-config = tomllib.loads(Path(sys.argv[1]).read_text())
-providers = config.get("providers", {})
-expected = {
-    "local-primary": ("http://127.0.0.1:8017/v1", "local-primary"),
-    "local-coder": ("http://127.0.0.1:8018/v1", "local-coder"),
-}
-for name, (base_url, model_id) in expected.items():
-    provider = providers.get(name)
-    if provider is None:
-        raise SystemExit(f"missing JCode provider profile: {name}")
-    if provider.get("base_url") != base_url:
-        raise SystemExit(f"provider {name} base_url mismatch: {provider.get('base_url')}")
-    if provider.get("default_model") != model_id:
-        raise SystemExit(f"provider {name} default_model mismatch: {provider.get('default_model')}")
-PY
 printf '%s\n' '[package]' 'name = "rack_live_fixture"' 'version = "0.1.0"' 'edition = "2021"' '' '[lib]' 'path = "src/lib.rs"' > "$fixture/Cargo.toml"
 printf 'pub fn seed() -> u8 { 1 }\n' > "$fixture/src/lib.rs"
 (cd "$fixture" && cargo generate-lockfile >/dev/null)
@@ -56,22 +38,195 @@ base_sha="$(git -C "$fixture" rev-parse HEAD)"
 cp "$repo_root/config/workers.json" "$rack/config/workers.json"
 cp "$repo_root/config/models.json" "$rack/config/models.json"
 cp "$repo_root/config/operations.json" "$rack/config/operations.json"
+
 cat > "$rack/bin/jcode-log-local-coder" <<'WRAP'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$@" > "__LOG_PATH__"
+python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
+import json
+import socket
+import sys
+import tomllib
+import urllib.request
+from pathlib import Path
+
+role, probe_path, home, *argv = sys.argv[1:]
+config_path = Path(home) / ".jcode" / "config.toml"
+config = tomllib.loads(config_path.read_text())
+provider_index = argv.index("--provider-profile") + 1
+model_index = argv.index("--model") + 1
+provider_name = argv[provider_index]
+model_id = argv[model_index]
+tool_profile = None
+if "--tool-profile" in argv:
+    tool_profile = argv[argv.index("--tool-profile") + 1]
+provider = config["providers"][provider_name]
+context_window = None
+for model in provider.get("models", []):
+    if model.get("id") == model_id:
+        context_window = model.get("context_window")
+        break
+expected = {
+    "local-coder": {
+        "base_url": "http://127.0.0.1:8018/v1",
+        "model": "local-coder",
+        "context_window": 16368,
+        "tool_profile": "minimal",
+    },
+    "local-primary": {
+        "base_url": "http://127.0.0.1:8017/v1",
+        "model": "local-primary",
+        "context_window": None,
+        "tool_profile": None,
+    },
+}[role]
+if provider_name != role:
+    raise SystemExit(f"provider profile mismatch: {provider_name}")
+if provider.get("base_url") != expected["base_url"]:
+    raise SystemExit(f"base_url mismatch: {provider.get('base_url')}")
+if model_id != expected["model"]:
+    raise SystemExit(f"model mismatch: {model_id}")
+if context_window != expected["context_window"]:
+    raise SystemExit(f"context_window mismatch: {context_window}")
+if tool_profile != expected["tool_profile"]:
+    raise SystemExit(f"tool profile mismatch: {tool_profile}")
+loopback_ok = False
+loopback_error = None
+try:
+    with urllib.request.urlopen(f"{provider['base_url']}/models", timeout=3) as response:
+        response.read(1)
+    loopback_ok = True
+except Exception as error:
+    loopback_error = str(error)
+if not loopback_ok:
+    raise SystemExit(f"loopback endpoint unavailable: {loopback_error}")
+external_blocked = False
+external_error = None
+external_errno = None
+try:
+    socket.create_connection(("8.8.8.8", 53), timeout=3).close()
+except OSError as error:
+    external_blocked = True
+    external_errno = error.errno
+    external_error = str(error)
+if not external_blocked:
+    raise SystemExit("external network unexpectedly succeeded")
+probe = {
+    "role": role,
+    "home": home,
+    "config_path": str(config_path),
+    "provider_profile": provider_name,
+    "base_url": provider.get("base_url"),
+    "model": model_id,
+    "context_window": context_window,
+    "tool_profile": tool_profile,
+    "loopback_ok": loopback_ok,
+    "external_blocked": external_blocked,
+    "external_errno": external_errno,
+    "external_error": external_error,
+}
+Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
+PY
 exec /home/tomp/.local/bin/jcode "$@"
 WRAP
 cat > "$rack/bin/jcode-log-local-primary" <<'WRAP'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$@" > "__LOG_PATH__"
+python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
+import json
+import socket
+import sys
+import tomllib
+import urllib.request
+from pathlib import Path
+
+role, probe_path, home, *argv = sys.argv[1:]
+config_path = Path(home) / ".jcode" / "config.toml"
+config = tomllib.loads(config_path.read_text())
+provider_index = argv.index("--provider-profile") + 1
+model_index = argv.index("--model") + 1
+provider_name = argv[provider_index]
+model_id = argv[model_index]
+tool_profile = None
+if "--tool-profile" in argv:
+    tool_profile = argv[argv.index("--tool-profile") + 1]
+provider = config["providers"][provider_name]
+context_window = None
+for model in provider.get("models", []):
+    if model.get("id") == model_id:
+        context_window = model.get("context_window")
+        break
+expected = {
+    "local-coder": {
+        "base_url": "http://127.0.0.1:8018/v1",
+        "model": "local-coder",
+        "context_window": 16368,
+        "tool_profile": "minimal",
+    },
+    "local-primary": {
+        "base_url": "http://127.0.0.1:8017/v1",
+        "model": "local-primary",
+        "context_window": None,
+        "tool_profile": None,
+    },
+}[role]
+if provider_name != role:
+    raise SystemExit(f"provider profile mismatch: {provider_name}")
+if provider.get("base_url") != expected["base_url"]:
+    raise SystemExit(f"base_url mismatch: {provider.get('base_url')}")
+if model_id != expected["model"]:
+    raise SystemExit(f"model mismatch: {model_id}")
+if context_window != expected["context_window"]:
+    raise SystemExit(f"context_window mismatch: {context_window}")
+if tool_profile != expected["tool_profile"]:
+    raise SystemExit(f"tool profile mismatch: {tool_profile}")
+loopback_ok = False
+loopback_error = None
+try:
+    with urllib.request.urlopen(f"{provider['base_url']}/models", timeout=3) as response:
+        response.read(1)
+    loopback_ok = True
+except Exception as error:
+    loopback_error = str(error)
+if not loopback_ok:
+    raise SystemExit(f"loopback endpoint unavailable: {loopback_error}")
+external_blocked = False
+external_error = None
+external_errno = None
+try:
+    socket.create_connection(("8.8.8.8", 53), timeout=3).close()
+except OSError as error:
+    external_blocked = True
+    external_errno = error.errno
+    external_error = str(error)
+if not external_blocked:
+    raise SystemExit("external network unexpectedly succeeded")
+probe = {
+    "role": role,
+    "home": home,
+    "config_path": str(config_path),
+    "provider_profile": provider_name,
+    "base_url": provider.get("base_url"),
+    "model": model_id,
+    "context_window": context_window,
+    "tool_profile": tool_profile,
+    "loopback_ok": loopback_ok,
+    "external_blocked": external_blocked,
+    "external_errno": external_errno,
+    "external_error": external_error,
+}
+Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
+PY
 exec /home/tomp/.local/bin/jcode "$@"
 WRAP
 coder_log="$evidence_root/local-coder-jcode-args.log"
 primary_log="$evidence_root/local-primary-jcode-args.log"
-sed -i "s|__LOG_PATH__|$coder_log|g" "$rack/bin/jcode-log-local-coder"
-sed -i "s|__LOG_PATH__|$primary_log|g" "$rack/bin/jcode-log-local-primary"
+coder_probe="$evidence_root/local-coder-probe.json"
+primary_probe="$evidence_root/local-primary-probe.json"
+sed -i "s|__LOG_PATH__|$coder_log|g; s|__PROBE_PATH__|$coder_probe|g; s|__ROLE__|local-coder|g" "$rack/bin/jcode-log-local-coder"
+sed -i "s|__LOG_PATH__|$primary_log|g; s|__PROBE_PATH__|$primary_probe|g; s|__ROLE__|local-primary|g" "$rack/bin/jcode-log-local-primary"
 chmod +x "$rack/bin/jcode-log-local-coder" "$rack/bin/jcode-log-local-primary"
 python3 - <<'PY' "$rack/config/workers.json" "$rack/bin/jcode-log-local-primary" "$rack/bin/jcode-log-local-coder"
 import json, sys
@@ -141,5 +296,38 @@ if grep -Fq -- '--tool-profile' "$primary_log"; then
   echo 'FAIL: local-primary should not use a tool profile override' >&2
   exit 1
 fi
+python3 - <<'PY' "$coder_probe" "$primary_probe"
+import json
+import sys
+from pathlib import Path
+
+coder = json.loads(Path(sys.argv[1]).read_text())
+primary = json.loads(Path(sys.argv[2]).read_text())
+for probe, role, base_url, model, context, tool_profile in [
+    (coder, "local-coder", "http://127.0.0.1:8018/v1", "local-coder", 16368, "minimal"),
+    (primary, "local-primary", "http://127.0.0.1:8017/v1", "local-primary", None, None),
+]:
+    if probe["role"] != role:
+        raise SystemExit(f"role mismatch: {probe}")
+    if "rack-ai-jcode-run-" not in probe["home"]:
+        raise SystemExit(f"unexpected HOME: {probe['home']}")
+    if not probe["config_path"].endswith("/.jcode/config.toml"):
+        raise SystemExit(f"unexpected config path: {probe['config_path']}")
+    if probe["provider_profile"] != role:
+        raise SystemExit(f"provider mismatch: {probe}")
+    if probe["base_url"] != base_url:
+        raise SystemExit(f"base_url mismatch: {probe}")
+    if probe["model"] != model:
+        raise SystemExit(f"model mismatch: {probe}")
+    if probe["context_window"] != context:
+        raise SystemExit(f"context mismatch: {probe}")
+    if probe["tool_profile"] != tool_profile:
+        raise SystemExit(f"tool profile mismatch: {probe}")
+    if probe["loopback_ok"] is not True:
+        raise SystemExit(f"loopback not reachable: {probe}")
+    if probe["external_blocked"] is not True:
+        raise SystemExit(f"external network was not blocked: {probe}")
+PY
+
 echo "rack_campaign_live_model_smoke: ok"
 echo "Evidence retained at: $evidence_root"

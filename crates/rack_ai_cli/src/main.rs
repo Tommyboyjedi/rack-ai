@@ -498,7 +498,9 @@ fn run_coder_worker(repo_root: PathBuf, arguments: &[String]) -> Result<i32, Str
         &prompt_text,
         &workdir,
         u32::try_from(max_turns.saturating_mul(60)).unwrap_or(600),
-    )?
+        false,
+    )
+    .map_err(|error| error.message().to_string())?
     .stdout()
     .trim()
     .to_string();

@@ -285,6 +285,7 @@ pub struct CampaignWorkerRuntime {
     pub entrypoint: String,
     pub provider_profile: String,
     pub tool_profile: Option<String>,
+    pub context_window: Option<u32>,
 }
 
 impl CampaignWorkerRuntime {
@@ -297,6 +298,7 @@ impl CampaignWorkerRuntime {
             self.endpoint.clone(),
         )
         .with_tool_profile(self.tool_profile.clone())
+        .with_context_window(self.context_window)
     }
 }
 

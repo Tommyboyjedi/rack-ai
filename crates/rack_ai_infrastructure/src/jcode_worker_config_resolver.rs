@@ -35,14 +35,24 @@ impl JCodeWorkerConfigResolver {
             .into_iter()
             .find(|item| item.worker_id == worker_id && item.status == "active")
             .ok_or_else(|| format!("no active model bound to worker: {worker_id}"))?;
+        let api_model_id = model
+            .api_model_id
+            .ok_or_else(|| format!("worker missing api_model_id binding: {worker_id}"))?;
+        if worker.tool_profile.as_deref() == Some("minimal") && model.context_window.is_none() {
+            return Err(format!(
+                "worker {} requires context_window for minimal JCode execution",
+                worker_id
+            ));
+        }
         Ok(ImplementWorkerRuntime::new(
             worker.id,
             worker.entrypoint,
             provider_profile,
-            model.api_model_id.unwrap_or_else(|| worker_id.to_string()),
+            api_model_id,
             model.endpoint,
         )
-        .with_tool_profile(worker.tool_profile))
+        .with_tool_profile(worker.tool_profile)
+        .with_context_window(model.context_window))
     }
 
     pub fn resolve_default_implementer(&self) -> Result<ImplementWorkerRuntime, String> {
@@ -65,9 +75,14 @@ mod tests {
     use crate::RegistryPaths;
 
     #[test]
-    fn resolves_jcode_runtime_with_profile_model_and_endpoint() {
+    fn resolves_jcode_runtime_with_profile_model_endpoint_and_context() {
         let root = temp_root();
-        write_registry(&root);
+        write_registry(
+            &root,
+            Some("local-coder"),
+            Some(16368),
+            "http://127.0.0.1:8018/v1",
+        );
         let resolver = JCodeWorkerConfigResolver::new(RegistryPaths::new(root));
 
         let runtime = resolver.resolve("local-coder").unwrap();
@@ -78,12 +93,18 @@ mod tests {
         assert_eq!(runtime.api_model_id(), "local-coder");
         assert_eq!(runtime.endpoint(), "http://127.0.0.1:8018/v1");
         assert_eq!(runtime.tool_profile(), Some("minimal"));
+        assert_eq!(runtime.context_window(), Some(16368));
     }
 
     #[test]
     fn resolves_default_implementer_from_registry_role() {
         let root = temp_root();
-        write_registry(&root);
+        write_registry(
+            &root,
+            Some("local-coder"),
+            Some(16368),
+            "http://127.0.0.1:8018/v1",
+        );
         let resolver = JCodeWorkerConfigResolver::new(RegistryPaths::new(root));
 
         let runtime = resolver.resolve_default_implementer().unwrap();
@@ -92,7 +113,34 @@ mod tests {
         assert_eq!(runtime.provider_profile(), "local-coder");
     }
 
-    fn write_registry(root: &PathBuf) {
+    #[test]
+    fn rejects_missing_api_model_binding() {
+        let root = temp_root();
+        write_registry(&root, None, Some(16368), "http://127.0.0.1:8018/v1");
+        let resolver = JCodeWorkerConfigResolver::new(RegistryPaths::new(root));
+
+        let error = resolver.resolve("local-coder").unwrap_err();
+
+        assert!(error.contains("api_model_id"));
+    }
+
+    #[test]
+    fn rejects_minimal_worker_without_context_window() {
+        let root = temp_root();
+        write_registry(&root, Some("local-coder"), None, "http://127.0.0.1:8018/v1");
+        let resolver = JCodeWorkerConfigResolver::new(RegistryPaths::new(root));
+
+        let error = resolver.resolve("local-coder").unwrap_err();
+
+        assert!(error.contains("context_window"));
+    }
+
+    fn write_registry(
+        root: &PathBuf,
+        api_model_id: Option<&str>,
+        context_window: Option<u32>,
+        endpoint: &str,
+    ) {
         fs::create_dir_all(root.join("config")).unwrap();
         fs::write(
             root.join("config/workers.json"),
@@ -125,11 +173,18 @@ mod tests {
 }"#,
         )
         .unwrap();
+        let api_model_json = api_model_id
+            .map(|value| format!("\n      \"api_model_id\": \"{value}\","))
+            .unwrap_or_default();
+        let context_json = context_window
+            .map(|value| format!("\n      \"context_window\": {value},"))
+            .unwrap_or_default();
         fs::write(
             root.join("config/models.json"),
-            r#"{
+            format!(
+                r#"{{
   "models": [
-    {
+    {{
       "id": "gemma4-12b-local-primary",
       "label": "cyankiwi/gemma-4-12B-it-AWQ-INT4",
       "role": "planner_verifier",
@@ -139,20 +194,23 @@ mod tests {
       "endpoint": "http://127.0.0.1:8017/v1",
       "port": 8017,
       "status": "active"
-    },
-    {
+    }},
+    {{
       "id": "eqaq-v2-local-coder",
       "label": "NotaMG/eqaq-v2",
       "role": "implementer",
       "backend": "vllm",
-      "worker_id": "local-coder",
-      "api_model_id": "local-coder",
-      "endpoint": "http://127.0.0.1:8018/v1",
+      "worker_id": "local-coder",{api_model_json}{context_json}
+      "endpoint": "{endpoint}",
       "port": 8018,
       "status": "active"
-    }
+    }}
   ]
-}"#,
+}}"#,
+                api_model_json = api_model_json,
+                context_json = context_json,
+                endpoint = endpoint,
+            ),
         )
         .unwrap();
     }

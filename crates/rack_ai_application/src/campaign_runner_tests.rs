@@ -290,6 +290,7 @@ impl CampaignWorkerCatalog for StaticWorkers {
             entrypoint: "/tmp/fake-jcode".to_string(),
             provider_profile: worker_id.to_string(),
             tool_profile: None,
+            context_window: Some(16368),
         })
     }
 }

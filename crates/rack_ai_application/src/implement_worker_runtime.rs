@@ -6,6 +6,7 @@ pub struct ImplementWorkerRuntime {
     api_model_id: String,
     endpoint: String,
     tool_profile: Option<String>,
+    context_window: Option<u32>,
 }
 
 impl ImplementWorkerRuntime {
@@ -23,11 +24,17 @@ impl ImplementWorkerRuntime {
             api_model_id,
             endpoint,
             tool_profile: None,
+            context_window: None,
         }
     }
 
     pub fn with_tool_profile(mut self, tool_profile: Option<String>) -> Self {
         self.tool_profile = tool_profile.filter(|value| !value.trim().is_empty());
+        self
+    }
+
+    pub fn with_context_window(mut self, context_window: Option<u32>) -> Self {
+        self.context_window = context_window;
         self
     }
 
@@ -53,5 +60,9 @@ impl ImplementWorkerRuntime {
 
     pub fn tool_profile(&self) -> Option<&str> {
         self.tool_profile.as_deref()
+    }
+
+    pub fn context_window(&self) -> Option<u32> {
+        self.context_window
     }
 }

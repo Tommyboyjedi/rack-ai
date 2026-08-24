@@ -61,12 +61,15 @@ impl CampaignWorkerCatalog for RegistryWorkers {
         Ok(CampaignWorkerRuntime {
             worker_id: worker_id.to_string(),
             endpoint: model.endpoint,
-            api_model_id: model.api_model_id.unwrap_or_else(|| worker_id.to_string()),
+            api_model_id: model
+                .api_model_id
+                .ok_or_else(|| format!("worker missing api_model_id binding: {worker_id}"))?,
             entrypoint: worker.entrypoint,
             provider_profile: worker
                 .provider_profile
                 .ok_or_else(|| format!("worker missing provider_profile: {worker_id}"))?,
             tool_profile: worker.tool_profile,
+            context_window: model.context_window,
         })
     }
 }
