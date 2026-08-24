@@ -1131,6 +1131,7 @@ impl<'a> CampaignRunner<'a> {
             let implement_request =
                 ImplementChangeRequest::new(PathBuf::from(&state.worktree_path), task)
                     .with_policy(allowed, self.action_timeout_seconds(state, step))
+                    .with_network_disabled(step.limits.network == "disabled")
                     .with_max_turns(ChangeLayout::coder_max_turns())
                     .with_worker(runtime.implement_worker());
             let transport_recovery_started_at = self.clock.now_unix();

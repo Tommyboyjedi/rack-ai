@@ -406,6 +406,7 @@ dependencies = [
 name = "rack_ai_infrastructure"
 version = "0.1.0"
 dependencies = [
+ "libc",
  "rack_ai_application",
  "rack_ai_domain",
  "serde",

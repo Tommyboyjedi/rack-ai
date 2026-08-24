@@ -165,6 +165,10 @@ impl<'a> ExecuteChange<'a> {
                 request.allowed_paths().clone(),
                 request.limits().timeout_seconds().value(),
             )
+            .with_network_disabled(matches!(
+                request.limits().network(),
+                rack_ai_domain::NetworkPolicy::Disabled
+            ))
             .with_max_turns(ChangeLayout::coder_max_turns()),
         ) {
             Ok(result) => Ok(packet.with_implementer_output(result.output().to_string())),

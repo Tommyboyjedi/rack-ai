@@ -46,6 +46,7 @@ printf '%s\n' "$@" > "__LOG_PATH__"
 python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
 import json
 import socket
+import subprocess
 import sys
 import tomllib
 import urllib.request
@@ -112,6 +113,18 @@ except OSError as error:
     external_error = str(error)
 if not external_blocked:
     raise SystemExit("external network unexpectedly succeeded")
+external_blocked_without_preload = False
+external_error_without_preload = None
+external_errno_without_preload = None
+code = "import socket\ntry:\n    socket.create_connection((\"8.8.8.8\", 53), timeout=3).close()\nexcept OSError as error:\n    import json, sys\n    print(json.dumps({\"errno\": error.errno, \"message\": str(error)}))\n    raise SystemExit(0)\nraise SystemExit(92)"
+result = subprocess.run(["env", "-u", "LD_PRELOAD", "python3", "-c", code], capture_output=True, text=True)
+if result.returncode == 0:
+    payload = json.loads(result.stdout.strip())
+    external_blocked_without_preload = True
+    external_errno_without_preload = payload.get("errno")
+    external_error_without_preload = payload.get("message")
+if not external_blocked_without_preload:
+    raise SystemExit("external network unexpectedly succeeded after clearing LD_PRELOAD")
 probe = {
     "role": role,
     "home": home,
@@ -125,6 +138,9 @@ probe = {
     "external_blocked": external_blocked,
     "external_errno": external_errno,
     "external_error": external_error,
+    "external_blocked_without_preload": external_blocked_without_preload,
+    "external_errno_without_preload": external_errno_without_preload,
+    "external_error_without_preload": external_error_without_preload,
 }
 Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
 PY
@@ -137,6 +153,7 @@ printf '%s\n' "$@" > "__LOG_PATH__"
 python3 - <<'PY' "__ROLE__" "__PROBE_PATH__" "$HOME" "$@"
 import json
 import socket
+import subprocess
 import sys
 import tomllib
 import urllib.request
@@ -203,6 +220,18 @@ except OSError as error:
     external_error = str(error)
 if not external_blocked:
     raise SystemExit("external network unexpectedly succeeded")
+external_blocked_without_preload = False
+external_error_without_preload = None
+external_errno_without_preload = None
+code = "import socket\ntry:\n    socket.create_connection((\"8.8.8.8\", 53), timeout=3).close()\nexcept OSError as error:\n    import json, sys\n    print(json.dumps({\"errno\": error.errno, \"message\": str(error)}))\n    raise SystemExit(0)\nraise SystemExit(92)"
+result = subprocess.run(["env", "-u", "LD_PRELOAD", "python3", "-c", code], capture_output=True, text=True)
+if result.returncode == 0:
+    payload = json.loads(result.stdout.strip())
+    external_blocked_without_preload = True
+    external_errno_without_preload = payload.get("errno")
+    external_error_without_preload = payload.get("message")
+if not external_blocked_without_preload:
+    raise SystemExit("external network unexpectedly succeeded after clearing LD_PRELOAD")
 probe = {
     "role": role,
     "home": home,
@@ -216,6 +245,9 @@ probe = {
     "external_blocked": external_blocked,
     "external_errno": external_errno,
     "external_error": external_error,
+    "external_blocked_without_preload": external_blocked_without_preload,
+    "external_errno_without_preload": external_errno_without_preload,
+    "external_error_without_preload": external_error_without_preload,
 }
 Path(probe_path).write_text(json.dumps(probe, indent=2) + "\n")
 PY
@@ -327,6 +359,8 @@ for probe, role, base_url, model, context, tool_profile in [
         raise SystemExit(f"loopback not reachable: {probe}")
     if probe["external_blocked"] is not True:
         raise SystemExit(f"external network was not blocked: {probe}")
+    if probe["external_blocked_without_preload"] is not True:
+        raise SystemExit(f"external network was not blocked after clearing LD_PRELOAD: {probe}")
 PY
 
 echo "rack_campaign_live_model_smoke: ok"

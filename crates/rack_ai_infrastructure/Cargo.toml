@@ -11,3 +11,4 @@ rack_ai_domain = { path = "../rack_ai_domain" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "3", features = ["json"] }
+libc = "0.2"

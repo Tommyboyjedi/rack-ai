@@ -13,6 +13,7 @@ pub struct ImplementChangeRequest {
     allowed_paths: Option<AllowedPaths>,
     timeout_seconds: u32,
     max_turns: usize,
+    network_disabled: bool,
     worker: Option<ImplementWorkerRuntime>,
 }
 
@@ -24,6 +25,7 @@ impl ImplementChangeRequest {
             allowed_paths: None,
             timeout_seconds: 900,
             max_turns: ChangeLayout::coder_max_turns(),
+            network_disabled: false,
             worker: None,
         }
     }
@@ -31,6 +33,11 @@ impl ImplementChangeRequest {
     pub fn with_policy(mut self, allowed_paths: AllowedPaths, timeout_seconds: u32) -> Self {
         self.allowed_paths = Some(allowed_paths);
         self.timeout_seconds = timeout_seconds;
+        self
+    }
+
+    pub fn with_network_disabled(mut self, network_disabled: bool) -> Self {
+        self.network_disabled = network_disabled;
         self
     }
 
@@ -66,6 +73,10 @@ impl ImplementChangeRequest {
         self.max_turns
     }
 
+    pub fn network_disabled(&self) -> bool {
+        self.network_disabled
+    }
+
     pub fn worker_id(&self) -> Option<&str> {
         self.worker.as_ref().map(ImplementWorkerRuntime::worker_id)
     }
@@ -92,15 +103,17 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn stores_task_and_timeout() {
+    fn stores_task_timeout_and_network_policy() {
         let request =
             ImplementChangeRequest::new(PathBuf::from("/tmp/repo"), "Add a feature.".to_string())
                 .with_policy(
                     AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap(),
                     120,
-                );
+                )
+                .with_network_disabled(true);
         assert_eq!(request.timeout_seconds(), 120);
         assert_eq!(request.task(), "Add a feature.");
         assert_eq!(request.max_turns(), ChangeLayout::coder_max_turns());
+        assert!(request.network_disabled());
     }
 }

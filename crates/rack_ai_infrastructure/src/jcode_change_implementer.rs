@@ -42,7 +42,7 @@ impl ChangeImplementer for JCodeChangeImplementer {
             request.task(),
             request.worktree_path(),
             request.timeout_seconds(),
-            true,
+            request.network_disabled(),
         );
         match output {
             Ok(result) => Ok(ImplementChangeResult::new(result.stdout().trim().to_string())
