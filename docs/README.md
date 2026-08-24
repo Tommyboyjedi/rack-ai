@@ -33,3 +33,8 @@ local-coder   -> JCode minimal
 Abacus        -> not qualified
 JCode swarm   -> deferred
 ```
+
+The older bespoke native coder/tool loop has been removed from production
+code. Direct rack wrappers still exist where useful, but they route to the
+qualified JCode harness rather than a separate model-facing implementation
+loop.

@@ -781,29 +781,31 @@ PY
 
     #[test]
     fn network_policy_disabled_and_enabled_paths_are_distinguishable() {
-        let root = temp_root();
-        let workdir = root.join("worktree");
-        fs::create_dir_all(&workdir).unwrap();
+        let enabled_root = temp_root();
+        let enabled_workdir = enabled_root.join("worktree");
+        fs::create_dir_all(&enabled_workdir).unwrap();
+        let disabled_root = temp_root();
+        let disabled_workdir = disabled_root.join("worktree");
+        fs::create_dir_all(&disabled_workdir).unwrap();
         let selected = TcpListener::bind("127.0.0.1:0").unwrap();
         let selected_port = selected.local_addr().unwrap().port();
         let external = TcpListener::bind(("0.0.0.0", 0)).unwrap();
         let external_port = external.local_addr().unwrap().port();
         let external_host = host_ipv4();
-        let selected_server = thread::spawn(move || {
-            for _ in 0..2 {
-                let (mut stream, _) = selected.accept().unwrap();
-                let _ = stream.write_all(b"ok");
-            }
+        let (selected_tx, selected_rx) = std::sync::mpsc::channel();
+        let (external_tx, external_rx) = std::sync::mpsc::channel();
+        let _selected_server = thread::spawn(move || {
+            let (mut stream, _) = selected.accept().unwrap();
+            let _ = stream.write_all(b"ok");
+            let _ = selected_tx.send(());
         });
-        let external_server = thread::spawn(move || {
+        let _external_server = thread::spawn(move || {
             let (mut stream, _) = external.accept().unwrap();
             let _ = stream.write_all(b"ok");
+            let _ = external_tx.send(());
         });
-        let script = root.join("fake-jcode.sh");
-        write_script(
-            &script,
-            format!(
-                r#"#!/bin/bash
+        let script_body = format!(
+            r#"#!/bin/bash
 set -euo pipefail
 python3 - <<'PY'
 import socket
@@ -812,22 +814,35 @@ socket.create_connection(('{external_host}', {external_port}), timeout=2).close(
 print('COMPLETE')
 PY
 "#,
-                selected_port = selected_port,
-                external_host = external_host,
-                external_port = external_port,
-            )
-            .as_str(),
+            selected_port = selected_port,
+            external_host = external_host,
+            external_port = external_port,
         );
-        let runtime = coder_runtime(&script, &format!("http://127.0.0.1:{selected_port}/v1"));
+        let enabled_script = enabled_root.join("fake-jcode.sh");
+        write_script(&enabled_script, script_body.as_str());
+        let disabled_script = disabled_root.join("fake-jcode.sh");
+        write_script(&disabled_script, script_body.as_str());
+        let enabled_runtime =
+            coder_runtime(&enabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
+        let disabled_runtime =
+            coder_runtime(&disabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
 
-        let enabled = JCodeProcessRunner::run(&runtime, "network", &workdir, 10, false).unwrap();
-        let disabled =
-            JCodeProcessRunner::run(&runtime, "network", &workdir, 10, true).unwrap_err();
-        selected_server.join().unwrap();
-        external_server.join().unwrap();
+        let enabled =
+            JCodeProcessRunner::run(&enabled_runtime, "network", &enabled_workdir, 10, false)
+                .unwrap();
+        let disabled = JCodeProcessRunner::run(
+            &disabled_runtime,
+            "network",
+            &disabled_workdir,
+            10,
+            true,
+        )
+        .unwrap_err();
 
         assert!(enabled.stdout().contains("COMPLETE"));
         assert!(disabled.message().contains("jcode exited unsuccessfully"));
+        assert!(selected_rx.recv_timeout(Duration::from_secs(2)).is_ok());
+        assert!(external_rx.recv_timeout(Duration::from_secs(2)).is_ok());
     }
 
     #[test]
@@ -916,10 +931,12 @@ PY
     }
 
     fn write_script(path: &Path, content: &str) {
-        fs::write(path, content).unwrap();
-        let mut permissions = fs::metadata(path).unwrap().permissions();
+        let temporary = path.with_extension("tmp");
+        fs::write(&temporary, content).unwrap();
+        let mut permissions = fs::metadata(&temporary).unwrap().permissions();
         permissions.set_mode(0o755);
-        fs::set_permissions(path, permissions).unwrap();
+        fs::set_permissions(&temporary, permissions).unwrap();
+        fs::rename(&temporary, path).unwrap();
     }
 
     fn temp_root() -> PathBuf {

@@ -23,9 +23,6 @@ pub mod change_request_document;
 pub mod change_request_resolution;
 pub mod change_workspace;
 pub mod clock;
-pub mod coder_run_request;
-pub mod coder_tool_runner;
-pub mod coder_workspace_context;
 pub mod command_evidence;
 pub mod command_policy;
 pub mod create_change_worktree_request;
@@ -168,9 +165,6 @@ pub use durable_file::atomic_write;
 
 #[cfg(test)]
 mod campaign_runner_tests;
-pub use coder_run_request::CoderRunRequest;
-pub use coder_tool_runner::CoderToolRunner;
-pub use coder_workspace_context::CoderWorkspaceContext;
 pub use command_evidence::CommandEvidence;
 pub use command_policy::CommandPolicy;
 pub use create_change_worktree_request::CreateChangeWorktreeRequest;

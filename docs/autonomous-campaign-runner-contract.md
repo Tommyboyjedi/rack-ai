@@ -339,18 +339,16 @@ The runner must never mark a step accepted merely because a model said `COMPLETE
 
 ## Worker implementation requirement
 
-Current Rack AI has a direct local-coder worker and a separate host-oriented primary/JCode path. This feature must introduce a common model-backed change implementer abstraction that supports both configured local endpoints without bypassing the executor.
+Rack AI now uses qualified direct JCode execution for both configured implementation workers. Campaign orchestration remains responsible for worker/runtime selection, deterministic acceptance, review, recovery, and Git promotion.
 
 Required behaviour:
 
-- `local-coder` and `local-primary` are selected by configured worker ID, endpoint, model alias, and tool-call parser.
-- The implementation path accepts an injected `CoderToolRunner`; it may not write files or execute shell commands itself.
-- Both workers run model-driven file tools through `WorkspaceCoderToolRunner -> WorkspaceExecutor -> PodmanWorkspaceExecutor`.
-- Existing host-oriented worker entrypoints remain available for Rack AI's internal/legacy task workflows only. They are rejected for an external-repository campaign.
-- Tool-call parser failures, text-only fake tool calls, and empty completion output are observable, structured worker failures.
-- The fallback worker does not receive host credentials, a Rack AI source mount, or a host `cwd` escape route.
+- local-coder and local-primary are selected by configured worker ID, endpoint, model alias, and JCode runtime binding.
+- The implementation path must remain inside the qualified JCode direct harness rather than a second model-facing coder loop.
+- JCode transcript, deterministic check output, and Git/path evidence remain observable and reviewable worker evidence.
+- The fallback worker does not receive host credentials, a Rack AI source mount, or a host cwd escape route.
 
-The implementation may reuse the existing direct HTTP client and workspace tool runner, but must not add an independent agent framework.
+The implementation may evolve its worker bindings and evidence capture, but must not add an independent agent framework.
 
 ## Git and promotion boundary
 

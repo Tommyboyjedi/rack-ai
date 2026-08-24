@@ -2,7 +2,7 @@
 
 End-to-end and boundary tests for the rack integration live here.
 
-- `rack_coder_smoke.sh`: direct 2060 worker wrapper test
+- `rack_coder_smoke.sh`: direct 2060 worker wrapper test through the qualified JCode local-coder path
 - `rack_task_smoke.sh`: explicit non-swarm single-worker dispatch test
 - `rack_pipeline_smoke.sh`: explicit non-swarm multi-step pipeline test
 - `rack_coordinator_smoke.sh`: explicit template coordinator spec generation and execution test
