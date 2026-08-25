@@ -229,8 +229,20 @@ fn build_command(
             isolation: None,
         }
     };
+
+    let jcode_runtime_dir = execution_config.home_dir().join(".jcode/runtime");
+    let jcode_scratch_dir = execution_config.home_dir().join(".jcode/scratch");
+    let cargo_target_dir = execution_config.home_dir().join(".cargo-target");
+    fs::create_dir_all(&jcode_runtime_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&jcode_scratch_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&cargo_target_dir).map_err(|error| error.to_string())?;
+
     prepared
         .command
+        .env("JCODE_RUNTIME_DIR", &jcode_runtime_dir)
+        .env("JCODE_SCRATCH_DIR", &jcode_scratch_dir)
+        .env("TMPDIR", &jcode_scratch_dir)
+        .env("CARGO_TARGET_DIR", &cargo_target_dir)
         .arg("--no-update")
         .arg("--no-selfdev")
         .arg("--quiet")
@@ -812,6 +824,9 @@ PY
 set -euo pipefail
 
 echo 'allowed' > src/generated.rs
+touch "$JCODE_RUNTIME_DIR/runtime-probe"
+touch "$JCODE_SCRATCH_DIR/scratch-probe"
+touch "$CARGO_TARGET_DIR/target-probe"
 
 if echo 'forbidden' > Cargo.toml 2>/dev/null; then
     echo 'unexpectedly wrote outside allowed paths' >&2
