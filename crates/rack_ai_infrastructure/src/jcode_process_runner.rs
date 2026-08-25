@@ -302,14 +302,7 @@ fn prepare_bubblewrap_command(
     if let Some(allowed_paths) = allowed_paths {
         for allowed_path in allowed_paths.values() {
             let path = workdir.join(allowed_path.value());
-
-            if !path.exists() {
-                return Err(format!(
-                    "allowed path does not exist for sandbox bind: {}",
-                    allowed_path.value()
-                ));
-            }
-
+            ensure_sandbox_bind_target(&path, allowed_path.value())?;
             command.arg("--bind").arg(&path).arg(&path);
         }
     }
@@ -331,6 +324,34 @@ fn prepare_bubblewrap_command(
         command,
         isolation: Some(NetworkIsolationGuard { host_bridge }),
     })
+}
+
+fn ensure_sandbox_bind_target(path: &Path, relative: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    // Bubblewrap cannot bind a missing path. Campaigns often allow a file the
+    // worker is required to create (README.md). Create an empty bind target on
+    // the host so the worktree can stay read-only except allowed paths.
+    if relative.ends_with('/') {
+        fs::create_dir_all(path).map_err(|error| {
+            format!("failed to create allowed directory {relative} for sandbox bind: {error}")
+        })?;
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("failed to create parent of allowed path {relative} for sandbox bind: {error}")
+        })?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            format!("failed to create allowed path {relative} for sandbox bind: {error}")
+        })?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -863,6 +884,47 @@ printf 'COMPLETE\n'
         assert_eq!(
             fs::read_to_string(workdir.join("Cargo.toml")).unwrap(),
             "[package]\nname = \"fixture\"\n"
+        );
+    }
+
+    #[test]
+    fn sandbox_creates_missing_allowed_file_so_worker_can_write_it() {
+        let root = temp_root();
+        let workdir = root.join("worktree");
+        fs::create_dir_all(workdir.join("src")).unwrap();
+
+        let script = root.join("fake-jcode.sh");
+        write_script(
+            &script,
+            r#"#!/bin/bash
+set -euo pipefail
+printf '# Tiny Ticket\n' > README.md
+test -s README.md
+printf 'COMPLETE\n'
+"#,
+        );
+
+        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+        let allowed_paths = AllowedPaths::new(vec![
+            AllowedPath::new("src/".to_string()).unwrap(),
+            AllowedPath::new("README.md".to_string()).unwrap(),
+        ])
+        .unwrap();
+
+        let output = JCodeProcessRunner::run_with_allowed_paths(
+            &runtime,
+            "add readme",
+            &workdir,
+            10,
+            true,
+            &allowed_paths,
+        )
+        .unwrap();
+
+        assert!(output.stdout().contains("COMPLETE"), "{:?}", output);
+        assert_eq!(
+            fs::read_to_string(workdir.join("README.md")).unwrap(),
+            "# Tiny Ticket\n"
         );
     }
 
