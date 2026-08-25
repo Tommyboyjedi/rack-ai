@@ -40,12 +40,13 @@ impl JCodeChangeImplementer {
 impl ChangeImplementer for JCodeChangeImplementer {
     fn implement(&self, request: &ImplementChangeRequest) -> Result<ImplementChangeResult, String> {
         let runtime = self.resolve_runtime(request)?;
-        let output = JCodeProcessRunner::run(
+        let output = JCodeProcessRunner::run_with_allowed_paths(
             &runtime,
             request.task(),
             request.worktree_path(),
             request.timeout_seconds(),
             request.network_disabled(),
+            request.allowed_paths()?,
         );
         match output {
             Ok(result) => Ok(

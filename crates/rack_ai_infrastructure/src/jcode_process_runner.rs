@@ -1,3 +1,4 @@
+use rack_ai_domain::AllowedPaths;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -87,6 +88,42 @@ impl JCodeProcessRunner {
         timeout_seconds: u32,
         network_disabled: bool,
     ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+        Self::run_internal(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            None,
+        )
+    }
+
+    pub fn run_with_allowed_paths(
+        runtime: &ImplementWorkerRuntime,
+        task: &str,
+        workdir: &Path,
+        timeout_seconds: u32,
+        network_disabled: bool,
+        allowed_paths: &AllowedPaths,
+    ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+        Self::run_internal(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            Some(allowed_paths),
+        )
+    }
+
+    fn run_internal(
+        runtime: &ImplementWorkerRuntime,
+        task: &str,
+        workdir: &Path,
+        timeout_seconds: u32,
+        network_disabled: bool,
+        allowed_paths: Option<&AllowedPaths>,
+    ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
         let root = temp_root();
         let result = run_with_root(
             runtime,
@@ -95,6 +132,7 @@ impl JCodeProcessRunner {
             timeout_seconds,
             network_disabled,
             &root,
+            allowed_paths,
         );
         let _ = fs::remove_dir_all(&root);
         result
@@ -108,6 +146,7 @@ fn run_with_root(
     timeout_seconds: u32,
     network_disabled: bool,
     root: &Path,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
@@ -118,6 +157,7 @@ fn run_with_root(
         root,
         &execution_config,
         network_disabled,
+        allowed_paths,
     )
     .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
     prepared.command.process_group(0);
@@ -179,25 +219,18 @@ fn build_command(
     root: &Path,
     execution_config: &JCodeExecutionConfig,
     network_disabled: bool,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<PreparedCommand, String> {
     let mut prepared = if network_disabled {
-        prepare_bubblewrap_command(runtime, workdir, root)?
+        prepare_bubblewrap_command(runtime, workdir, root, allowed_paths)?
     } else {
         PreparedCommand {
             command: Command::new(runtime.entrypoint()),
             isolation: None,
         }
     };
-    let jcode_runtime_dir = execution_config.home_dir().join(".jcode/runtime");
-    let jcode_scratch_dir = execution_config.home_dir().join(".jcode/scratch");
-    fs::create_dir_all(&jcode_runtime_dir).map_err(|error| error.to_string())?;
-    fs::create_dir_all(&jcode_scratch_dir).map_err(|error| error.to_string())?;
-
     prepared
         .command
-        .env("JCODE_RUNTIME_DIR", &jcode_runtime_dir)
-        .env("JCODE_SCRATCH_DIR", &jcode_scratch_dir)
-        .env("TMPDIR", &jcode_scratch_dir)
         .arg("--no-update")
         .arg("--no-selfdev")
         .arg("--quiet")
@@ -230,6 +263,7 @@ fn prepare_bubblewrap_command(
     runtime: &ImplementWorkerRuntime,
     workdir: &Path,
     root: &Path,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<PreparedCommand, String> {
     let endpoint = LocalEndpoint::parse(runtime.endpoint())?;
     let socket_path = root.join("selected-vllm.sock");
@@ -246,12 +280,29 @@ fn prepare_bubblewrap_command(
         .arg("--ro-bind")
         .arg("/")
         .arg("/")
-        .arg("--bind")
+        .arg("--ro-bind")
         .arg(workdir)
         .arg(workdir)
         .arg("--bind")
         .arg(root)
-        .arg(root)
+        .arg(root);
+
+    if let Some(allowed_paths) = allowed_paths {
+        for allowed_path in allowed_paths.values() {
+            let path = workdir.join(allowed_path.value());
+
+            if !path.exists() {
+                return Err(format!(
+                    "allowed path does not exist for sandbox bind: {}",
+                    allowed_path.value()
+                ));
+            }
+
+            command.arg("--bind").arg(&path).arg(&path);
+        }
+    }
+
+    command
         .arg("--dev")
         .arg("/dev")
         .arg("--proc")
@@ -636,6 +687,8 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     use rack_ai_application::ImplementWorkerRuntime;
+    use rack_ai_domain::AllowedPath;
+    use rack_ai_domain::AllowedPaths;
 
     use super::JCodeProcessRunner;
 
@@ -739,6 +792,63 @@ PY
 
         assert!(output.stdout().contains("stdout-line"));
         assert!(output.stderr().contains("stderr-line"));
+    }
+
+    #[test]
+    fn sandbox_allows_writes_only_inside_allowed_paths() {
+        let root = temp_root();
+        let workdir = root.join("worktree");
+        fs::create_dir_all(workdir.join("src")).unwrap();
+        fs::write(
+            workdir.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\n",
+        )
+        .unwrap();
+
+        let script = root.join("fake-jcode.sh");
+        write_script(
+            &script,
+            r#"#!/bin/bash
+set -euo pipefail
+
+echo 'allowed' > src/generated.rs
+
+if echo 'forbidden' > Cargo.toml 2>/dev/null; then
+    echo 'unexpectedly wrote outside allowed paths' >&2
+    exit 91
+fi
+
+test "$(cat src/generated.rs)" = "allowed"
+grep -q 'name = "fixture"' Cargo.toml
+
+printf 'COMPLETE\n'
+"#,
+        );
+
+        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+
+        let allowed_paths =
+            AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap();
+
+        let output = JCodeProcessRunner::run_with_allowed_paths(
+            &runtime,
+            "sandbox paths",
+            &workdir,
+            10,
+            true,
+            &allowed_paths,
+        )
+        .unwrap();
+
+        assert!(output.stdout().contains("COMPLETE"));
+        assert_eq!(
+            fs::read_to_string(workdir.join("src/generated.rs")).unwrap(),
+            "allowed\n"
+        );
+        assert_eq!(
+            fs::read_to_string(workdir.join("Cargo.toml")).unwrap(),
+            "[package]\nname = \"fixture\"\n"
+        );
     }
 
     #[test]
