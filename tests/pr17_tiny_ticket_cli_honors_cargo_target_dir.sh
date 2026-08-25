@@ -22,4 +22,5 @@ pathlib.Path(sys.argv[2]).write_text(match.group(1))
 PY
 grep -q 'bin="${CARGO_TARGET_DIR:-target}/debug/tiny-ticket"' "$tmp/check_cli.sh"
 ! grep -q './target/debug/tiny-ticket' "$tmp/check_cli.sh"
+grep -q 'test -s "$tmp"' "$tmp/check_cli.sh"
 echo ok

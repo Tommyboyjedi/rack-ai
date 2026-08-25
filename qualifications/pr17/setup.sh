@@ -59,6 +59,9 @@ bin="${CARGO_TARGET_DIR:-target}/debug/tiny-ticket"
 tmp="$(mktemp)"; rm -f "$tmp"; trap 'rm -f "$tmp"' EXIT
 out="$("$bin" create "$tmp" First ticket)"
 [[ "$out" == "created 1" ]]
+# The CLI must persist into the given store path, not a hardcoded worktree file
+# such as tickets.txt (which would fail campaign path policy after acceptance).
+test -s "$tmp"
 "$bin" create "$tmp" Second ticket >/dev/null
 "$bin" close "$tmp" 1 | grep -qx 'closed 1'
 "$bin" list "$tmp" | grep -qx '1|closed|First ticket'
