@@ -830,22 +830,21 @@ PY
         write_script(&enabled_script, script_body.as_str());
         let disabled_script = disabled_root.join("fake-jcode.sh");
         write_script(&disabled_script, script_body.as_str());
-        let enabled_runtime =
-            coder_runtime(&enabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
-        let disabled_runtime =
-            coder_runtime(&disabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
+        let enabled_runtime = coder_runtime(
+            &enabled_script,
+            &format!("http://127.0.0.1:{selected_port}/v1"),
+        );
+        let disabled_runtime = coder_runtime(
+            &disabled_script,
+            &format!("http://127.0.0.1:{selected_port}/v1"),
+        );
 
         let enabled =
             JCodeProcessRunner::run(&enabled_runtime, "network", &enabled_workdir, 10, false)
                 .unwrap();
-        let disabled = JCodeProcessRunner::run(
-            &disabled_runtime,
-            "network",
-            &disabled_workdir,
-            10,
-            true,
-        )
-        .unwrap_err();
+        let disabled =
+            JCodeProcessRunner::run(&disabled_runtime, "network", &disabled_workdir, 10, true)
+                .unwrap_err();
 
         assert!(enabled.stdout().contains("COMPLETE"));
         assert!(disabled.message().contains("jcode exited unsuccessfully"));
