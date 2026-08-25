@@ -1099,14 +1099,29 @@ impl<'a> CampaignRunner<'a> {
             )?;
             let task = match kind {
                 AttemptKind::Primary => step.task.clone(),
-                _ => next_instruction
-                    .clone()
-                    .or_else(|| {
-                        last_review.as_ref().map(|review| {
-                            repair_instruction(step, review, &last_evidence_summary, &last_commands)
+                _ => {
+                    let recovery = next_instruction
+                        .clone()
+                        .or_else(|| {
+                            last_review.as_ref().map(|review| {
+                                repair_instruction(
+                                    step,
+                                    review,
+                                    &last_evidence_summary,
+                                    &last_commands,
+                                )
+                            })
                         })
-                    })
-                    .unwrap_or_else(|| step.task.clone()),
+                        .unwrap_or_else(|| {
+                            "Retry the original task and make the required source changes."
+                                .to_string()
+                        });
+
+                    format!(
+                        "Original task:\n{}\n\nRecovery instruction:\n{}\n\nWork from the current accepted repository state. Make the required source changes. Do not merely describe the solution; inspect and edit the repository.",
+                        step.task, recovery
+                    )
+                }
             };
             let launch_instruction = if kind == AttemptKind::Primary {
                 None
