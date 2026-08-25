@@ -188,8 +188,16 @@ fn build_command(
             isolation: None,
         }
     };
+    let jcode_runtime_dir = execution_config.home_dir().join(".jcode/runtime");
+    let jcode_scratch_dir = execution_config.home_dir().join(".jcode/scratch");
+    fs::create_dir_all(&jcode_runtime_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&jcode_scratch_dir).map_err(|error| error.to_string())?;
+
     prepared
         .command
+        .env("JCODE_RUNTIME_DIR", &jcode_runtime_dir)
+        .env("JCODE_SCRATCH_DIR", &jcode_scratch_dir)
+        .env("TMPDIR", &jcode_scratch_dir)
         .arg("--no-update")
         .arg("--no-selfdev")
         .arg("--quiet")
