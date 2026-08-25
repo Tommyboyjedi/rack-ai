@@ -55,13 +55,14 @@ cat > "$ticket/tests/check_cli.sh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 cargo build --offline --quiet
+bin="${CARGO_TARGET_DIR:-target}/debug/tiny-ticket"
 tmp="$(mktemp)"; rm -f "$tmp"; trap 'rm -f "$tmp"' EXIT
-out="$(./target/debug/tiny-ticket create "$tmp" First ticket)"
+out="$("$bin" create "$tmp" First ticket)"
 [[ "$out" == "created 1" ]]
-./target/debug/tiny-ticket create "$tmp" Second ticket >/dev/null
-./target/debug/tiny-ticket close "$tmp" 1 | grep -qx 'closed 1'
-./target/debug/tiny-ticket list "$tmp" | grep -qx '1|closed|First ticket'
-./target/debug/tiny-ticket list "$tmp" | grep -qx '2|open|Second ticket'
+"$bin" create "$tmp" Second ticket >/dev/null
+"$bin" close "$tmp" 1 | grep -qx 'closed 1'
+"$bin" list "$tmp" | grep -qx '1|closed|First ticket'
+"$bin" list "$tmp" | grep -qx '2|open|Second ticket'
 EOF
 cat > "$ticket/tests/check_final.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -69,7 +70,8 @@ set -euo pipefail
 cargo test --offline
 bash tests/check_cli.sh
 test -s README.md
-if ./target/debug/tiny-ticket create /tmp/pr17-ticket-bad 'bad|title' >/dev/null 2>&1; then exit 1; fi
+bin="${CARGO_TARGET_DIR:-target}/debug/tiny-ticket"
+if "$bin" create /tmp/pr17-ticket-bad 'bad|title' >/dev/null 2>&1; then exit 1; fi
 rm -f /tmp/pr17-ticket-bad
 EOF
 chmod +x "$ticket/tests/"*.sh
