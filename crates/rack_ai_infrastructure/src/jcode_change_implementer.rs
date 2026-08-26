@@ -182,8 +182,8 @@ mod tests {
     use rack_ai_application::ImplementChangeRequest;
     use rack_ai_application::ImplementWorkerRuntime;
 
-    use super::extract_jcode_tool_calls;
     use super::JCodeChangeImplementer;
+    use super::extract_jcode_tool_calls;
     use crate::RegistryPaths;
 
     #[test]
