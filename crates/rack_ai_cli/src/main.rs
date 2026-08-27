@@ -175,7 +175,8 @@ fn execute() -> Result<i32, String> {
     } else if command == "task" {
         run_task_from_arguments(roots.repo_root, &arguments[2..])
     } else if command == "coordinator" {
-        run_coordinator_command(roots.repo_root, &arguments[2..])    } else if command == "healthcheck" {
+        run_coordinator_command(roots.repo_root, &arguments[2..])
+    } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
     } else if command == "change" {
         change_command::run(roots.repo_root, roots.state_root, &arguments[2..])

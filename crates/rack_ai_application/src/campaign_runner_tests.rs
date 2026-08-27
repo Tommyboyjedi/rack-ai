@@ -1627,9 +1627,13 @@ fn attempt_repair_instruction_preserves_launch_causality_after_later_failure() {
         attempt_two.classification,
         Some(FailureClassification::WorkerTimeout)
     );
-    assert_eq!(
-        attempt_two.repair_instruction.as_deref(),
-        Some(attempt_one_instruction.as_str())
+    let attempt_two_instruction = attempt_two.repair_instruction.as_deref().unwrap();
+    assert!(attempt_two_instruction.contains("Original task:\nAdd alpha."));
+    assert!(attempt_two_instruction.contains("Recovery instruction:\n"));
+    assert!(attempt_two_instruction.contains(&attempt_one_instruction));
+    assert!(
+        attempt_two_instruction
+            .contains("Do not merely describe the solution; inspect and edit the repository.")
     );
     let transcript = fs::read_to_string(
         runner

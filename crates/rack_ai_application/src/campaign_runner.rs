@@ -1099,14 +1099,29 @@ impl<'a> CampaignRunner<'a> {
             )?;
             let task = match kind {
                 AttemptKind::Primary => step.task.clone(),
-                _ => next_instruction
-                    .clone()
-                    .or_else(|| {
-                        last_review.as_ref().map(|review| {
-                            repair_instruction(step, review, &last_evidence_summary, &last_commands)
+                _ => {
+                    let recovery = next_instruction
+                        .clone()
+                        .or_else(|| {
+                            last_review.as_ref().map(|review| {
+                                repair_instruction(
+                                    step,
+                                    review,
+                                    &last_evidence_summary,
+                                    &last_commands,
+                                )
+                            })
                         })
-                    })
-                    .unwrap_or_else(|| step.task.clone()),
+                        .unwrap_or_else(|| {
+                            "Retry the original task and make the required source changes."
+                                .to_string()
+                        });
+
+                    format!(
+                        "Original task:\n{}\n\nRecovery instruction:\n{}\n\nWork from the current accepted repository state. Make the required source changes. Do not merely describe the solution; inspect and edit the repository.",
+                        step.task, recovery
+                    )
+                }
             };
             let launch_instruction = if kind == AttemptKind::Primary {
                 None
@@ -1126,6 +1141,11 @@ impl<'a> CampaignRunner<'a> {
             }
             let start = self.now_text();
             let allowed = allowed_paths(&step.allowed_paths)?;
+            let task = format!(
+                "{}\n\nAuthoritative write policy:\nYou may modify only these paths:\n- {}\nDo not create or modify files outside these paths. You may read other files for context, but do not write to them. Do not create ad-hoc examples, tests, scripts, temporary files, build artifacts, or other files outside the allowed paths.",
+                task,
+                step.allowed_paths.join("\n- ")
+            );
             let implement_request =
                 ImplementChangeRequest::new(PathBuf::from(&state.worktree_path), task)
                     .with_policy(allowed, self.action_timeout_seconds(state, step))
