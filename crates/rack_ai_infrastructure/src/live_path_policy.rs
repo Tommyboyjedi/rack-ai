@@ -120,6 +120,7 @@ fn live_podman_bash_forbidden_write_rejected_by_path_gate() {
     .execute(ExecuteChangeRequest {
         document,
         mode: ChangeExecutionMode::ImplementAndVerify,
+        selected_worker: None,
     })
     .unwrap();
 

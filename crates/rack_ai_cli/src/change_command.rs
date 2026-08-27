@@ -87,7 +87,11 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
             .as_ref()
             .map(|item| item as &dyn rack_ai_application::ChangeImplementer),
     });
-    let result = service.execute(ExecuteChangeRequest { document, mode })?;
+    let result = service.execute(ExecuteChangeRequest {
+        document,
+        mode,
+        selected_worker: None,
+    })?;
     println!("change_id: {}", result.packet.change_id());
     println!("branch: {}", result.packet.branch());
     println!("worktree: {}", result.packet.worktree_path());

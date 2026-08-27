@@ -12,6 +12,7 @@ use crate::ChangeWorkspace;
 use crate::CommandPolicy;
 use crate::GitWorktree;
 use crate::ImplementChangeRequest;
+use crate::ImplementWorkerRuntime;
 use crate::InspectChangeWorktreeRequest;
 use crate::PrepareChange;
 use crate::PrepareChangeDependencies;
@@ -43,6 +44,7 @@ pub struct ExecuteChangeDependencies<'a> {
 pub struct ExecuteChangeRequest {
     pub document: ChangeRequestDocument,
     pub mode: ChangeExecutionMode,
+    pub selected_worker: Option<ImplementWorkerRuntime>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -65,7 +67,7 @@ impl<'a> ExecuteChange<'a> {
 
     pub fn execute(&self, request: ExecuteChangeRequest) -> Result<ExecuteChangeResult, String> {
         let change_request = ChangeRequest::from_document(
-            request.document,
+            request.document.clone(),
             &ChangeRequestResolution {
                 registry: self.registry,
                 command_policy: self.command_policy,
@@ -88,7 +90,12 @@ impl<'a> ExecuteChange<'a> {
             return self.persist(rejected);
         }
         if request.mode.runs_implementer() {
-            packet = self.implement(&change_request, &workspace, packet)?;
+            packet = self.implement(
+                request.selected_worker.as_ref(),
+                &change_request,
+                &workspace,
+                packet,
+            )?;
             if packet.status() == &ChangeStatus::ExecutorUnavailable {
                 return self.persist(packet);
             }
@@ -144,6 +151,7 @@ impl<'a> ExecuteChange<'a> {
 
     fn implement(
         &self,
+        selected_worker: Option<&ImplementWorkerRuntime>,
         request: &ChangeRequest,
         workspace: &ChangeWorkspace,
         packet: ReviewPacket,
@@ -156,21 +164,25 @@ impl<'a> ExecuteChange<'a> {
                     .to_string(),
             ));
         };
-        match implementer.implement(
-            &ImplementChangeRequest::new(
-                workspace.worktree_path().to_path_buf(),
-                request.task().value().to_string(),
-            )
-            .with_policy(
-                request.allowed_paths().clone(),
-                request.limits().timeout_seconds().value(),
-            )
-            .with_network_disabled(matches!(
-                request.limits().network(),
-                rack_ai_domain::NetworkPolicy::Disabled
-            ))
-            .with_max_turns(ChangeLayout::coder_max_turns()),
-        ) {
+        let implement_request = ImplementChangeRequest::new(
+            workspace.worktree_path().to_path_buf(),
+            request.task().value().to_string(),
+        )
+        .with_policy(
+            request.allowed_paths().clone(),
+            request.limits().timeout_seconds().value(),
+        )
+        .with_network_disabled(matches!(
+            request.limits().network(),
+            rack_ai_domain::NetworkPolicy::Disabled
+        ))
+        .with_max_turns(ChangeLayout::coder_max_turns());
+        let implement_request = if let Some(worker) = selected_worker {
+            implement_request.with_worker(worker.clone())
+        } else {
+            implement_request
+        };
+        match implementer.implement(&implement_request) {
             Ok(result) => Ok(packet.with_implementer_output(result.output().to_string())),
             Err(error) => Ok(fail(packet, ChangeStatus::Failed, error)),
         }
@@ -389,6 +401,7 @@ mod tests {
             .execute(ExecuteChangeRequest {
                 document: sample_document(None),
                 mode: ChangeExecutionMode::PrepareOnly,
+                selected_worker: None,
             })
             .unwrap_err();
         assert!(error.contains("not registered"));
@@ -450,6 +463,7 @@ mod tests {
             .execute(ExecuteChangeRequest {
                 document,
                 mode: ChangeExecutionMode::PrepareOnly,
+                selected_worker: None,
             })
             .unwrap_err();
         assert!(error.contains("allowed paths cannot be empty"));
@@ -479,6 +493,7 @@ mod tests {
             .execute(ExecuteChangeRequest {
                 document,
                 mode: ChangeExecutionMode::PrepareOnly,
+                selected_worker: None,
             })
             .unwrap_err();
         assert!(error.contains("not approved") || error.contains("approved program"));
@@ -663,6 +678,7 @@ mod tests {
         service.execute(ExecuteChangeRequest {
             document: sample_document(Some("a".repeat(40))),
             mode,
+            selected_worker: None,
         })
     }
 
