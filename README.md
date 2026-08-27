@@ -138,6 +138,14 @@ support direct single-worker and explicit pipeline execution. bin/rack-coder is 
 
 It prepares an isolated Git worktree, executes the qualified JCode worker directly against that worktree, enforces allowed paths through post-run Git inspection, runs deterministic acceptance commands through rootless Podman, and produces review evidence and an acceptance verdict.
 
+### Work-unit MVP boundary
+
+PR22 adds a minimal external workload/work-unit contract above the existing qualified change path. An external client such as ATHBA can submit one bounded application-development work unit without naming a GPU, worker id, or model id.
+
+Rack AI validates the request, chooses the execution worker internally, translates the unit into the existing bounded change request, executes it through the qualified JCode path, independently runs acceptance, and returns a structured result with status, verdict, placement, and evidence references.
+
+See [`docs/work-unit-contract.md`](docs/work-unit-contract.md) for the exact JSON contract and CLI example.
+
 ### Autonomous campaigns
 
 `bin/rack-campaign` runs bounded, restartable, multi-step unattended work with:
