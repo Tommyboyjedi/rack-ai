@@ -44,6 +44,35 @@ S0 -> A -> S1 -> B -> S2
 
 Parallel DAG merge/reconciliation remains out of scope for this PR.
 
+## Runtime isolation repair
+
+Live ATHBA PR13 exposed a real Rack AI isolation defect: target Rust worktrees were being created under `/srv/rack-ai/state/workspaces`, which physically nested them under the Rack AI control-plane Cargo workspace.
+
+That made a natural target acceptance command such as `cargo test` fail in the managed target repository with Cargo's parent-workspace detection:
+
+```text
+current package believes it's in a workspace when it's not
+workspace: /srv/rack-ai/Cargo.toml
+```
+
+The fix belongs in Rack AI, not ATHBA:
+
+- ATHBA should continue to submit natural target-repository commands such as `cargo test`
+- Rack AI now treats any configured `workspace_root` nested inside the live Rack AI repository as legacy/unsafe and externalizes it to a sibling runtime root
+- production config is now explicit: `/srv/rack-ai-workspaces`
+
+This keeps target worktrees operationally separate from the Rack AI control repository without adding Rust-specific command rewriting or Tiny Ticket-specific workarounds.
+
+Live proof on August 28, 2026 used the real ATHBA coordinator/gateway path with workload `pr13-live` and the existing Tiny Ticket fixture:
+
+```text
+X = d0fb9cff096ef6e9a6d38c854e0f97e22a7f5771
+WU-A accepted -> Y = 05109113fdd7658a3b5c306b86c6690917d108a8
+WU-B from Y accepted -> Z = b628c9945d3c0112afa862bcc61826ce9193e229
+```
+
+The important runtime proof is that the temporary live config deliberately pointed `workspace_root` back under `/tmp/rack-ai-pr23/state/workspaces`, but Rack AI executed the real accepted work units in `/tmp/rack-ai-pr23-workspaces/...` instead. `cargo test` therefore ran in the target repository context rather than inheriting `/tmp/rack-ai-pr23/Cargo.toml`.
+
 ## Not in scope
 - universal/adaptive scheduler;
 - optimal GPU utilisation;

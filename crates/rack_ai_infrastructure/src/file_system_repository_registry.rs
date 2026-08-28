@@ -39,7 +39,8 @@ impl FileSystemRepositoryRegistry {
 
 impl RepositoryRegistry for FileSystemRepositoryRegistry {
     fn workspace_root(&self) -> Result<WorkspaceRoot, String> {
-        WorkspaceRoot::new(PathBuf::from(self.load_document()?.workspace_root))
+        let configured = PathBuf::from(self.load_document()?.workspace_root);
+        WorkspaceRoot::new(resolve_workspace_root(self.paths.root(), &configured)?)
     }
 
     fn executor_config(&self) -> Result<ExecutorConfig, String> {
@@ -95,6 +96,52 @@ fn assert_not_live_repository_target(
 fn canonical_git_toplevel(path: &Path) -> Result<PathBuf, String> {
     let top_level = GitCommand::run(path, &["rev-parse", "--show-toplevel"])?;
     std::fs::canonicalize(&top_level).map_err(|error| error.to_string())
+}
+
+fn resolve_workspace_root(
+    live_context_root: &Path,
+    configured_root: &Path,
+) -> Result<PathBuf, String> {
+    if !configured_root.is_absolute() {
+        return Err("workspace root must be an absolute path".to_string());
+    }
+    let live_repo = canonical_git_toplevel(live_context_root)
+        .map_err(|error| format!("failed to resolve live rack-ai repository: {error}"))?;
+    let configured = resolve_path_for_containment(configured_root)?;
+    if configured.starts_with(&live_repo) {
+        return derive_external_workspace_root(&live_repo);
+    }
+    Ok(configured_root.to_path_buf())
+}
+
+fn resolve_path_for_containment(path: &Path) -> Result<PathBuf, String> {
+    if path.exists() {
+        return std::fs::canonicalize(path).map_err(|error| error.to_string());
+    }
+    let mut suffix = Vec::new();
+    let mut cursor = path;
+    while !cursor.exists() {
+        let name = cursor
+            .file_name()
+            .ok_or("workspace root has no existing ancestor".to_string())?;
+        suffix.push(name.to_os_string());
+        cursor = cursor
+            .parent()
+            .ok_or("workspace root has no existing ancestor".to_string())?;
+    }
+    let mut resolved = std::fs::canonicalize(cursor).map_err(|error| error.to_string())?;
+    for component in suffix.iter().rev() {
+        resolved.push(component);
+    }
+    Ok(resolved)
+}
+
+fn derive_external_workspace_root(live_repo: &Path) -> Result<PathBuf, String> {
+    let name = live_repo
+        .file_name()
+        .ok_or("live rack-ai repository has no terminal directory name".to_string())?;
+    let sibling = live_repo.with_file_name(format!("{}-workspaces", name.to_string_lossy()));
+    Ok(sibling)
 }
 
 #[cfg(test)]
@@ -183,7 +230,49 @@ mod tests {
         assert_eq!(found.root(), clone);
     }
 
+    #[test]
+    fn rewrites_nested_workspace_root_outside_live_repo() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let external = init_git_repo(&root.join("adaptos"), "external");
+        write_repositories_document_with_workspace(
+            &live,
+            live.join("state/workspaces"),
+            &[external],
+        );
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live.clone()));
+        let workspace = registry.workspace_root().unwrap();
+        assert_eq!(
+            workspace.as_path(),
+            live.with_file_name("live-rack-ai-workspaces")
+        );
+    }
+
+    #[test]
+    fn keeps_explicit_external_workspace_root() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let external = init_git_repo(&root.join("adaptos"), "external");
+        let workspaces = root.join("custom-workspaces");
+        write_repositories_document_with_workspace(&live, workspaces.clone(), &[external]);
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let workspace = registry.workspace_root().unwrap();
+        assert_eq!(workspace.as_path(), workspaces);
+    }
+
     fn write_repositories_document(live_root: &Path, repositories: &[PathBuf]) {
+        write_repositories_document_with_workspace(
+            live_root,
+            live_root.join("workspaces"),
+            repositories,
+        );
+    }
+
+    fn write_repositories_document_with_workspace(
+        live_root: &Path,
+        workspace_root: PathBuf,
+        repositories: &[PathBuf],
+    ) {
         fs::create_dir_all(live_root.join("config")).unwrap();
         let repositories_json = repositories
             .iter()
@@ -200,7 +289,7 @@ mod tests {
             live_root.join("config/repositories.json"),
             format!(
                 r#"{{"workspace_root":"{}","executor":{{"backend":"podman","image":"rust:bookworm"}},"repositories":[{}]}}"#,
-                live_root.join("workspaces").display(),
+                workspace_root.display(),
                 repositories_json
             ),
         )

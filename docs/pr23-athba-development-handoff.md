@@ -27,7 +27,7 @@ ATHBA
   -> ATHBA decides the next unit
 ```
 
-PR22 implemented the Rack AI side of this boundary. PR23 must implement the minimum ATHBA side and prove a real vertical slice, using Tiny Ticket as the productivity benchmark.
+PR22 implemented the initial Rack AI work-unit boundary. PR23 completes the trusted accepted-revision progression needed for ATHBA to drive a real vertical slice, using Tiny Ticket as the productivity benchmark.
 
 The governing philosophy is:
 
@@ -385,7 +385,10 @@ PR21 carried forward the useful hardening from the PR17 qualification era into `
 
 PR22, **Rack AI MVP architecture and workload contract**, was merged into `main` immediately before this document was created.
 
-PR22 implemented `rack-ai/work-unit/v1` and the Rack AI-side execution boundary.
+PR22 implemented `rack-ai/work-unit/v1` and the initial Rack AI-side execution boundary.
+PR23 adds the trusted accepted-revision progression primitive so ATHBA can chain dependent tiny work units against real accepted Git state.
+PR23 also fixes the runtime-isolation defect exposed by the live ATHBA chain: target worktrees must not live under the Rack AI Cargo workspace, because natural target commands such as `cargo test` would then inherit the parent workspace context and fail for the wrong reason.
+That fix was proven through the real ATHBA `pr13-live` chain on August 28, 2026, where `wu-a-close-ticket` advanced `X -> Y` and `wu-b-reopen-ticket` advanced `Y -> Z` from an ATHBA-driven resubmission using the returned trusted accepted revision.
 
 Important implementation areas include:
 

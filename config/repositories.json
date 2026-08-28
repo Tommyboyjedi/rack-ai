@@ -1,5 +1,5 @@
 {
-  "workspace_root": "/srv/rack-ai/state/workspaces",
+  "workspace_root": "/srv/rack-ai-workspaces",
   "approved_programs": [
     "cargo",
     "rustc",
