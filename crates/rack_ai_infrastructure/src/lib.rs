@@ -45,6 +45,8 @@ pub mod workers_document;
 
 #[cfg(test)]
 mod live_path_policy;
+#[cfg(test)]
+mod work_unit_progression_tests;
 
 pub use changed_paths::ChangedPaths;
 pub use cli_rack_task_executor::CliRackTaskExecutor;

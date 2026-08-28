@@ -73,6 +73,12 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         if let Some(ref verdict) = result.acceptance_verdict {
             println!("acceptance_verdict: {:?}", verdict);
         }
+        if let Some(ref accepted_head_sha) = result.accepted_head_sha {
+            println!("accepted_head_sha: {}", accepted_head_sha);
+        }
+        if let Some(ref last_error) = result.last_error {
+            println!("last_error: {}", last_error);
+        }
         println!("packet: {}", result.packet_path);
     }
     Ok(

@@ -1,6 +1,6 @@
 # Work-Unit Contract MVP
 
-This document describes the PR22 MVP boundary between an external client such as ATHBA and Rack AI.
+This document describes the PR22/PR23 MVP boundary between an external client such as ATHBA and Rack AI.
 
 It is intentionally small. ATHBA tells Rack AI that a wider workload exists and submits one bounded work unit that is ready to execute. Rack AI then chooses the execution worker/resource internally and runs the unit through the existing qualified bounded change path.
 
@@ -152,15 +152,35 @@ Rack AI returns a structured result including:
 - `placement`
 - `status`
 - `acceptance_verdict`
+- `accepted_head_sha`
 - `branch`
 - `worktree_path`
 - `packet_path`
+- `last_error`
 
 This is enough for ATHBA to determine whether the unit was accepted or rejected and where to inspect the evidence.
 
+### Accepted revision semantics
+
+When a work unit is genuinely approved, Rack AI creates a trusted immutable Git revision under Rack AI's own Git/worktree authority and returns it as:
+
+- `accepted_head_sha`
+
+That SHA is the exact repository state Rack AI accepted. A dependent work unit can then use it as the next `repository.base_sha`.
+
+When a work unit is rejected, blocked, times out, fails acceptance, violates path policy, or otherwise does not reach a trusted approved state, Rack AI does not advance the base and omits `accepted_head_sha`.
+
+Sequential progression in the MVP is intentionally simple:
+
+```text
+S0 -> unit A -> S1 -> unit B -> S2
+```
+
+Parallel merge/reconciliation is out of scope for this version.
+
 ## Reused safety boundary
 
-PR22 does not introduce a new unsafe implementation path.
+PR22/PR23 do not introduce a new unsafe implementation path.
 
 The work-unit request is translated into the existing bounded change request and then reuses:
 

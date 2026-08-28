@@ -27,6 +27,23 @@ A safe terminal block demonstrates retained control-plane safety but is not a pr
 
 The result must provide enough evidence to reconstruct which tickets ran, which execution resources were selected, what verification ran, and what was accepted.
 
+## Implemented Rack AI progression primitive
+
+PR23 adds the missing trusted repository progression step required by ATHBA PR12:
+
+- approved work-unit execution now produces `accepted_head_sha`
+- the SHA is created under Rack AI Git/worktree authority, not inferred by ATHBA
+- rejected/non-approved work does not advance the accepted repository base
+- dependent work units can use the returned SHA as the next `repository.base_sha`
+
+This is intentionally the sequential MVP only:
+
+```text
+S0 -> A -> S1 -> B -> S2
+```
+
+Parallel DAG merge/reconciliation remains out of scope for this PR.
+
 ## Not in scope
 - universal/adaptive scheduler;
 - optimal GPU utilisation;

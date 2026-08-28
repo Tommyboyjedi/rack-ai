@@ -30,6 +30,7 @@ pub struct ReviewPacket {
     required_artifacts: Vec<String>,
     implementer_output: Option<String>,
     acceptance_verdict: Option<AcceptanceVerdict>,
+    accepted_head_sha: Option<String>,
     status: ChangeStatus,
     retention: RetentionStatus,
     last_error: Option<String>,
@@ -56,6 +57,7 @@ impl ReviewPacket {
             required_artifacts: Vec::new(),
             implementer_output: None,
             acceptance_verdict: None,
+            accepted_head_sha: None,
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
             last_error: None,
@@ -92,6 +94,7 @@ impl ReviewPacket {
                 .collect(),
             implementer_output: None,
             acceptance_verdict: None,
+            accepted_head_sha: None,
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
             last_error: None,
@@ -138,6 +141,11 @@ impl ReviewPacket {
         self
     }
 
+    pub fn with_accepted_head_sha(mut self, accepted_head_sha: String) -> Self {
+        self.accepted_head_sha = Some(accepted_head_sha);
+        self
+    }
+
     pub fn change_id(&self) -> &str {
         self.change_id.as_str()
     }
@@ -176,5 +184,9 @@ impl ReviewPacket {
 
     pub fn acceptance_verdict(&self) -> Option<&AcceptanceVerdict> {
         self.acceptance_verdict.as_ref()
+    }
+
+    pub fn accepted_head_sha(&self) -> Option<&String> {
+        self.accepted_head_sha.as_ref()
     }
 }

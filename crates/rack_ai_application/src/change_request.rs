@@ -55,10 +55,12 @@ impl ChangeRequest {
         ))?;
         let base_sha = if let Some(declared) = document.repository.base_sha {
             let declared_sha = GitSha::new(declared)?;
-            if declared_sha != resolved_sha {
-                return Err(
-                    "base sha does not match the registered repository baseline".to_string()
-                );
+            let resolved_declared_sha = resolution.git.resolve_sha(&ResolveGitShaRequest::new(
+                registered.root().to_path_buf(),
+                GitRef::new(declared_sha.value().to_string())?,
+            ))?;
+            if declared_sha != resolved_declared_sha {
+                return Err("base sha is not reachable in the registered repository".to_string());
             }
             declared_sha
         } else {

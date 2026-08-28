@@ -419,7 +419,7 @@ mod tests {
             None,
         )
         .unwrap_err();
-        assert!(error.contains("base sha does not match"));
+        assert!(error.contains("base sha"));
     }
 
     #[test]

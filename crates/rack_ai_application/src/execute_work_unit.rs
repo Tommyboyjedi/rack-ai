@@ -4,6 +4,7 @@ use rack_ai_domain::AcceptanceVerdict;
 use rack_ai_domain::ChangeStatus;
 use rack_ai_domain::Placement;
 
+use crate::CampaignCommitRequest;
 use crate::ChangeImplementer;
 use crate::ChangeManifestRepository;
 use crate::CommandPolicy;
@@ -72,9 +73,13 @@ pub struct ExecuteWorkUnitResult {
     pub status: ChangeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acceptance_verdict: Option<AcceptanceVerdict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_head_sha: Option<String>,
     pub branch: String,
     pub worktree_path: String,
     pub packet_path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 impl<'a> ExecuteWorkUnit<'a> {
@@ -109,13 +114,66 @@ impl<'a> ExecuteWorkUnit<'a> {
             mode: crate::ChangeExecutionMode::ImplementAndVerify,
             selected_worker: Some(selection.runtime().clone()),
         })?;
+        let (packet, packet_path) =
+            self.finalize_result(&request, change.packet, change.packet_path)?;
         Ok(build_result(
             &request,
             selection.runtime(),
             selection.placement(),
-            &change.packet,
-            change.packet_path,
+            &packet,
+            packet_path,
         ))
+    }
+
+    fn finalize_result(
+        &self,
+        request: &WorkUnitRequest,
+        packet: ReviewPacket,
+        packet_path: String,
+    ) -> Result<(ReviewPacket, String), String> {
+        if packet.acceptance_verdict() != Some(&AcceptanceVerdict::Approved) {
+            return Ok((packet, packet_path));
+        }
+        match self.promote_accepted_change(request, &packet) {
+            Ok(accepted_head_sha) => {
+                let packet = packet.with_accepted_head_sha(accepted_head_sha);
+                let packet_path = self.manifests.save(&packet)?;
+                Ok((packet, packet_path))
+            }
+            Err(error) => self.reject_unpromotable(packet, error),
+        }
+    }
+
+    fn promote_accepted_change(
+        &self,
+        request: &WorkUnitRequest,
+        packet: &ReviewPacket,
+    ) -> Result<String, String> {
+        let changed_paths = crate::source_paths(packet.changed_paths());
+        if changed_paths.is_empty() {
+            return Err("approved work unit did not produce a promotable source diff".to_string());
+        }
+        let change_id = request.change_id();
+        let commit = self.git.commit_local(&CampaignCommitRequest::new(
+            std::path::PathBuf::from(packet.worktree_path()),
+            change_id.as_str(),
+            "accepted",
+            changed_paths,
+        ))?;
+        Ok(commit.value().to_string())
+    }
+
+    fn reject_unpromotable(
+        &self,
+        packet: ReviewPacket,
+        error: String,
+    ) -> Result<(ReviewPacket, String), String> {
+        let packet = packet
+            .with_status(ChangeStatus::Failed)
+            .with_acceptance_verdict(AcceptanceVerdict::Rejected)
+            .with_last_error(Some(error));
+        let packet_path = self.manifests.save(&packet)?;
+        Ok((packet, packet_path))
     }
 }
 
@@ -134,9 +192,11 @@ fn build_result(
         placement: placement.clone(),
         status: packet.status().clone(),
         acceptance_verdict: packet.acceptance_verdict().cloned(),
+        accepted_head_sha: packet.accepted_head_sha().cloned(),
         branch: packet.branch().to_string(),
         worktree_path: packet.worktree_path().to_string(),
         packet_path,
+        last_error: packet.last_error().cloned(),
     }
 }
 
@@ -158,6 +218,7 @@ mod tests {
     use super::WorkUnitWorkerSelection;
     use super::WorkUnitWorkerSelector;
     use crate::ApprovedCommandPolicy;
+    use crate::CampaignCommitRequest;
     use crate::ChangeManifestRepository;
     use crate::CommandEvidence;
     use crate::CreateChangeWorktreeRequest;
@@ -226,6 +287,7 @@ mod tests {
         assert_eq!(result.selected_worker_id, "local-coder");
         assert_eq!(result.status, ChangeStatus::ChecksPassed);
         assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Approved));
+        assert_eq!(result.accepted_head_sha, Some("b".repeat(40)));
         assert_eq!(
             executor.seen_commands(),
             vec![vec![
@@ -235,6 +297,104 @@ mod tests {
             ]]
         );
         assert_eq!(implementer.seen_workers(), vec!["local-coder".to_string()]);
+        assert_eq!(git.commit_calls(), 1);
+        assert_eq!(manifests.save_count(), 2);
+        assert_eq!(
+            manifests.last_packet().accepted_head_sha(),
+            Some(&"b".repeat(40))
+        );
+    }
+
+    #[test]
+    fn approved_work_unit_without_promotable_diff_is_rejected_and_does_not_advance() {
+        let fixture = Fixture::new();
+        let git = FixtureGit::new(&fixture.root, Vec::new());
+        let manifests = FixtureManifests::default();
+        let executor = FixtureExecutor::default();
+        let implementer = ScriptedChangeImplementer::new(
+            &executor,
+            vec![ScriptedAttempt {
+                match_worker: Some("local-coder".to_string()),
+                writes: vec![ScriptedWrite {
+                    path: "src/lib.rs".to_string(),
+                    content: "pub fn baseline() {}\n".to_string(),
+                }],
+                output: "COMPLETE".to_string(),
+                error: None,
+                protocol_error: None,
+                executor_kind: Some("jcode-direct".to_string()),
+            }],
+        );
+        let selector = FixedSelector::new(
+            "local-coder",
+            Placement::new(
+                vec!["local-coder".to_string()],
+                vec!["gpu-2060".to_string()],
+            ),
+        );
+        let result = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+            registry: &fixture,
+            command_policy: &ApprovedCommandPolicy::default(),
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&executor),
+            implementer: Some(&implementer),
+            selector: &selector,
+        })
+        .execute(sample_document())
+        .unwrap();
+        assert_eq!(result.status, ChangeStatus::Failed);
+        assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Rejected));
+        assert_eq!(result.accepted_head_sha, None);
+        assert_eq!(git.commit_calls(), 0);
+        assert_eq!(
+            result.last_error,
+            Some("approved work unit did not produce a promotable source diff".to_string())
+        );
+    }
+
+    #[test]
+    fn path_policy_failure_does_not_advance_repository_state() {
+        let fixture = Fixture::new();
+        let git = FixtureGit::new(&fixture.root, vec!["README.md".to_string()]);
+        let manifests = FixtureManifests::default();
+        let executor = FixtureExecutor::default();
+        let implementer = ScriptedChangeImplementer::new(
+            &executor,
+            vec![ScriptedAttempt {
+                match_worker: Some("local-coder".to_string()),
+                writes: vec![ScriptedWrite {
+                    path: "src/lib.rs".to_string(),
+                    content: "pub fn tiny() -> &'static str { \"ok\" }\n".to_string(),
+                }],
+                output: "COMPLETE".to_string(),
+                error: None,
+                protocol_error: None,
+                executor_kind: Some("jcode-direct".to_string()),
+            }],
+        );
+        let selector = FixedSelector::new(
+            "local-coder",
+            Placement::new(
+                vec!["local-coder".to_string()],
+                vec!["gpu-2060".to_string()],
+            ),
+        );
+        let result = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+            registry: &fixture,
+            command_policy: &ApprovedCommandPolicy::default(),
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&executor),
+            implementer: Some(&implementer),
+            selector: &selector,
+        })
+        .execute(sample_document())
+        .unwrap();
+        assert_eq!(result.status, ChangeStatus::PathPolicyFailed);
+        assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Rejected));
+        assert_eq!(result.accepted_head_sha, None);
+        assert_eq!(git.commit_calls(), 0);
     }
 
     #[test]
@@ -391,8 +551,10 @@ mod tests {
     struct FixtureGit {
         root: PathBuf,
         changed_paths: Vec<String>,
-        sha: GitSha,
+        base_sha: GitSha,
+        commit_sha: GitSha,
         inspect_count: RefCell<usize>,
+        commit_calls: RefCell<usize>,
     }
 
     impl FixtureGit {
@@ -400,15 +562,21 @@ mod tests {
             Self {
                 root: root.clone(),
                 changed_paths,
-                sha: GitSha::new("a".repeat(40)).unwrap(),
+                base_sha: GitSha::new("a".repeat(40)).unwrap(),
+                commit_sha: GitSha::new("b".repeat(40)).unwrap(),
                 inspect_count: RefCell::new(0),
+                commit_calls: RefCell::new(0),
             }
+        }
+
+        fn commit_calls(&self) -> usize {
+            *self.commit_calls.borrow()
         }
     }
 
     impl GitWorktree for FixtureGit {
         fn resolve_sha(&self, _request: &ResolveGitShaRequest) -> Result<GitSha, String> {
-            Ok(self.sha.clone())
+            Ok(self.base_sha.clone())
         }
 
         fn create(
@@ -427,7 +595,7 @@ mod tests {
                 worktree,
             )
             .with_branch_name(request.branch_name().to_string())
-            .with_base_sha(self.sha.clone()))
+            .with_base_sha(self.base_sha.clone()))
         }
 
         fn inspect(&self, _request: &InspectChangeWorktreeRequest) -> Result<GitEvidence, String> {
@@ -438,24 +606,43 @@ mod tests {
             } else {
                 self.changed_paths.clone()
             };
-            Ok(GitEvidence::new(self.sha.clone(), String::new()).with_changed_paths(paths))
+            Ok(GitEvidence::new(self.base_sha.clone(), String::new()).with_changed_paths(paths))
+        }
+
+        fn commit_local(&self, request: &CampaignCommitRequest) -> Result<GitSha, String> {
+            *self.commit_calls.borrow_mut() += 1;
+            assert_eq!(request.message(), "rack(adaptos--adaptos-001): accepted");
+            assert_eq!(request.paths(), ["src/lib.rs"]);
+            Ok(self.commit_sha.clone())
         }
     }
 
     #[derive(Default)]
     struct FixtureManifests {
         counter: RefCell<u32>,
+        packets: RefCell<Vec<ReviewPacket>>,
     }
 
     impl ChangeManifestRepository for FixtureManifests {
         fn save(&self, packet: &ReviewPacket) -> Result<String, String> {
             let mut counter = self.counter.borrow_mut();
             *counter += 1;
+            self.packets.borrow_mut().push(packet.clone());
             Ok(format!(
                 "/tmp/packet-{}-{}.json",
                 packet.change_id(),
                 *counter
             ))
+        }
+    }
+
+    impl FixtureManifests {
+        fn save_count(&self) -> usize {
+            self.packets.borrow().len()
+        }
+
+        fn last_packet(&self) -> ReviewPacket {
+            self.packets.borrow().last().cloned().unwrap()
         }
     }
 
