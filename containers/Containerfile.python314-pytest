@@ -1,28 +1,18 @@
-FROM python:3.14-slim-bookworm
+FROM docker.io/library/python:3.14-slim
 
-ARG RUSTUP_TOOLCHAIN=stable
-ARG PYTEST_VERSION=8.4.2
-
-ENV DEBIAN_FRONTEND=noninteractive
-ENV RUSTUP_HOME=/usr/local/rustup
-ENV CARGO_HOME=/usr/local/cargo
-ENV PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
+ENV CARGO_HOME=/opt/rack-rust/cargo \
+    RUSTUP_HOME=/opt/rack-rust/rustup \
+    PATH=/opt/rack-rust/cargo/bin:${PATH}
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        build-essential \
-        ca-certificates \
-        curl \
-        git \
-        pkg-config \
+    && apt-get install --yes --no-install-recommends ca-certificates curl build-essential \
+    && python3 -m pip install --no-cache-dir pytest==8.4.2 \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable \
+    && python3 --version \
+    && python3 -m pytest --version \
+    && cargo --version \
+    && rustc --version \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-    | sh -s -- -y --profile minimal --default-toolchain ${RUSTUP_TOOLCHAIN}
-
-RUN python3 -m pip install --no-cache-dir pytest==${PYTEST_VERSION}
-
-RUN rustc --version \
-    && cargo --version \
-    && python3 --version \
-    && python3 -m pytest --version
+# Rack AI executes acceptance with network disabled. This image deliberately
+# contains the Python 3.14 pytest runtime and a current Rust toolchain.

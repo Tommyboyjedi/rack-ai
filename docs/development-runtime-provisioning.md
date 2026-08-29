@@ -4,6 +4,14 @@ This tactical Python runtime patch is not Rack AI's final development-environmen
 
 Today Rack AI selects a single pre-baked executor image for isolated repository work. That is sufficient to unblock the ATHBA PR17 Python 3.14 `pytest` proof, but it is not sufficient as a long-term contract for heterogeneous software projects.
 
+For the current tactical Python path, Rack AI records runtime preflight evidence before Python acceptance commands run:
+
+- interpreter path
+- Python version
+- `pytest` availability and version
+
+That tactical runtime is Rack-AI-owned. It does not rely on the interactive operator shell environment and it does not implicitly trust a target repository virtual environment.
+
 Future runtime provisioning should support explicit, versioned execution profiles such as:
 
 - Python

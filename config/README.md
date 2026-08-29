@@ -6,15 +6,15 @@ This directory holds version pins, model-role mappings, task templates, and poli
 
 Change jobs run with network disabled. The executor image must already be present on the host (`podman pull ...` is a host operation, not a job operation). Cargo home and target directories are tmpfs mounts at `/rack-build` inside the container, not the Git worktree. Projects that need crates.io or other downloads must use a pre-baked image or a vendored tree; the job will not fetch over the network.
 
-Python acceptance currently relies on the Rack AI-owned executor image `localhost/rack-ai-python314-pytest:pr17`. Build it once on the host before running Python-based work units:
+## Python 3.14 pytest executor
 
-```bash
-podman build \
-  --tag localhost/rack-ai-python314-pytest:pr17 \
-  --file containers/Containerfile.python314-pytest .
+Build the configured isolated runtime from the repository root:
+
+```sh
+podman build --tag localhost/rack-ai-python314-pytest:pr17 --file containers/Containerfile.python314-pytest .
 ```
 
-Rack AI runs Python acceptance inside that image, not through the interactive user's shell or a target repository virtualenv. For Python commands, Rack AI first records runtime preflight evidence for the selected interpreter path, Python version, and `pytest` availability before running the supplied acceptance command.
+It provides Python 3.14 with pytest 8.4.2 and retains a current Rust toolchain for existing Rust acceptance commands. It is built once on the host; change jobs themselves remain network-disabled.
 
 `bin/rack-change` records a deterministic `acceptance_verdict` from Git/path/acceptance gates. It does not yet run the local-primary planner/verifier DAG.
 

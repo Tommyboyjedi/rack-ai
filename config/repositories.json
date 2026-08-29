@@ -24,6 +24,18 @@
       "root": "/home/tomp/projects/adaptos",
       "default_base_ref": "main",
       "enabled": true
+    },
+    {
+      "id": "tiny-ticket-pr13-fixture",
+      "root": "/home/tomp/projects/tiny-ticket-pr13-fixture",
+      "default_base_ref": "main",
+      "enabled": true
+    },
+    {
+      "id": "reservation-book-pr16-fixture",
+      "root": "/home/tomp/projects/reservation-book-pr16-fixture",
+      "default_base_ref": "main",
+      "enabled": true
     }
   ]
 }
