@@ -13,7 +13,7 @@
   ],
   "executor": {
     "backend": "podman",
-    "image": "docker.io/library/rust:bookworm",
+    "image": "localhost/rack-ai-python314-pytest:pr17",
     "workspace_path": "/workspace",
     "memory": "2g",
     "pids_limit": 256

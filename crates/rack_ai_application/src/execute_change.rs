@@ -23,6 +23,10 @@ use crate::RunCommandRequest;
 use crate::WorkspaceExecutor;
 use crate::WorkspacePath;
 
+const PYTHON_EXECUTABLE_PROBE: [&str; 3] = ["python3", "-c", "import sys; print(sys.executable)"];
+const PYTHON_VERSION_PROBE: [&str; 2] = ["python3", "--version"];
+const PYTEST_VERSION_PROBE: [&str; 4] = ["python3", "-m", "pytest", "--version"];
+
 pub struct ExecuteChange<'a> {
     registry: &'a dyn RepositoryRegistry,
     command_policy: &'a dyn CommandPolicy,
@@ -210,7 +214,21 @@ impl<'a> ExecuteChange<'a> {
         };
         let timeout = request.limits().timeout_seconds().value();
         let mut commands = Vec::new();
+        let mut python_runtime_checked = false;
         for command in request.acceptance().commands() {
+            if !python_runtime_checked && requires_python_runtime(command.argv()) {
+                match self.run_python_runtime_preflight(
+                    executor,
+                    workspace,
+                    timeout,
+                    packet.clone(),
+                    commands,
+                ) {
+                    Ok(recorded) => commands = recorded,
+                    Err(packet) => return Ok(packet),
+                }
+                python_runtime_checked = true;
+            }
             let result = executor.run_command(
                 &RunCommandRequest::new(
                     workspace.worktree_path().to_path_buf(),
@@ -256,6 +274,52 @@ impl<'a> ExecuteChange<'a> {
             .with_status(ChangeStatus::ChecksPassed))
     }
 
+    fn run_python_runtime_preflight(
+        &self,
+        executor: &dyn WorkspaceExecutor,
+        workspace: &ChangeWorkspace,
+        timeout: u32,
+        packet: ReviewPacket,
+        mut commands: Vec<crate::CommandEvidence>,
+    ) -> Result<Vec<crate::CommandEvidence>, ReviewPacket> {
+        for argv in python_runtime_probe_commands() {
+            let request =
+                match RunCommandRequest::new(workspace.worktree_path().to_path_buf(), argv) {
+                    Ok(value) => value.with_timeout_seconds(timeout),
+                    Err(error) => {
+                        return Err(fail(
+                            packet.with_commands(commands),
+                            ChangeStatus::ChecksFailed,
+                            error,
+                        ));
+                    }
+                };
+            let result = executor.run_command(&request);
+            match result {
+                Ok(execution) => {
+                    let evidence = execution.evidence().clone();
+                    let failed = !evidence.succeeded();
+                    commands.push(evidence.clone());
+                    if failed {
+                        return Err(fail(
+                            packet.with_commands(commands),
+                            ChangeStatus::ChecksFailed,
+                            python_runtime_failure_message(&evidence),
+                        ));
+                    }
+                }
+                Err(error) => {
+                    return Err(fail(
+                        packet.with_commands(commands),
+                        check_status(&error),
+                        error,
+                    ));
+                }
+            }
+        }
+        Ok(commands)
+    }
+
     fn assert_artifacts(
         &self,
         executor: &dyn WorkspaceExecutor,
@@ -278,6 +342,41 @@ impl<'a> ExecuteChange<'a> {
             packet_path,
         })
     }
+}
+
+fn requires_python_runtime(argv: &[String]) -> bool {
+    matches!(
+        argv.first().map(String::as_str),
+        Some("python3") | Some("pytest")
+    )
+}
+
+fn python_runtime_probe_commands() -> Vec<Vec<String>> {
+    vec![
+        probe_command(&PYTHON_EXECUTABLE_PROBE),
+        probe_command(&PYTHON_VERSION_PROBE),
+        probe_command(&PYTEST_VERSION_PROBE),
+    ]
+}
+
+fn probe_command(argv: &[&str]) -> Vec<String> {
+    argv.iter().map(|value| value.to_string()).collect()
+}
+
+fn python_runtime_failure_message(evidence: &crate::CommandEvidence) -> String {
+    let detail = if !evidence.stderr().trim().is_empty() {
+        evidence.stderr().trim().to_string()
+    } else if !evidence.stdout().trim().is_empty() {
+        evidence.stdout().trim().to_string()
+    } else if evidence.timed_out() {
+        "timed out".to_string()
+    } else {
+        format!("exit code {}", evidence.exit_code())
+    };
+    format!(
+        "python runtime preflight failed: {} ({detail})",
+        evidence.argv().join(" ")
+    )
 }
 
 fn reject_disallowed(request: &ChangeRequest, packet: &ReviewPacket) -> Option<ReviewPacket> {
@@ -330,6 +429,7 @@ impl ExecuteChangeResult {
 mod tests {
     use std::cell::Cell;
     use std::cell::RefCell;
+    use std::collections::VecDeque;
     use std::path::PathBuf;
 
     use rack_ai_domain::AcceptanceVerdict;
@@ -518,7 +618,7 @@ mod tests {
     fn runs_acceptance_commands_through_executor() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::new();
         let result = execute(
             &git,
             &manifests,
@@ -539,7 +639,7 @@ mod tests {
     fn records_failed_acceptance_command() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: true };
+        let executor = FakeExecutor::with_outcomes(vec![FakeCommandResult::completed(1)]);
         let result = execute(
             &git,
             &manifests,
@@ -561,7 +661,7 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::new();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -590,7 +690,7 @@ mod tests {
         let git = FakeGit::matching("a".repeat(40))
             .with_after_paths(vec!["README.md".to_string(), "src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::new();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -617,7 +717,7 @@ mod tests {
             .with_after_paths(vec!["src/lib.rs".to_string()])
             .with_after_checks_paths(vec!["src/lib.rs".to_string(), "README.md".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::new();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -642,7 +742,7 @@ mod tests {
     fn fails_closed_when_implementer_missing() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::new();
         let result = execute(
             &git,
             &manifests,
@@ -655,6 +755,97 @@ mod tests {
         assert_eq!(
             result.packet.acceptance_verdict(),
             Some(&AcceptanceVerdict::Rejected)
+        );
+    }
+
+    #[test]
+    fn python_acceptance_runs_runtime_preflight_before_command() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::new();
+        let result = execute_document(
+            &git,
+            &manifests,
+            python_document(vec![
+                "python3".to_string(),
+                "scripts/assert_test_fails.py".to_string(),
+                "tests/test_example.py::test_red".to_string(),
+            ]),
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(executor.commands(), python_probe_and_command_argvs());
+        assert_eq!(result.packet.commands().len(), 4);
+    }
+
+    #[test]
+    fn python_runtime_preflight_fails_closed_when_pytest_is_missing() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::with_outcomes(vec![
+            FakeCommandResult::success().with_stdout("/usr/bin/python3"),
+            FakeCommandResult::success().with_stdout("Python 3.14.4"),
+            FakeCommandResult::completed(1).with_stderr("/usr/bin/python3: No module named pytest"),
+        ]);
+        let result = execute_document(
+            &git,
+            &manifests,
+            python_document(vec![
+                "python3".to_string(),
+                "scripts/assert_test_fails.py".to_string(),
+                "tests/test_example.py::test_red".to_string(),
+            ]),
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksFailed);
+        assert_eq!(result.packet.commands().len(), 3);
+        assert!(
+            result
+                .packet
+                .last_error()
+                .unwrap()
+                .contains("python runtime preflight failed")
+        );
+        assert!(
+            result
+                .packet
+                .last_error()
+                .unwrap()
+                .contains("No module named pytest")
+        );
+        assert_eq!(
+            executor.commands(),
+            vec![
+                super::probe_command(&super::PYTHON_EXECUTABLE_PROBE),
+                super::probe_command(&super::PYTHON_VERSION_PROBE),
+                super::probe_command(&super::PYTEST_VERSION_PROBE),
+            ]
+        );
+    }
+
+    #[test]
+    fn non_python_acceptance_does_not_run_python_preflight() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::new();
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            executor.commands(),
+            vec![vec!["cargo".to_string(), "test".to_string()]]
         );
     }
 
@@ -682,6 +873,31 @@ mod tests {
         })
     }
 
+    fn execute_document(
+        git: &FakeGit,
+        manifests: &FakeManifests,
+        document: ChangeRequestDocument,
+        mode: ChangeExecutionMode,
+        executor: Option<&FakeExecutor>,
+        implementer: Option<&FakeImplementer>,
+    ) -> Result<super::ExecuteChangeResult, String> {
+        let registry = SampleRegistry;
+        let policy = ApprovedCommandPolicy::default();
+        let service = ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &registry,
+            command_policy: &policy,
+            git,
+            manifests,
+            executor: executor.map(|item| item as &dyn WorkspaceExecutor),
+            implementer: implementer.map(|item| item as &dyn ChangeImplementer),
+        });
+        service.execute(ExecuteChangeRequest {
+            document,
+            mode,
+            selected_worker: None,
+        })
+    }
+
     fn sample_document(base_sha: Option<String>) -> ChangeRequestDocument {
         serde_json::from_value(serde_json::json!({
             "change_id": "job-1",
@@ -697,6 +913,36 @@ mod tests {
             "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
         }))
         .unwrap()
+    }
+
+    fn python_document(command: Vec<String>) -> ChangeRequestDocument {
+        serde_json::from_value(serde_json::json!({
+            "change_id": "job-1",
+            "repository": {
+                "id": "adaptos",
+                "registered_root": "/srv/projects/adaptos",
+                "base_ref": "main",
+                "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            },
+            "task": "Run Python acceptance.",
+            "allowed_paths": ["src/", "tests/", "scripts/"],
+            "acceptance": {"commands": [command]},
+            "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
+        }))
+        .unwrap()
+    }
+
+    fn python_probe_and_command_argvs() -> Vec<Vec<String>> {
+        vec![
+            super::probe_command(&super::PYTHON_EXECUTABLE_PROBE),
+            super::probe_command(&super::PYTHON_VERSION_PROBE),
+            super::probe_command(&super::PYTEST_VERSION_PROBE),
+            vec![
+                "python3".to_string(),
+                "scripts/assert_test_fails.py".to_string(),
+                "tests/test_example.py::test_red".to_string(),
+            ],
+        ]
     }
 
     struct SampleRegistry;
@@ -814,8 +1060,63 @@ mod tests {
         }
     }
 
+    #[derive(Clone)]
+    struct FakeCommandResult {
+        exit_code: i32,
+        stdout: String,
+        stderr: String,
+        timed_out: bool,
+    }
+
+    impl FakeCommandResult {
+        fn success() -> Self {
+            Self::completed(0)
+        }
+
+        fn completed(exit_code: i32) -> Self {
+            Self {
+                exit_code,
+                stdout: String::new(),
+                stderr: String::new(),
+                timed_out: false,
+            }
+        }
+
+        fn with_stdout(mut self, stdout: &str) -> Self {
+            self.stdout = stdout.to_string();
+            self
+        }
+
+        fn with_stderr(mut self, stderr: &str) -> Self {
+            self.stderr = stderr.to_string();
+            self
+        }
+    }
+
     struct FakeExecutor {
-        fail: bool,
+        outcomes: RefCell<VecDeque<Result<FakeCommandResult, String>>>,
+        commands: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl FakeExecutor {
+        fn new() -> Self {
+            Self::with_outcomes(Vec::new())
+        }
+
+        fn with_outcomes(outcomes: Vec<FakeCommandResult>) -> Self {
+            let queue = outcomes
+                .into_iter()
+                .map(Ok)
+                .collect::<VecDeque<Result<FakeCommandResult, String>>>();
+            Self {
+                outcomes: RefCell::new(queue),
+                commands: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn commands(&self) -> Vec<Vec<String>> {
+            self.commands.borrow().clone()
+        }
     }
 
     impl WorkspaceExecutor for FakeExecutor {
@@ -840,11 +1141,17 @@ mod tests {
             &self,
             request: &RunCommandRequest,
         ) -> Result<WorkspaceExecutionResult, String> {
-            let code = if self.fail { 1 } else { 0 };
-            Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
-                request.argv().to_vec(),
-                code,
-            )))
+            self.commands.borrow_mut().push(request.argv().to_vec());
+            let outcome = self
+                .outcomes
+                .borrow_mut()
+                .pop_front()
+                .unwrap_or_else(|| Ok(FakeCommandResult::success()))?;
+            let evidence = CommandEvidence::new(request.argv().to_vec(), outcome.exit_code)
+                .with_stdout(outcome.stdout)
+                .with_stderr(outcome.stderr)
+                .with_timed_out(outcome.timed_out);
+            Ok(WorkspaceExecutionResult::new(evidence))
         }
     }
 

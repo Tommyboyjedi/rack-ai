@@ -28,11 +28,21 @@ impl ChangeLayout {
     }
 
     pub fn is_ephemeral_path(path: &str) -> bool {
-        path == "target"
-            || path.starts_with("target/")
-            || path == ".rack-cargo"
-            || path.starts_with(".rack-cargo/")
+        let normalized = path.trim_end_matches('/');
+        normalized == "target"
+            || normalized.starts_with("target/")
+            || normalized == ".rack-cargo"
+            || normalized.starts_with(".rack-cargo/")
+            || contains_path_segment(normalized, "__pycache__")
+            || contains_path_segment(normalized, ".pytest_cache")
     }
+}
+
+fn contains_path_segment(path: &str, segment: &str) -> bool {
+    path == segment
+        || path.starts_with(&format!("{segment}/"))
+        || path.contains(&format!("/{segment}/"))
+        || path.ends_with(&format!("/{segment}"))
 }
 
 #[cfg(test)]
@@ -56,6 +66,11 @@ mod tests {
         );
         assert_eq!(ChangeLayout::coder_max_turns(), 16);
         assert!(ChangeLayout::is_ephemeral_path("target/debug/fixture"));
+        assert!(ChangeLayout::is_ephemeral_path("__pycache__/"));
+        assert!(ChangeLayout::is_ephemeral_path("tests/__pycache__/"));
+        assert!(ChangeLayout::is_ephemeral_path(
+            ".pytest_cache/v/cache/nodeids"
+        ));
         assert!(!ChangeLayout::is_ephemeral_path("src/lib.rs"));
     }
 }
