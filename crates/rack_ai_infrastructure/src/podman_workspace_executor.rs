@@ -9,6 +9,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rack_ai_application::CommandEvidence;
 use rack_ai_application::ContainerLifecycleObserver;
+use rack_ai_application::EnvironmentResourceMount;
 use rack_ai_application::ExecutorConfig;
 use rack_ai_application::ReadFileRequest;
 use rack_ai_application::RunCommandRequest;
@@ -61,6 +62,7 @@ impl WorkspaceExecutor for PodmanWorkspaceExecutor {
             ],
             Some(request.content().to_string()),
             request.timeout_seconds(),
+            &[],
         )
     }
 
@@ -79,6 +81,7 @@ impl WorkspaceExecutor for PodmanWorkspaceExecutor {
             ],
             None,
             request.timeout_seconds(),
+            &[],
         )?;
         let content = result.evidence().stdout().to_string();
         Ok(result.with_content(content))
@@ -90,6 +93,7 @@ impl WorkspaceExecutor for PodmanWorkspaceExecutor {
             request.argv().to_vec(),
             None,
             request.timeout_seconds(),
+            request.environment_resources(),
         )
     }
 }
@@ -101,6 +105,7 @@ impl PodmanWorkspaceExecutor {
         argv: Vec<String>,
         stdin: Option<String>,
         timeout_seconds: u32,
+        environment_resources: &[EnvironmentResourceMount],
     ) -> Result<WorkspaceExecutionResult, String> {
         if !worktree_path.is_dir() {
             return Err(format!(
@@ -120,7 +125,8 @@ impl PodmanWorkspaceExecutor {
                 .with_timeout_seconds(timeout_seconds)
                 .with_argv(argv.clone())
                 .with_stdin(stdin.clone())
-                .with_cidfile(cidfile);
+                .with_cidfile(cidfile)
+                .with_environment_resources(environment_resources.to_vec());
         let plan = PodmanRunPlan::from_invocation(&invocation)?;
         let mut command = Command::new(self.command.as_str());
         command.args(plan.arguments());

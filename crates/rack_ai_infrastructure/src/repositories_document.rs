@@ -4,6 +4,7 @@ use serde::Serialize;
 use crate::ExecutorRecord;
 use crate::RepositoryRecord;
 use crate::TrustedDynamicRootRecord;
+use crate::TrustedEnvironmentRootRecord;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RepositoriesDocument {
@@ -15,6 +16,8 @@ pub struct RepositoriesDocument {
     pub executor: ExecutorRecord,
     #[serde(default)]
     pub trusted_dynamic_roots: Vec<TrustedDynamicRootRecord>,
+    #[serde(default)]
+    pub trusted_environment_roots: Vec<TrustedEnvironmentRootRecord>,
     #[serde(default)]
     pub repositories: Vec<RepositoryRecord>,
 }
@@ -35,6 +38,7 @@ mod tests {
         .unwrap();
         assert_eq!(document.workspace_root, "/srv/rack-workspaces");
         assert!(document.trusted_dynamic_roots.is_empty());
+        assert!(document.trusted_environment_roots.is_empty());
         assert!(document.repositories.is_empty());
     }
 }

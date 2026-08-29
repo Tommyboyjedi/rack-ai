@@ -38,6 +38,8 @@ pub struct WorkUnitDocument {
     pub allowed_paths: Vec<String>,
     pub acceptance: WorkUnitAcceptanceDocument,
     #[serde(default)]
+    pub environment_resources: Vec<String>,
+    #[serde(default)]
     pub readiness: WorkUnitReadinessDocument,
     #[serde(default)]
     pub requirements: WorkUnitRequirementsDocument,
@@ -140,6 +142,7 @@ mod tests {
         assert!(document.work_unit.readiness.ready);
         assert_eq!(document.work_unit.limits.network, "disabled");
         assert!(document.repository.root.is_none());
+        assert!(document.work_unit.environment_resources.is_empty());
     }
 
     #[test]

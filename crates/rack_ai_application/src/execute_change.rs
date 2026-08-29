@@ -219,7 +219,8 @@ impl<'a> ExecuteChange<'a> {
                     workspace.worktree_path().to_path_buf(),
                     command.argv().to_vec(),
                 )?
-                .with_timeout_seconds(timeout),
+                .with_timeout_seconds(timeout)
+                .with_environment_resources(request.environment_resources().to_vec()),
             );
             match result {
                 Ok(execution) => commands.push(execution.evidence().clone()),
@@ -574,7 +575,7 @@ mod tests {
     fn runs_acceptance_commands_through_executor() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let result = execute(
             &git,
             &manifests,
@@ -592,10 +593,35 @@ mod tests {
     }
 
     #[test]
+    fn forwards_environment_resources_to_acceptance_executor() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let mut document = sample_document(Some("a".repeat(40)));
+        document.environment_resources = vec!["/srv/ATHBA/.venv".to_string()];
+        let registry = EnvironmentRegistry;
+        let result = execute_with_registry(
+            &registry,
+            document,
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            executor.seen_environment_resources(),
+            vec![vec!["/srv/ATHBA/.venv".to_string()]]
+        );
+    }
+
+    #[test]
     fn records_failed_acceptance_command() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: true };
+        let executor = FakeExecutor::failing();
         let result = execute(
             &git,
             &manifests,
@@ -617,7 +643,7 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -649,7 +675,7 @@ mod tests {
     fn no_change_accepted_execution_does_not_create_unnecessary_commit() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -671,7 +697,7 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: true };
+        let executor = FakeExecutor::failing();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -692,7 +718,7 @@ mod tests {
         let git = FakeGit::matching("a".repeat(40))
             .with_after_paths(vec!["README.md".to_string(), "src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -720,7 +746,7 @@ mod tests {
             .with_after_paths(vec!["src/lib.rs".to_string()])
             .with_after_checks_paths(vec!["src/lib.rs".to_string(), "README.md".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -747,7 +773,7 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let implementer = FakeImplementer {
             output: "COMPLETE".to_string(),
         };
@@ -777,7 +803,7 @@ mod tests {
     fn fails_closed_when_implementer_missing() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let result = execute(
             &git,
             &manifests,
@@ -923,6 +949,35 @@ mod tests {
         }
     }
 
+    struct EnvironmentRegistry;
+
+    impl RepositoryRegistry for EnvironmentRegistry {
+        fn workspace_root(&self) -> Result<WorkspaceRoot, String> {
+            WorkspaceRoot::new(PathBuf::from("/srv/rack-workspaces"))
+        }
+
+        fn executor_config(&self) -> Result<ExecutorConfig, String> {
+            ExecutorConfig::podman("rust:bookworm".to_string())
+        }
+
+        fn find(&self, id: &RepositoryId) -> Result<RegisteredRepository, String> {
+            if id.value() != "adaptos" {
+                return Err(format!("repository {} is not registered", id.value()));
+            }
+            RegisteredRepository::new(id.clone(), PathBuf::from("/srv/projects/adaptos"))
+        }
+
+        fn authorize_environment_resources(
+            &self,
+            requested_paths: &[String],
+        ) -> Result<Vec<crate::EnvironmentResourceMount>, String> {
+            requested_paths
+                .iter()
+                .map(|path| crate::EnvironmentResourceMount::same_path(PathBuf::from(path)))
+                .collect()
+        }
+    }
+
     struct EmptyRegistry;
 
     impl RepositoryRegistry for EmptyRegistry {
@@ -1048,6 +1103,27 @@ mod tests {
 
     struct FakeExecutor {
         fail: bool,
+        seen_environment_resources: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl FakeExecutor {
+        fn succeeding() -> Self {
+            Self {
+                fail: false,
+                seen_environment_resources: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                fail: true,
+                seen_environment_resources: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn seen_environment_resources(&self) -> Vec<Vec<String>> {
+            self.seen_environment_resources.borrow().clone()
+        }
     }
 
     impl WorkspaceExecutor for FakeExecutor {
@@ -1072,6 +1148,13 @@ mod tests {
             &self,
             request: &RunCommandRequest,
         ) -> Result<WorkspaceExecutionResult, String> {
+            self.seen_environment_resources.borrow_mut().push(
+                request
+                    .environment_resources()
+                    .iter()
+                    .map(|item| item.source_path().display().to_string())
+                    .collect(),
+            );
             let code = if self.fail { 1 } else { 0 };
             Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
                 request.argv().to_vec(),

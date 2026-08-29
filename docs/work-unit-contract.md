@@ -58,6 +58,7 @@ Unknown fields are rejected. This is deliberate: external callers should not be 
       "commands": [["cargo", "test", "save_single_open_ticket"]],
       "required_artifacts": ["src/lib.rs"]
     },
+    "environment_resources": ["/srv/ATHBA/.venv"],
     "readiness": {
       "ready": true,
       "depends_on": []
@@ -102,6 +103,7 @@ Rack AI still resolves the target repository, enforces self-target protection, r
 - `allowed_paths`: the only writable paths the implementation is allowed to change
 - `acceptance.commands`: deterministic acceptance commands that Rack AI runs itself
 - `acceptance.required_artifacts`: files that must exist for the unit to pass
+- `environment_resources`: administrator-authorized host paths Rack AI should mount read-only into the isolated executor at the same absolute path
 - `readiness.ready`: must be `true` for execution in the MVP
 - `readiness.depends_on`: optional prerequisite work-unit ids
 - `requirements.capability`: current MVP supports `implementation`

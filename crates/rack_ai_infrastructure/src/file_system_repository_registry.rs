@@ -3,6 +3,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use rack_ai_application::ApprovedCommandPolicy;
+use rack_ai_application::EnvironmentResourceMount;
 use rack_ai_application::ExecutorConfig;
 use rack_ai_application::RegisteredRepository;
 use rack_ai_application::RepositoryRegistry;
@@ -15,6 +16,7 @@ use crate::RegistryPaths;
 use crate::RepositoriesDocument;
 use crate::RepositoryRecord;
 use crate::TrustedDynamicRootRecord;
+use crate::TrustedEnvironmentRootRecord;
 
 pub struct FileSystemRepositoryRegistry {
     paths: RegistryPaths,
@@ -83,6 +85,19 @@ impl RepositoryRegistry for FileSystemRepositoryRegistry {
             requested_root.ok_or(format!("repository {} is not registered", id.value()))?;
         authorize_dynamic_repository(self.paths.root(), &document, id, requested_root)
     }
+
+    fn authorize_environment_resources(
+        &self,
+        requested_paths: &[String],
+    ) -> Result<Vec<EnvironmentResourceMount>, String> {
+        let document = self.load_document()?;
+        requested_paths
+            .iter()
+            .map(|path| {
+                authorize_environment_resource(self.paths.root(), &document, Path::new(path))
+            })
+            .collect()
+    }
 }
 
 fn repository_record<'a>(
@@ -125,6 +140,22 @@ fn authorize_dynamic_repository(
     RegisteredRepository::new(id.clone(), canonical_requested)
 }
 
+fn authorize_environment_resource(
+    live_context_root: &Path,
+    document: &RepositoriesDocument,
+    requested_path: &Path,
+) -> Result<EnvironmentResourceMount, String> {
+    let canonical_requested = canonical_existing_path(requested_path, "environment resource path")?;
+    assert_not_live_environment_target(live_context_root, &canonical_requested)?;
+    if trusted_environment_root(document, &canonical_requested)?.is_none() {
+        return Err(format!(
+            "environment resource path {} is outside trusted environment roots",
+            requested_path.display()
+        ));
+    }
+    EnvironmentResourceMount::same_path(canonical_requested)
+}
+
 fn trusted_dynamic_root<'a>(
     document: &'a RepositoriesDocument,
     requested_root: &Path,
@@ -139,6 +170,26 @@ fn trusted_dynamic_root<'a>(
             &format!("trusted dynamic root {}", record.id),
         )?;
         if requested_root != candidate && requested_root.starts_with(&candidate) {
+            return Ok(Some(record));
+        }
+    }
+    Ok(None)
+}
+
+fn trusted_environment_root<'a>(
+    document: &'a RepositoriesDocument,
+    requested_path: &Path,
+) -> Result<Option<&'a TrustedEnvironmentRootRecord>, String> {
+    for record in document
+        .trusted_environment_roots
+        .iter()
+        .filter(|item| item.enabled)
+    {
+        let candidate = canonical_directory_root(
+            Path::new(&record.root),
+            &format!("trusted environment root {}", record.id),
+        )?;
+        if requested_path == candidate || requested_path.starts_with(&candidate) {
             return Ok(Some(record));
         }
     }
@@ -165,9 +216,9 @@ fn assert_not_live_repository_target(
     live_context_root: &Path,
     target_root: &Path,
 ) -> Result<(), String> {
-    let live_repo = canonical_git_toplevel(live_context_root)
+    let live_repo = canonical_git_toplevel_for_existing_path(live_context_root)
         .map_err(|error| format!("failed to resolve live rack-ai repository: {error}"))?;
-    let target_repo = canonical_git_toplevel(target_root).map_err(|error| {
+    let target_repo = canonical_git_toplevel_for_existing_path(target_root).map_err(|error| {
         format!(
             "registered repository root {} is not a resolvable git repository: {error}",
             target_root.display()
@@ -182,6 +233,21 @@ fn assert_not_live_repository_target(
     Ok(())
 }
 
+fn assert_not_live_environment_target(
+    live_context_root: &Path,
+    target_path: &Path,
+) -> Result<(), String> {
+    let live_repo = canonical_git_toplevel_for_existing_path(live_context_root)
+        .map_err(|error| format!("failed to resolve live rack-ai repository: {error}"))?;
+    match canonical_git_toplevel_for_existing_path(target_path) {
+        Ok(target_repo) if target_repo == live_repo => Err(format!(
+            "refusing to expose live rack-ai path as environment resource: {}",
+            target_path.display()
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn canonical_repository_root(path: &Path, label: &str) -> Result<PathBuf, String> {
     assert_absolute_clean_path(path, label)?;
     let canonical = std::fs::canonicalize(path).map_err(|error| {
@@ -190,7 +256,7 @@ fn canonical_repository_root(path: &Path, label: &str) -> Result<PathBuf, String
             path.display()
         )
     })?;
-    let git_root = canonical_git_toplevel(&canonical).map_err(|error| {
+    let git_root = canonical_git_toplevel_for_existing_path(&canonical).map_err(|error| {
         format!(
             "{label} {} is not a resolvable git repository: {error}",
             path.display()
@@ -205,14 +271,18 @@ fn canonical_repository_root(path: &Path, label: &str) -> Result<PathBuf, String
     Ok(canonical)
 }
 
-fn canonical_directory_root(path: &Path, label: &str) -> Result<PathBuf, String> {
+fn canonical_existing_path(path: &Path, label: &str) -> Result<PathBuf, String> {
     assert_absolute_clean_path(path, label)?;
-    let canonical = std::fs::canonicalize(path).map_err(|error| {
+    std::fs::canonicalize(path).map_err(|error| {
         format!(
             "{label} {} could not be canonicalized: {error}",
             path.display()
         )
-    })?;
+    })
+}
+
+fn canonical_directory_root(path: &Path, label: &str) -> Result<PathBuf, String> {
+    let canonical = canonical_existing_path(path, label)?;
     if !canonical.is_dir() {
         return Err(format!("{label} {} is not a directory", path.display()));
     }
@@ -234,8 +304,14 @@ fn assert_absolute_clean_path(path: &Path, label: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn canonical_git_toplevel(path: &Path) -> Result<PathBuf, String> {
-    let top_level = GitCommand::run(path, &["rev-parse", "--show-toplevel"])?;
+fn canonical_git_toplevel_for_existing_path(path: &Path) -> Result<PathBuf, String> {
+    let context = if path.is_dir() {
+        path
+    } else {
+        path.parent()
+            .ok_or(format!("path {} has no parent", path.display()))?
+    };
+    let top_level = GitCommand::run(context, &["rev-parse", "--show-toplevel"])?;
     std::fs::canonicalize(&top_level).map_err(|error| error.to_string())
 }
 
@@ -442,10 +518,122 @@ mod tests {
         assert!(error.contains("does not match registered repository root"));
     }
 
+    #[test]
+    fn authorizes_environment_root_within_trusted_environment_roots() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let trusted_env = temp_environment_root("shared-runtime");
+        fs::create_dir_all(&trusted_env).unwrap();
+        write_repositories_document_with_environment_roots(
+            &live,
+            &[],
+            &[],
+            std::slice::from_ref(&trusted_env),
+        );
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let mounts = registry
+            .authorize_environment_resources(&[trusted_env.display().to_string()])
+            .unwrap();
+        assert_eq!(mounts.len(), 1);
+        assert_eq!(mounts[0].source_path(), trusted_env.as_path());
+        assert_eq!(mounts[0].container_path(), trusted_env.as_path());
+        assert!(mounts[0].read_only());
+    }
+
+    #[test]
+    fn rejects_environment_path_outside_trusted_environment_roots() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let trusted_env = temp_environment_root("shared-runtime");
+        let outside_env = temp_environment_root("other-runtime");
+        fs::create_dir_all(&trusted_env).unwrap();
+        fs::create_dir_all(&outside_env).unwrap();
+        write_repositories_document_with_environment_roots(&live, &[], &[], &[trusted_env]);
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let error = registry
+            .authorize_environment_resources(&[outside_env.display().to_string()])
+            .unwrap_err();
+        assert!(error.contains("outside trusted environment roots"));
+    }
+
+    #[test]
+    fn rejects_environment_path_with_traversal() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let trusted_env = temp_environment_root("shared-runtime");
+        fs::create_dir_all(&trusted_env).unwrap();
+        write_repositories_document_with_environment_roots(
+            &live,
+            &[],
+            &[],
+            std::slice::from_ref(&trusted_env),
+        );
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let traversing = trusted_env.join("nested").join("..").join("toolchain");
+        let error = registry
+            .authorize_environment_resources(&[traversing.display().to_string()])
+            .unwrap_err();
+        assert!(error.contains("must not contain traversal components"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rejects_environment_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let trusted_env = temp_environment_root("shared-runtime");
+        let outside_env = temp_environment_root("other-runtime");
+        fs::create_dir_all(&trusted_env).unwrap();
+        fs::create_dir_all(&outside_env).unwrap();
+        let alias = trusted_env.join("toolchain-link");
+        symlink(&outside_env, &alias).unwrap();
+        write_repositories_document_with_environment_roots(
+            &live,
+            &[],
+            &[],
+            std::slice::from_ref(&trusted_env),
+        );
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let error = registry
+            .authorize_environment_resources(&[alias.display().to_string()])
+            .unwrap_err();
+        assert!(error.contains("outside trusted environment roots"));
+    }
+
+    #[test]
+    fn rejects_environment_path_inside_live_rack_ai_repository() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let live_subdir = live.join("state").join("runtime-cache");
+        fs::create_dir_all(&live_subdir).unwrap();
+        write_repositories_document_with_environment_roots(&live, &[], &[], &[live.clone()]);
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let error = registry
+            .authorize_environment_resources(&[live_subdir.display().to_string()])
+            .unwrap_err();
+        assert!(error.contains("refusing to expose live rack-ai path as environment resource"));
+    }
+
     fn write_repositories_document(
         live_root: &Path,
         repositories: &[PathBuf],
         trusted_dynamic_roots: &[PathBuf],
+    ) {
+        write_repositories_document_with_environment_roots(
+            live_root,
+            repositories,
+            trusted_dynamic_roots,
+            &[],
+        );
+    }
+
+    fn write_repositories_document_with_environment_roots(
+        live_root: &Path,
+        repositories: &[PathBuf],
+        trusted_dynamic_roots: &[PathBuf],
+        trusted_environment_roots: &[PathBuf],
     ) {
         fs::create_dir_all(live_root.join("config")).unwrap();
         let repositories_json = repositories
@@ -470,12 +658,24 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join(",");
+        let trusted_environment_json = trusted_environment_roots
+            .iter()
+            .enumerate()
+            .map(|(index, path)| {
+                format!(
+                    r#"{{"id":"environment-{index}","root":"{}","enabled":true}}"#,
+                    path.display()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
         fs::write(
             live_root.join("config/repositories.json"),
             format!(
-                r#"{{"workspace_root":"{}","executor":{{"backend":"podman","image":"rust:bookworm"}},"trusted_dynamic_roots":[{}],"repositories":[{}]}}"#,
+                r#"{{"workspace_root":"{}","executor":{{"backend":"podman","image":"rust:bookworm"}},"trusted_dynamic_roots":[{}],"trusted_environment_roots":[{}],"repositories":[{}]}}"#,
                 live_root.join("workspaces").display(),
                 trusted_roots_json,
+                trusted_environment_json,
                 repositories_json
             ),
         )
@@ -528,6 +728,16 @@ mod tests {
             .unwrap();
         assert!(status.success());
         path.to_path_buf()
+    }
+
+    fn temp_environment_root(label: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = PathBuf::from("/var/tmp").join(format!("rack-ai-{label}-{nanos}"));
+        fs::create_dir_all(&path).unwrap();
+        path
     }
 
     fn temp_root() -> PathBuf {
