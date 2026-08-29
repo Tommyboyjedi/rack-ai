@@ -79,9 +79,21 @@ prompt.
 }
 ```
 
-At submission time, Rack AI resolves and records the immutable base SHA.  The
-request must reject unregistered repositories, empty allowed-path lists, and
-commands outside the approved command policy.
+At submission time, Rack AI resolves and records the immutable base SHA. The
+request must reject empty allowed-path lists and commands outside the approved
+command policy.
+
+Repositories may enter this flow in two ways:
+
+- statically registered repositories identified by `repository.id`;
+- dynamically created Git repositories identified by `repository.id` plus
+  `repository.root`, when that root canonically resolves beneath an
+  administrator-configured `trusted_dynamic_roots` entry in
+  `config/repositories.json`.
+
+Dynamic targets do not require a per-project config edit, but they must still
+resolve to an exact Git repository root, remain outside the live Rack AI
+repository, and fail closed if canonical authorization cannot be established.
 
 ## Workspace lifecycle
 

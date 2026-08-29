@@ -639,6 +639,37 @@ mod tests {
     }
 
     #[test]
+    fn executes_dynamic_repository_request_through_normal_change_flow() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let registry = DynamicRegistry::default();
+        let result = execute_with_registry(
+            &registry,
+            dynamic_document(Some("a".repeat(40))),
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Approved)
+        );
+        assert_eq!(
+            registry.requested_roots.borrow().as_slice(),
+            &["/srv/dynamic/project".to_string()]
+        );
+    }
+
+    #[test]
     fn fails_closed_when_implementer_missing() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
@@ -665,10 +696,29 @@ mod tests {
         executor: Option<&FakeExecutor>,
         implementer: Option<&FakeImplementer>,
     ) -> Result<super::ExecuteChangeResult, String> {
-        let registry = SampleRegistry;
+        execute_with_registry(
+            &SampleRegistry,
+            sample_document(Some("a".repeat(40))),
+            git,
+            manifests,
+            mode,
+            executor,
+            implementer,
+        )
+    }
+
+    fn execute_with_registry(
+        registry: &dyn RepositoryRegistry,
+        document: ChangeRequestDocument,
+        git: &FakeGit,
+        manifests: &FakeManifests,
+        mode: ChangeExecutionMode,
+        executor: Option<&FakeExecutor>,
+        implementer: Option<&FakeImplementer>,
+    ) -> Result<super::ExecuteChangeResult, String> {
         let policy = ApprovedCommandPolicy::default();
         let service = ExecuteChange::new(ExecuteChangeDependencies {
-            registry: &registry,
+            registry,
             command_policy: &policy,
             git,
             manifests,
@@ -676,7 +726,7 @@ mod tests {
             implementer: implementer.map(|item| item as &dyn ChangeImplementer),
         });
         service.execute(ExecuteChangeRequest {
-            document: sample_document(Some("a".repeat(40))),
+            document,
             mode,
             selected_worker: None,
         })
@@ -688,6 +738,23 @@ mod tests {
             "repository": {
                 "id": "adaptos",
                 "registered_root": "/srv/projects/adaptos",
+                "base_ref": "main",
+                "base_sha": base_sha
+            },
+            "task": "Add a bounded feature with tests.",
+            "allowed_paths": ["src/", "Cargo.toml"],
+            "acceptance": {"commands": [["cargo", "test"]]},
+            "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
+        }))
+        .unwrap()
+    }
+
+    fn dynamic_document(base_sha: Option<String>) -> ChangeRequestDocument {
+        serde_json::from_value(serde_json::json!({
+            "change_id": "job-1",
+            "repository": {
+                "id": "dynamic-project",
+                "root": "/srv/dynamic/project",
                 "base_ref": "main",
                 "base_sha": base_sha
             },
@@ -715,6 +782,40 @@ mod tests {
                 return Err(format!("repository {} is not registered", id.value()));
             }
             RegisteredRepository::new(id.clone(), PathBuf::from("/srv/projects/adaptos"))
+        }
+    }
+
+    #[derive(Default)]
+    struct DynamicRegistry {
+        requested_roots: RefCell<Vec<String>>,
+    }
+
+    impl RepositoryRegistry for DynamicRegistry {
+        fn workspace_root(&self) -> Result<WorkspaceRoot, String> {
+            WorkspaceRoot::new(PathBuf::from("/srv/rack-workspaces"))
+        }
+
+        fn executor_config(&self) -> Result<ExecutorConfig, String> {
+            ExecutorConfig::podman("rust:bookworm".to_string())
+        }
+
+        fn find(&self, id: &RepositoryId) -> Result<RegisteredRepository, String> {
+            Err(format!("repository {} is not registered", id.value()))
+        }
+
+        fn resolve_target(
+            &self,
+            id: &RepositoryId,
+            requested_root: Option<&std::path::Path>,
+        ) -> Result<RegisteredRepository, String> {
+            if id.value() != "dynamic-project" {
+                return Err(format!("repository {} is not registered", id.value()));
+            }
+            let root = requested_root.ok_or("missing requested root".to_string())?;
+            self.requested_roots
+                .borrow_mut()
+                .push(root.display().to_string());
+            RegisteredRepository::new(id.clone(), root.to_path_buf())
         }
     }
 

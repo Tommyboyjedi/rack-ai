@@ -87,12 +87,13 @@ This is the coarse signal that the work unit belongs to a wider continuing build
 
 ### `repository`
 
-- `id`: Rack AI registered repository id
+- `id`: Rack AI repository identity
 - `base_ref`: expected base branch/ref
 - `base_sha`: optional exact expected starting revision
-- `registered_root`: optional override field matching the existing change contract when needed
+- `registered_root`: optional exact-match field for a statically registered repository
+- `root`: optional concrete repository root for a dynamically created Git repository beneath an administrator-approved trusted dynamic root
 
-Rack AI still resolves the registered repository and enforces self-target protection and worktree isolation.
+Rack AI still resolves the target repository, enforces self-target protection, requires an exact Git top-level for dynamic roots, and preserves worktree isolation.
 
 ### `work_unit`
 
@@ -139,7 +140,7 @@ cargo run -q -p rack_ai_cli -- \
 
 - `--repo-root` points at the Rack AI control-plane repository/config root
 - `--state-root` points at the root used for review packets and other persisted evidence
-- the target application repository must already be registered in Rack AI config
+- the target application repository may be statically registered, or supplied as `repository.root` beneath a configured trusted dynamic root
 
 ## Result shape
 

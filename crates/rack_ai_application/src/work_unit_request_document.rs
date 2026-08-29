@@ -23,6 +23,8 @@ pub struct WorkUnitRepositoryDocument {
     pub id: String,
     #[serde(default)]
     pub registered_root: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
     pub base_ref: String,
     #[serde(default)]
     pub base_sha: Option<String>,
@@ -137,6 +139,7 @@ mod tests {
         assert_eq!(document.work_unit.requirements.complexity, "small");
         assert!(document.work_unit.readiness.ready);
         assert_eq!(document.work_unit.limits.network, "disabled");
+        assert!(document.repository.root.is_none());
     }
 
     #[test]
