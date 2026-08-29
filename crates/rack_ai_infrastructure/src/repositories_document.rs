@@ -8,6 +8,8 @@ use crate::TrustedDynamicRootRecord;
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RepositoriesDocument {
     pub workspace_root: String,
+    // Legacy field retained for backward-compatible config parsing.
+    // Rack AI no longer uses language/tool-specific executable allow-lists.
     #[serde(default)]
     pub approved_programs: Vec<String>,
     pub executor: ExecutorRecord,

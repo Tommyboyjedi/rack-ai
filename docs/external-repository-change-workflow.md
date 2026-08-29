@@ -80,8 +80,8 @@ prompt.
 ```
 
 At submission time, Rack AI resolves and records the immutable base SHA. The
-request must reject empty allowed-path lists and commands outside the approved
-command policy.
+request must reject empty allowed-path lists and commands that violate the
+generic direct-execution command policy, such as unsupported shell indirection.
 
 Repositories may enter this flow in two ways:
 

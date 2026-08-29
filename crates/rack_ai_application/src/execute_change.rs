@@ -495,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unapproved_acceptance_command() {
+    fn rejects_shell_acceptance_command() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
         let mut document = sample_document(Some("a".repeat(40)));
@@ -521,7 +521,38 @@ mod tests {
                 selected_worker: None,
             })
             .unwrap_err();
-        assert!(error.contains("not approved") || error.contains("approved program"));
+        assert!(error.contains("shell interpreter"));
+    }
+
+    #[test]
+    fn accepts_absolute_executable_paths_in_acceptance_command() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let mut document = sample_document(Some("a".repeat(40)));
+        document.acceptance.commands = vec![vec![
+            "/srv/ATHBA/.venv/bin/python".to_string(),
+            "scripts/assert_test_fails.py".to_string(),
+            "tests/test_reservation_book.py::test_add_duplicate_resource_id".to_string(),
+            "expected failure".to_string(),
+        ]];
+        let registry = SampleRegistry;
+        let policy = ApprovedCommandPolicy::default();
+        let service = ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &registry,
+            command_policy: &policy,
+            git: &git,
+            manifests: &manifests,
+            executor: None,
+            implementer: None,
+        });
+        let result = service
+            .execute(ExecuteChangeRequest {
+                document,
+                mode: ChangeExecutionMode::PrepareOnly,
+                selected_worker: None,
+            })
+            .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::Prepared);
     }
 
     #[test]

@@ -182,6 +182,10 @@ This proves:
 
 PR28 does not add Python, pytest, ReservationBook, Node, cargo semantics, Gatekeeper logic, or ATHBA-specific development behaviour to Rack AI.
 
+PR28 also keeps the ATHBA runtime boundary intact: Rack AI trusts the approved
+workspace and executor boundary, not a Rack AI-maintained allow-list of
+language- or framework-specific executable names.
+
 ATHBA continues to decide **what** software-development work means.
 
 Rack AI continues to decide **how** to execute bounded agent work safely on available rack resources.
