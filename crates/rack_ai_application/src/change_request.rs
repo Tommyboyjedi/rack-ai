@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use rack_ai_domain::AcceptanceCommand;
 use rack_ai_domain::AllowedPath;
 use rack_ai_domain::AllowedPaths;
@@ -34,9 +36,13 @@ impl ChangeRequest {
         document: ChangeRequestDocument,
         resolution: &ChangeRequestResolution,
     ) -> Result<Self, String> {
+        assert_root_fields_are_consistent(&document)?;
         let change_id = ChangeId::new(document.change_id)?;
         let repository_id = RepositoryId::new(document.repository.id)?;
-        let registered = resolution.registry.find(&repository_id)?;
+        let requested_root = document.repository.root.as_deref().map(Path::new);
+        let registered = resolution
+            .registry
+            .resolve_target(&repository_id, requested_root)?;
         if !registered.enabled() {
             return Err(format!("repository {} is disabled", repository_id.value()));
         }
@@ -127,6 +133,13 @@ impl ChangeRequest {
     pub fn limits(&self) -> &ChangeLimits {
         &self.limits
     }
+}
+
+fn assert_root_fields_are_consistent(document: &ChangeRequestDocument) -> Result<(), String> {
+    if document.repository.registered_root.is_some() && document.repository.root.is_some() {
+        return Err("repository must not specify both registered_root and root".to_string());
+    }
+    Ok(())
 }
 
 fn assert_commands_allowed(

@@ -1,6 +1,7 @@
 use rack_ai_domain::AcceptanceVerdict;
 use rack_ai_domain::ChangeStatus;
 
+use crate::CampaignCommitRequest;
 use crate::ChangeExecutionMode;
 use crate::ChangeImplementer;
 use crate::ChangeLayout;
@@ -127,6 +128,8 @@ impl<'a> ExecuteChange<'a> {
                     return self.persist(rejected);
                 }
                 if packet.status() == &ChangeStatus::ChecksPassed {
+                    packet =
+                        self.materialize_accepted_revision(&change_request, &workspace, packet)?;
                     packet = packet.with_acceptance_verdict(AcceptanceVerdict::Approved);
                 }
             }
@@ -271,6 +274,25 @@ impl<'a> ExecuteChange<'a> {
         Ok(())
     }
 
+    fn materialize_accepted_revision(
+        &self,
+        request: &ChangeRequest,
+        workspace: &ChangeWorkspace,
+        packet: ReviewPacket,
+    ) -> Result<ReviewPacket, String> {
+        let changed = source_paths(packet.changed_paths());
+        if changed.is_empty() {
+            return Ok(packet);
+        }
+        let commit_sha = self.git.commit_local(&CampaignCommitRequest::new(
+            workspace.worktree_path().to_path_buf(),
+            request.change_id().value(),
+            "accepted-change",
+            changed,
+        ))?;
+        Ok(packet.with_head_sha(commit_sha.value().to_string()))
+    }
+
     fn persist(&self, packet: ReviewPacket) -> Result<ExecuteChangeResult, String> {
         let packet_path = self.manifests.save(&packet)?;
         Ok(ExecuteChangeResult {
@@ -281,12 +303,7 @@ impl<'a> ExecuteChange<'a> {
 }
 
 fn reject_disallowed(request: &ChangeRequest, packet: &ReviewPacket) -> Option<ReviewPacket> {
-    let source_paths = packet
-        .changed_paths()
-        .iter()
-        .filter(|path| !ChangeLayout::is_ephemeral_path(path))
-        .cloned()
-        .collect::<Vec<_>>();
+    let source_paths = source_paths(packet.changed_paths());
     let disallowed = request.allowed_paths().reject_disallowed(&source_paths);
     if disallowed.is_empty() {
         return None;
@@ -310,6 +327,14 @@ fn fail(packet: ReviewPacket, status: ChangeStatus, error: String) -> ReviewPack
         .with_status(status)
         .with_acceptance_verdict(AcceptanceVerdict::Rejected)
         .with_last_error(Some(error))
+}
+
+fn source_paths(paths: &[String]) -> Vec<String> {
+    paths
+        .iter()
+        .filter(|path| !ChangeLayout::is_ephemeral_path(path))
+        .cloned()
+        .collect()
 }
 
 fn check_status(error: &str) -> ChangeStatus {
@@ -583,6 +608,52 @@ mod tests {
             result.packet.implementer_output(),
             Some(&"COMPLETE".to_string())
         );
+        assert_eq!(result.packet.head_sha(), "b".repeat(40));
+        assert_eq!(git.commit_count(), 1);
+        assert_eq!(git.committed_paths(), vec![vec!["src/lib.rs".to_string()]]);
+        assert_eq!(manifests.last_saved().unwrap().head_sha(), "b".repeat(40));
+    }
+
+    #[test]
+    fn no_change_accepted_execution_does_not_create_unnecessary_commit() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(result.packet.head_sha(), "a".repeat(40));
+        assert_eq!(git.commit_count(), 0);
+    }
+
+    #[test]
+    fn failed_acceptance_does_not_materialize_commit() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: true };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksFailed);
+        assert_eq!(git.commit_count(), 0);
     }
 
     #[test]
@@ -609,6 +680,7 @@ mod tests {
         );
         assert!(result.packet.last_error().unwrap().contains("README.md"));
         assert!(result.packet.commands().is_empty());
+        assert_eq!(git.commit_count(), 0);
     }
 
     #[test]
@@ -636,6 +708,38 @@ mod tests {
         );
         assert!(result.packet.last_error().unwrap().contains("README.md"));
         assert_eq!(result.packet.commands().len(), 1);
+        assert_eq!(git.commit_count(), 0);
+    }
+
+    #[test]
+    fn executes_dynamic_repository_request_through_normal_change_flow() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor { fail: false };
+        let implementer = FakeImplementer {
+            output: "COMPLETE".to_string(),
+        };
+        let registry = DynamicRegistry::default();
+        let result = execute_with_registry(
+            &registry,
+            dynamic_document(Some("a".repeat(40))),
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Approved)
+        );
+        assert_eq!(
+            registry.requested_roots.borrow().as_slice(),
+            &["/srv/dynamic/project".to_string()]
+        );
     }
 
     #[test]
@@ -665,10 +769,29 @@ mod tests {
         executor: Option<&FakeExecutor>,
         implementer: Option<&FakeImplementer>,
     ) -> Result<super::ExecuteChangeResult, String> {
-        let registry = SampleRegistry;
+        execute_with_registry(
+            &SampleRegistry,
+            sample_document(Some("a".repeat(40))),
+            git,
+            manifests,
+            mode,
+            executor,
+            implementer,
+        )
+    }
+
+    fn execute_with_registry(
+        registry: &dyn RepositoryRegistry,
+        document: ChangeRequestDocument,
+        git: &FakeGit,
+        manifests: &FakeManifests,
+        mode: ChangeExecutionMode,
+        executor: Option<&FakeExecutor>,
+        implementer: Option<&FakeImplementer>,
+    ) -> Result<super::ExecuteChangeResult, String> {
         let policy = ApprovedCommandPolicy::default();
         let service = ExecuteChange::new(ExecuteChangeDependencies {
-            registry: &registry,
+            registry,
             command_policy: &policy,
             git,
             manifests,
@@ -676,7 +799,7 @@ mod tests {
             implementer: implementer.map(|item| item as &dyn ChangeImplementer),
         });
         service.execute(ExecuteChangeRequest {
-            document: sample_document(Some("a".repeat(40))),
+            document,
             mode,
             selected_worker: None,
         })
@@ -688,6 +811,23 @@ mod tests {
             "repository": {
                 "id": "adaptos",
                 "registered_root": "/srv/projects/adaptos",
+                "base_ref": "main",
+                "base_sha": base_sha
+            },
+            "task": "Add a bounded feature with tests.",
+            "allowed_paths": ["src/", "Cargo.toml"],
+            "acceptance": {"commands": [["cargo", "test"]]},
+            "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
+        }))
+        .unwrap()
+    }
+
+    fn dynamic_document(base_sha: Option<String>) -> ChangeRequestDocument {
+        serde_json::from_value(serde_json::json!({
+            "change_id": "job-1",
+            "repository": {
+                "id": "dynamic-project",
+                "root": "/srv/dynamic/project",
                 "base_ref": "main",
                 "base_sha": base_sha
             },
@@ -718,6 +858,40 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct DynamicRegistry {
+        requested_roots: RefCell<Vec<String>>,
+    }
+
+    impl RepositoryRegistry for DynamicRegistry {
+        fn workspace_root(&self) -> Result<WorkspaceRoot, String> {
+            WorkspaceRoot::new(PathBuf::from("/srv/rack-workspaces"))
+        }
+
+        fn executor_config(&self) -> Result<ExecutorConfig, String> {
+            ExecutorConfig::podman("rust:bookworm".to_string())
+        }
+
+        fn find(&self, id: &RepositoryId) -> Result<RegisteredRepository, String> {
+            Err(format!("repository {} is not registered", id.value()))
+        }
+
+        fn resolve_target(
+            &self,
+            id: &RepositoryId,
+            requested_root: Option<&std::path::Path>,
+        ) -> Result<RegisteredRepository, String> {
+            if id.value() != "dynamic-project" {
+                return Err(format!("repository {} is not registered", id.value()));
+            }
+            let root = requested_root.ok_or("missing requested root".to_string())?;
+            self.requested_roots
+                .borrow_mut()
+                .push(root.display().to_string());
+            RegisteredRepository::new(id.clone(), root.to_path_buf())
+        }
+    }
+
     struct EmptyRegistry;
 
     impl RepositoryRegistry for EmptyRegistry {
@@ -736,7 +910,9 @@ mod tests {
 
     struct FakeGit {
         sha: GitSha,
+        commit_sha: GitSha,
         inspect_count: Cell<usize>,
+        commit_calls: RefCell<Vec<Vec<String>>>,
         baseline_paths: Vec<String>,
         after_paths: Vec<String>,
         after_checks_paths: Option<Vec<String>>,
@@ -746,7 +922,9 @@ mod tests {
         fn matching(sha: String) -> Self {
             Self {
                 sha: GitSha::new(sha).unwrap(),
+                commit_sha: GitSha::new("b".repeat(40)).unwrap(),
                 inspect_count: Cell::new(0),
+                commit_calls: RefCell::new(Vec::new()),
                 baseline_paths: Vec::new(),
                 after_paths: Vec::new(),
                 after_checks_paths: None,
@@ -766,6 +944,14 @@ mod tests {
         fn with_after_checks_paths(mut self, after_checks_paths: Vec<String>) -> Self {
             self.after_checks_paths = Some(after_checks_paths);
             self
+        }
+
+        fn commit_count(&self) -> usize {
+            self.commit_calls.borrow().len()
+        }
+
+        fn committed_paths(&self) -> Vec<Vec<String>> {
+            self.commit_calls.borrow().clone()
         }
     }
 
@@ -800,16 +986,31 @@ mod tests {
             };
             Ok(GitEvidence::new(self.sha.clone(), String::new()).with_changed_paths(paths))
         }
+
+        fn commit_local(&self, request: &crate::CampaignCommitRequest) -> Result<GitSha, String> {
+            self.commit_calls
+                .borrow_mut()
+                .push(request.paths().to_vec());
+            Ok(self.commit_sha.clone())
+        }
     }
 
     #[derive(Default)]
     struct FakeManifests {
         saved: RefCell<Vec<String>>,
+        last: RefCell<Option<ReviewPacket>>,
+    }
+
+    impl FakeManifests {
+        fn last_saved(&self) -> Option<ReviewPacket> {
+            self.last.borrow().clone()
+        }
     }
 
     impl ChangeManifestRepository for FakeManifests {
         fn save(&self, packet: &ReviewPacket) -> Result<String, String> {
             self.saved.borrow_mut().push(packet.change_id().to_string());
+            *self.last.borrow_mut() = Some(packet.clone());
             Ok(format!("/tmp/{}.json", packet.change_id()))
         }
     }

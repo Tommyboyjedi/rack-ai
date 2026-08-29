@@ -73,6 +73,9 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         if let Some(ref verdict) = result.acceptance_verdict {
             println!("acceptance_verdict: {:?}", verdict);
         }
+        if let Some(ref revision) = result.accepted_revision {
+            println!("accepted_revision: {}", revision);
+        }
         println!("packet: {}", result.packet_path);
     }
     Ok(

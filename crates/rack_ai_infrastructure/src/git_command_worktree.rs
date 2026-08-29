@@ -259,6 +259,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn commit_local_creates_commit_with_selected_content() {
+        let fixture = init_fixture();
+        let git = GitCommandWorktree;
+        let sha = git
+            .resolve_sha(&ResolveGitShaRequest::new(
+                fixture.clone(),
+                GitRef::new("main".to_string()).unwrap(),
+            ))
+            .unwrap();
+        let worktree = fixture.parent().unwrap().join(format!(
+            "change-worktree-commit-{}/repo",
+            fixture.file_name().unwrap().to_string_lossy()
+        ));
+        git.create(
+            &CreateChangeWorktreeRequest::new(fixture.clone(), sha.clone())
+                .with_branch_name("rack/change-job-commit".to_string())
+                .with_worktree_path(worktree.clone()),
+        )
+        .unwrap();
+        fs::write(worktree.join("src/lib.rs"), "committed\n").unwrap();
+        let commit = git
+            .commit_local(&rack_ai_application::CampaignCommitRequest::new(
+                worktree.clone(),
+                "job-commit",
+                "accepted-change",
+                vec!["src/lib.rs".to_string()],
+            ))
+            .unwrap();
+        assert_ne!(commit, sha);
+        let shown = GitCommand::run(
+            &worktree,
+            &["show", &format!("{}:src/lib.rs", commit.value())],
+        )
+        .unwrap();
+        assert_eq!(shown, "committed");
+    }
+
     fn init_fixture() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)

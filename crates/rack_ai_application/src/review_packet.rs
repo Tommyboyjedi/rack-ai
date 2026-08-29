@@ -113,6 +113,11 @@ impl ReviewPacket {
         self
     }
 
+    pub fn with_head_sha(mut self, head_sha: String) -> Self {
+        self.head_sha = head_sha;
+        self
+    }
+
     pub fn with_commands(mut self, commands: Vec<CommandEvidence>) -> Self {
         self.commands = commands;
         self
@@ -152,6 +157,10 @@ impl ReviewPacket {
 
     pub fn base_sha(&self) -> &str {
         self.base_sha.as_str()
+    }
+
+    pub fn head_sha(&self) -> &str {
+        self.head_sha.as_str()
     }
 
     pub fn status(&self) -> &ChangeStatus {

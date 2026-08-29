@@ -54,6 +54,7 @@ impl WorkUnitRequest {
             repository: ChangeRepositoryDocument {
                 id: document.repository.id,
                 registered_root: document.repository.registered_root,
+                root: document.repository.root,
                 base_ref: document.repository.base_ref,
                 base_sha: document.repository.base_sha,
             },
