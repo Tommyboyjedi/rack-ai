@@ -153,6 +153,7 @@ Rack AI returns a structured result including:
 - `placement`
 - `status`
 - `acceptance_verdict`
+- `accepted_revision`
 - `branch`
 - `worktree_path`
 - `packet_path`

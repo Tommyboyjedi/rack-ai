@@ -105,6 +105,9 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
             verdict.as_str().unwrap_or("unknown")
         );
     }
+    if result.packet.acceptance_verdict() == Some(&rack_ai_domain::AcceptanceVerdict::Approved) {
+        println!("accepted_revision: {}", result.packet.head_sha());
+    }
     println!("packet: {}", result.packet_path);
     if let Some(error) = result.packet.last_error() {
         eprintln!("{error}");

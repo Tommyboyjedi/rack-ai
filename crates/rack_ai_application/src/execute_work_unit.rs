@@ -72,6 +72,8 @@ pub struct ExecuteWorkUnitResult {
     pub status: ChangeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub acceptance_verdict: Option<AcceptanceVerdict>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accepted_revision: Option<String>,
     pub branch: String,
     pub worktree_path: String,
     pub packet_path: String,
@@ -134,9 +136,18 @@ fn build_result(
         placement: placement.clone(),
         status: packet.status().clone(),
         acceptance_verdict: packet.acceptance_verdict().cloned(),
+        accepted_revision: accepted_revision(packet),
         branch: packet.branch().to_string(),
         worktree_path: packet.worktree_path().to_string(),
         packet_path,
+    }
+}
+
+fn accepted_revision(packet: &ReviewPacket) -> Option<String> {
+    if packet.acceptance_verdict() == Some(&AcceptanceVerdict::Approved) {
+        Some(packet.head_sha().to_string())
+    } else {
+        None
     }
 }
 
@@ -226,6 +237,7 @@ mod tests {
         assert_eq!(result.selected_worker_id, "local-coder");
         assert_eq!(result.status, ChangeStatus::ChecksPassed);
         assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Approved));
+        assert_eq!(result.accepted_revision, Some("b".repeat(40)));
         assert_eq!(
             executor.seen_commands(),
             vec![vec![
@@ -392,6 +404,7 @@ mod tests {
         root: PathBuf,
         changed_paths: Vec<String>,
         sha: GitSha,
+        commit_sha: GitSha,
         inspect_count: RefCell<usize>,
     }
 
@@ -401,6 +414,7 @@ mod tests {
                 root: root.clone(),
                 changed_paths,
                 sha: GitSha::new("a".repeat(40)).unwrap(),
+                commit_sha: GitSha::new("b".repeat(40)).unwrap(),
                 inspect_count: RefCell::new(0),
             }
         }
@@ -439,6 +453,10 @@ mod tests {
                 self.changed_paths.clone()
             };
             Ok(GitEvidence::new(self.sha.clone(), String::new()).with_changed_paths(paths))
+        }
+
+        fn commit_local(&self, _request: &crate::CampaignCommitRequest) -> Result<GitSha, String> {
+            Ok(self.commit_sha.clone())
         }
     }
 
