@@ -163,7 +163,7 @@ impl<'a> ExecuteChange<'a> {
             return Ok(fail(
                 packet,
                 ChangeStatus::ExecutorUnavailable,
-                "podman-backed coder is required for external-repository implementation"
+                "qualified implementation harness is required for external-repository implementation"
                     .to_string(),
             ));
         };
@@ -207,7 +207,7 @@ impl<'a> ExecuteChange<'a> {
             return Ok(fail(
                 packet,
                 ChangeStatus::ExecutorUnavailable,
-                "podman is not available; rootless Podman is required for external-repository command execution"
+                "workspace executor is not available for external-repository command execution"
                     .to_string(),
             ));
         };

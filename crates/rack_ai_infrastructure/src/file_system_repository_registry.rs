@@ -49,16 +49,14 @@ impl RepositoryRegistry for FileSystemRepositoryRegistry {
 
     fn executor_config(&self) -> Result<ExecutorConfig, String> {
         let executor = self.load_document()?.executor;
-        if executor.backend != "podman" {
-            return Err(format!(
-                "unsupported executor backend: {}",
-                executor.backend
-            ));
+        match executor.backend.as_str() {
+            "podman" => Ok(ExecutorConfig::podman(executor.image)?
+                .with_workspace_mount(executor.workspace_path)
+                .with_memory(executor.memory)
+                .with_pids_limit(executor.pids_limit)),
+            "host" => Ok(ExecutorConfig::host()),
+            value => Err(format!("unsupported executor backend: {value}")),
         }
-        Ok(ExecutorConfig::podman(executor.image)?
-            .with_workspace_mount(executor.workspace_path)
-            .with_memory(executor.memory)
-            .with_pids_limit(executor.pids_limit))
     }
 
     fn find(&self, id: &RepositoryId) -> Result<RegisteredRepository, String> {
@@ -424,6 +422,26 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("outside trusted dynamic roots"));
+    }
+
+    #[test]
+    fn loads_host_executor_config() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        fs::create_dir_all(live.join("workspaces")).unwrap();
+        fs::create_dir_all(live.join("config")).unwrap();
+        fs::write(
+            live.join("config/repositories.json"),
+            format!(
+                r#"{{"workspace_root":"{}","executor":{{"backend":"host"}},"trusted_dynamic_roots":[],"trusted_environment_roots":[],"repositories":[]}}"#,
+                live.join("workspaces").display()
+            ),
+        )
+        .unwrap();
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let config = registry.executor_config().unwrap();
+        assert_eq!(config.backend(), "host");
+        assert_eq!(config.image(), None);
     }
 
     #[test]

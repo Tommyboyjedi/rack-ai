@@ -114,19 +114,22 @@ impl PodmanWorkspaceExecutor {
             ));
         }
         PodmanAvailability::ensure_command(self.command.as_str())?;
-        PodmanAvailability::ensure_image(self.command.as_str(), self.config.image())?;
+        let image = self
+            .config
+            .image()
+            .ok_or("podman executor image is not configured".to_string())?;
+        PodmanAvailability::ensure_image(self.command.as_str(), image)?;
         let cidfile = unique_cidfile();
         let cleanup = PodmanContainerCleanup::new(self.command.clone(), cidfile.clone());
-        let invocation =
-            PodmanInvocation::new(self.config.image().to_string(), worktree_path.to_path_buf())?
-                .with_workspace_mount(self.config.workspace_mount().to_string())
-                .with_memory(self.config.memory().to_string())
-                .with_pids_limit(self.config.pids_limit())
-                .with_timeout_seconds(timeout_seconds)
-                .with_argv(argv.clone())
-                .with_stdin(stdin.clone())
-                .with_cidfile(cidfile)
-                .with_environment_resources(environment_resources.to_vec());
+        let invocation = PodmanInvocation::new(image.to_string(), worktree_path.to_path_buf())?
+            .with_workspace_mount(self.config.workspace_mount().to_string())
+            .with_memory(self.config.memory().to_string())
+            .with_pids_limit(self.config.pids_limit())
+            .with_timeout_seconds(timeout_seconds)
+            .with_argv(argv.clone())
+            .with_stdin(stdin.clone())
+            .with_cidfile(cidfile)
+            .with_environment_resources(environment_resources.to_vec());
         let plan = PodmanRunPlan::from_invocation(&invocation)?;
         let mut command = Command::new(self.command.as_str());
         command.args(plan.arguments());

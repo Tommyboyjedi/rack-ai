@@ -6,12 +6,12 @@ use rack_ai_application::ExecuteChange;
 use rack_ai_application::ExecuteChangeDependencies;
 use rack_ai_application::ExecuteChangeRequest;
 use rack_ai_application::RepositoryRegistry;
+use rack_ai_infrastructure::ConfiguredWorkspaceExecutor;
 use rack_ai_infrastructure::FileSystemChangeManifestRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
 use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::JCodeWorkerConfigResolver;
-use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 
@@ -66,7 +66,10 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     } else {
         None
     };
-    let executor = executor_config.clone().map(PodmanWorkspaceExecutor::new);
+    let executor = executor_config
+        .clone()
+        .map(ConfiguredWorkspaceExecutor::new)
+        .transpose()?;
     let default_worker = if mode.runs_implementer() {
         Some(runtime_resolver.resolve_default_implementer()?)
     } else {

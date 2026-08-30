@@ -123,6 +123,7 @@ The production implementation should run each job with:
 - a fixed working directory inside that worktree;
 - post-run Git/path inspection before acceptance;
 - deterministic acceptance commands executed through the bounded workspace executor;
+  either trusted host execution for administrator-authorized caller environments or rootless Podman when container isolation is required;
 - no authority over the Rack AI source/default repository.
 
 The purpose of this boundary is not to trust the coding harness. It is to make the harness replaceable while Rack AI continues to own isolation, evidence, and promotion decisions.

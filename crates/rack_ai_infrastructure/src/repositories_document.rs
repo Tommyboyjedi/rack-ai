@@ -41,4 +41,18 @@ mod tests {
         assert!(document.trusted_environment_roots.is_empty());
         assert!(document.repositories.is_empty());
     }
+
+    #[test]
+    fn parses_host_executor_document() {
+        let document = serde_json::from_str::<RepositoriesDocument>(
+            r#"{
+                "workspace_root": "/srv/rack-workspaces",
+                "executor": {"backend": "host"},
+                "repositories": []
+            }"#,
+        )
+        .unwrap();
+        assert_eq!(document.executor.backend, "host");
+        assert_eq!(document.executor.image, "");
+    }
 }
