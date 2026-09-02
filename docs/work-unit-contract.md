@@ -4,6 +4,32 @@ This document describes the PR22 MVP boundary between an external client such as
 
 It is intentionally small. ATHBA tells Rack AI that a wider workload exists and submits one bounded work unit that is ready to execute. Rack AI then chooses the execution worker/resource internally and runs the unit through the existing qualified bounded change path.
 
+The broader architectural rationale is authoritative in:
+
+- `docs/generic-bounded-workspace-execution.md`
+- `docs/athba-runtime-boundary.md`
+
+## Current contract status
+
+`rack-ai/work-unit/v1` is a deliberate MVP. It still contains the client-shaped values `application-development` and `implementation`. Those values describe the current compatibility surface, not the target long-term semantic boundary.
+
+The stable generic operation underneath them is a bounded workspace transaction:
+
+```text
+exact repository/base
++ bounded objective
++ allowed paths/resources
++ timeout/network/process policy
++ deterministic acceptance
+→ candidate revision and evidence, or durable terminal failure
+```
+
+Rack AI owns this operation because worker/resource selection, trusted worktrees, process isolation, policy enforcement, Git evidence, and terminalization should be centralized once for the rack rather than reimplemented by every client.
+
+Rack AI does not own why the work exists. Client terms such as Tester, Developer, scenario, RED, GREEN, frontier, repair, review, or dependency state must not become Rack AI routing fields.
+
+> The prompt is advisory. The typed execution envelope is authoritative.
+
 ## Ownership boundary
 
 ATHBA owns:
@@ -13,18 +39,23 @@ ATHBA owns:
 - dependency/readiness ordering
 - development-domain acceptance requirements
 - project progress and next-ticket selection
+- model-attempt and escalation meaning
+- semantic interpretation of the returned result
 
 Rack AI owns:
 
+- source admission
+- generic model capability eligibility
 - resource and worker selection
 - JCode-backed execution harness selection
 - isolated worktree preparation
 - allowed-path enforcement
-- timeouts and implementation budgets
-- independent acceptance execution
+- timeouts and physical execution budgets
+- deterministic command execution
 - evidence capture and fail-closed behaviour
+- candidate revision materialization
 
-The external request must not name a GPU, model id, or worker id.
+The external request must not name a GPU, model id, worker id, endpoint, or JCode profile.
 
 ## Version
 
@@ -34,7 +65,7 @@ Current version:
 rack-ai/work-unit/v1
 ```
 
-Unknown fields are rejected. This is deliberate: external callers should not be able to smuggle worker/model selection into the contract.
+Unknown fields are rejected. This is deliberate: external callers should not be able to smuggle worker/model selection or client workflow semantics into the contract.
 
 ## Request shape
 
@@ -77,6 +108,44 @@ Unknown fields are rejected. This is deliberate: external callers should not be 
 }
 ```
 
+## Three contract layers
+
+Even in the MVP, fields fall into three responsibilities.
+
+### Generic routing data
+
+Current v1 provides:
+
+```text
+capability = implementation
+complexity = small | medium | large
+requires_large_context = true | false
+```
+
+The target generic extension replaces singular `implementation` with broad model capability sets such as `reasoning`, `coding`, `visual`, and `audio`, while retaining complexity and the context flag.
+
+### Machine-enforced execution envelope
+
+```text
+repository/base SHA
+allowed paths
+authorized resources
+acceptance commands and artifacts
+timeout and network policy
+opaque identities
+```
+
+These values are enforced independently of the model's prompt compliance.
+
+### Model-facing task payload
+
+```text
+objective
+relevant immutable context
+```
+
+The objective tells the model what to do. It is not the only place where permissions, routing, timeout, or acceptance may be defined.
+
 ## Fields
 
 ### `workload`
@@ -84,7 +153,7 @@ Unknown fields are rejected. This is deliberate: external callers should not be 
 - `id`: stable workload/project identity across many work units
 - `kind`: current MVP supports `application-development`
 
-This is the coarse signal that the work unit belongs to a wider continuing build rather than a one-off coding request.
+This is a coarse compatibility signal that the work unit belongs to a wider continuing build rather than a one-off coding request. A future generic boundary should not infer client workflow semantics from it.
 
 ### `repository`
 
@@ -94,24 +163,26 @@ This is the coarse signal that the work unit belongs to a wider continuing build
 - `registered_root`: optional exact-match field for a statically registered repository
 - `root`: optional concrete repository root for a dynamically created Git repository beneath an administrator-approved trusted dynamic root
 
-Rack AI still resolves the target repository, enforces self-target protection, requires an exact Git top-level for dynamic roots, and preserves worktree isolation.
+Rack AI resolves the target repository, enforces self-target protection, requires an exact Git top-level for dynamic roots, and preserves worktree isolation.
 
 ### `work_unit`
 
 - `id`: stable work-unit identity within the workload
-- `objective`: exact bounded implementation objective
+- `objective`: exact bounded model-facing objective
 - `allowed_paths`: the only writable paths the implementation is allowed to change
 - `acceptance.commands`: deterministic acceptance commands that Rack AI runs itself
 - `acceptance.required_artifacts`: files that must exist for the unit to pass
 - `environment_resources`: administrator-authorized host paths Rack AI should mount read-only into the isolated executor at the same absolute path
 - `readiness.ready`: must be `true` for execution in the MVP
-- `readiness.depends_on`: optional prerequisite work-unit ids
+- `readiness.depends_on`: optional prerequisite work-unit ids retained by the compatibility contract
 - `requirements.capability`: current MVP supports `implementation`
 - `requirements.complexity`: `small`, `medium`, or `large`
 - `requirements.requires_large_context`: hint that this unit should prefer the stronger worker
-- `limits.max_implementation_attempts`: bounded implementation budget
+- `limits.max_implementation_attempts`: bounded internal implementation budget in the current MVP
 - `limits.timeout_seconds`: bounded execution timeout
 - `limits.network`: current MVP default is `disabled`
+
+The target connector submits only already-ready work. Rack AI must not become authoritative for ATHBA dependency ordering, and a future sequence number must remain audit data rather than a dependency mechanism.
 
 ## Rack AI internal selection in PR22
 
@@ -128,6 +199,23 @@ Today, on `gpurack`, that means Rack AI will usually map:
 - larger-context implementation -> `local-primary`
 
 That is internal Rack AI policy, not part of the external contract.
+
+The target generic selector will use broad requested capabilities, complexity, context, source priority, qualification evidence, and current resource state. Internal model eligibility metadata remains owned by Rack AI and is never sent by ATHBA.
+
+## Priority direction
+
+The target global Rack AI priority vocabulary is:
+
+```text
+low
+medium
+high
+paramount
+```
+
+Source systems have configured admission ceilings. ATHBA may emit only `low` or `medium`. Rack AI must reject ATHBA-originated work above medium and must not promote it above that ceiling.
+
+High and paramount remain available for other separately authorized rack workloads and operator/system policy.
 
 ## CLI entry point
 
@@ -151,16 +239,23 @@ Rack AI returns a structured result including:
 - `workload_id`
 - `work_unit_id`
 - `change_id`
-- `selected_worker_id`
-- `placement`
-- `status`
-- `acceptance_verdict`
-- `accepted_revision`
-- `branch`
-- `worktree_path`
-- `packet_path`
+- selected worker information
+- placement
+- status
+- acceptance verdict
+- accepted revision
+- branch
+- worktree path
+- packet path
+- worker execution provenance where available
 
-This is enough for ATHBA to determine whether the unit was accepted or rejected and where to inspect the evidence.
+Future capability routing should also return a generic selection decision explaining why the worker was eligible and selected. Selection evidence explains **why**; execution provenance proves **what actually ran**. A mismatch fails closed.
+
+## Submission identity
+
+A stable opaque work ID may link several client-authorized submissions for the same logical work. A unique submission ID should identify one requested model invocation.
+
+Rack AI may retry genuinely low-level infrastructure actions when that does not invoke the model again, but it must not silently hide several semantic model submissions behind one client submission ID. The evidence must allow a client to account for attempts truthfully.
 
 ## Reused safety boundary
 
@@ -190,3 +285,17 @@ PR22 does not implement:
 - any new model-facing agent loop
 
 Those remain for later PRs.
+
+## Immediate target generalization
+
+The next bounded evolution should add only what is required for generic model selection around the existing workspace transaction:
+
+- capability sets: `reasoning`, `coding`, `visual`, `audio`;
+- existing complexity and large-context inputs;
+- global priority with source-specific ceilings;
+- internal model eligibility/qualification profiles;
+- generic selection evidence linked to execution provenance;
+- opaque work/submission identity;
+- backward compatibility for v1 requests and packets.
+
+It should not add client workflow stages, dependency semantics, a universal media/inference framework, ComfyUI arbitration, preemption, or three-GPU optimization.
