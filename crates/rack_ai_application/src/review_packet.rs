@@ -9,6 +9,7 @@ use crate::ChangeRequest;
 use crate::ChangeWorkspace;
 use crate::CommandEvidence;
 use crate::GitEvidence;
+use crate::WorkerExecutionProvenance;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReviewPacket {
@@ -33,6 +34,8 @@ pub struct ReviewPacket {
     status: ChangeStatus,
     retention: RetentionStatus,
     last_error: Option<String>,
+    #[serde(default)]
+    worker_provenance: Option<WorkerExecutionProvenance>,
 }
 
 impl ReviewPacket {
@@ -59,6 +62,7 @@ impl ReviewPacket {
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
             last_error: None,
+            worker_provenance: None,
         }
     }
 
@@ -95,6 +99,7 @@ impl ReviewPacket {
             status: ChangeStatus::Prepared,
             retention: RetentionStatus::Retained,
             last_error: None,
+            worker_provenance: None,
         }
     }
 
@@ -143,6 +148,11 @@ impl ReviewPacket {
         self
     }
 
+    pub fn with_worker_provenance(mut self, provenance: WorkerExecutionProvenance) -> Self {
+        self.worker_provenance = Some(provenance);
+        self
+    }
+
     pub fn change_id(&self) -> &str {
         self.change_id.as_str()
     }
@@ -185,5 +195,54 @@ impl ReviewPacket {
 
     pub fn acceptance_verdict(&self) -> Option<&AcceptanceVerdict> {
         self.acceptance_verdict.as_ref()
+    }
+
+    pub fn worker_provenance(&self) -> Option<&WorkerExecutionProvenance> {
+        self.worker_provenance.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReviewPacket;
+    use crate::WorkerExecutionProvenance;
+
+    fn provenance() -> WorkerExecutionProvenance {
+        WorkerExecutionProvenance {
+            worker_id: "local-coder".to_string(),
+            worker_role: "implementer-tester".to_string(),
+            worker_kind: "jcode".to_string(),
+            model_id: "eqaq-v2-local-coder".to_string(),
+            provider_profile: "local-coder".to_string(),
+            resource_id: "gpu-2060".to_string(),
+            backend: "jcode".to_string(),
+            tool_profile: Some("minimal".to_string()),
+        }
+    }
+
+    #[test]
+    fn reload_preserves_worker_provenance_without_endpoint_or_secret_data() {
+        let packet = ReviewPacket::new("job-1".to_string(), "fixture".to_string())
+            .with_worker_provenance(provenance());
+        let json = serde_json::to_string(&packet).unwrap();
+        let reloaded: ReviewPacket = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(reloaded.worker_provenance(), packet.worker_provenance());
+        assert!(!json.contains("endpoint"));
+        assert!(!json.contains("token"));
+    }
+
+    #[test]
+    fn old_packet_without_worker_provenance_remains_readable() {
+        let packet = ReviewPacket::new("job-1".to_string(), "fixture".to_string());
+        let mut old = serde_json::to_value(packet).unwrap();
+        old.as_object_mut().unwrap().remove("worker_provenance");
+
+        assert_eq!(
+            serde_json::from_value::<ReviewPacket>(old)
+                .unwrap()
+                .worker_provenance(),
+            None
+        );
     }
 }

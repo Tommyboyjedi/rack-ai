@@ -70,13 +70,13 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         .clone()
         .map(ConfiguredWorkspaceExecutor::new)
         .transpose()?;
-    let default_worker = if mode.runs_implementer() {
+    let selected_worker = if mode.runs_implementer() {
         Some(runtime_resolver.resolve_default_implementer()?)
     } else {
         None
     };
-    let implementer = default_worker.map(|worker| {
-        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker))
+    let implementer = selected_worker.as_ref().map(|worker| {
+        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker.clone()))
     });
     let service = ExecuteChange::new(ExecuteChangeDependencies {
         registry: &registry,
@@ -93,7 +93,7 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     let result = service.execute(ExecuteChangeRequest {
         document,
         mode,
-        selected_worker: None,
+        selected_worker,
     })?;
     println!("change_id: {}", result.packet.change_id());
     println!("branch: {}", result.packet.branch());
@@ -110,6 +110,14 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     }
     if result.packet.acceptance_verdict() == Some(&rack_ai_domain::AcceptanceVerdict::Approved) {
         println!("accepted_revision: {}", result.packet.head_sha());
+    }
+    if let Some(provenance) = result.packet.worker_provenance() {
+        println!(
+            "worker_provenance: {}",
+            serde_json::to_string(provenance).map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("worker_provenance: unavailable");
     }
     println!("packet: {}", result.packet_path);
     if let Some(error) = result.packet.last_error() {

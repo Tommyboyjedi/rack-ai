@@ -180,6 +180,10 @@ impl<'a> ExecuteChange<'a> {
         workspace: &ChangeWorkspace,
         packet: ReviewPacket,
     ) -> Result<ReviewPacket, (ReviewPacket, String)> {
+        let packet = match selected_worker.and_then(ImplementWorkerRuntime::worker_provenance) {
+            Some(provenance) => packet.with_worker_provenance(provenance.clone()),
+            None => packet,
+        };
         let Some(implementer) = self.implementer else {
             return Ok(fail(
                 packet,
@@ -927,6 +931,86 @@ mod tests {
         );
     }
 
+    #[test]
+    fn selected_worker_provenance_is_retained_for_approved_rejected_and_timeout_packets() {
+        let approved = execute_with_worker(
+            &FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]),
+            &FakeManifests::default(),
+            &FakeExecutor::succeeding(),
+            &FakeImplementer::successful("COMPLETE"),
+        )
+        .unwrap();
+        assert_eq!(approved.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            approved.packet.worker_provenance().unwrap().worker_id,
+            "local-coder"
+        );
+
+        let rejected = execute_with_worker(
+            &FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]),
+            &FakeManifests::default(),
+            &FakeExecutor::failing(),
+            &FakeImplementer::successful("COMPLETE"),
+        )
+        .unwrap();
+        assert_eq!(rejected.packet.status(), &ChangeStatus::ChecksFailed);
+        assert_eq!(
+            rejected.packet.worker_provenance().unwrap().worker_role,
+            "implementer-tester"
+        );
+
+        let timeout = execute_with_worker(
+            &FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]),
+            &FakeManifests::default(),
+            &FakeExecutor::succeeding(),
+            &FakeImplementer::with_worker_error("worker timeout"),
+        )
+        .unwrap();
+        assert_eq!(timeout.packet.status(), &ChangeStatus::Failed);
+        assert_eq!(timeout.packet.worker_provenance().unwrap().backend, "jcode");
+    }
+
+    #[test]
+    fn selected_worker_missing_harness_retains_provenance() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let policy = ApprovedCommandPolicy::default();
+        let result = ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &SampleRegistry,
+            command_policy: &policy,
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&FakeExecutor::succeeding()),
+            implementer: None,
+        })
+        .execute(ExecuteChangeRequest {
+            document: sample_document(Some("a".repeat(40))),
+            mode: ChangeExecutionMode::ImplementAndVerify,
+            selected_worker: Some(selected_worker()),
+        })
+        .unwrap();
+
+        assert_eq!(result.packet.status(), &ChangeStatus::ExecutorUnavailable);
+        assert_eq!(
+            result.packet.worker_provenance().unwrap().worker_id,
+            "local-coder"
+        );
+    }
+
+    #[test]
+    fn failure_before_worker_selection_has_unavailable_provenance() {
+        let result = execute(
+            &FakeGit::matching("a".repeat(40)),
+            &FakeManifests::default(),
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&FakeExecutor::succeeding()),
+            None,
+        )
+        .unwrap();
+
+        assert_eq!(result.packet.worker_provenance(), None);
+    }
+
     fn execute(
         git: &FakeGit,
         manifests: &FakeManifests,
@@ -967,6 +1051,48 @@ mod tests {
             document,
             mode,
             selected_worker: None,
+        })
+    }
+
+    fn execute_with_worker(
+        git: &FakeGit,
+        manifests: &FakeManifests,
+        executor: &FakeExecutor,
+        implementer: &FakeImplementer,
+    ) -> Result<super::ExecuteChangeResult, String> {
+        let policy = ApprovedCommandPolicy::default();
+        ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &SampleRegistry,
+            command_policy: &policy,
+            git,
+            manifests,
+            executor: Some(executor),
+            implementer: Some(implementer),
+        })
+        .execute(ExecuteChangeRequest {
+            document: sample_document(Some("a".repeat(40))),
+            mode: ChangeExecutionMode::ImplementAndVerify,
+            selected_worker: Some(selected_worker()),
+        })
+    }
+
+    fn selected_worker() -> crate::ImplementWorkerRuntime {
+        crate::ImplementWorkerRuntime::new(
+            "local-coder".to_string(),
+            "/home/tomp/.local/bin/jcode".to_string(),
+            "local-coder".to_string(),
+            "local-coder".to_string(),
+            "http://127.0.0.1:8018/v1".to_string(),
+        )
+        .with_worker_provenance(crate::WorkerExecutionProvenance {
+            worker_id: "local-coder".to_string(),
+            worker_role: "implementer-tester".to_string(),
+            worker_kind: "jcode".to_string(),
+            model_id: "eqaq-v2-local-coder".to_string(),
+            provider_profile: "local-coder".to_string(),
+            resource_id: "gpu-2060".to_string(),
+            backend: "jcode".to_string(),
+            tool_profile: Some("minimal".to_string()),
         })
     }
 

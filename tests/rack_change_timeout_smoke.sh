@@ -97,6 +97,9 @@ if grep -q 'accepted_revision:' <<< "$output"; then
 fi
 grep -q '"status": "failed"' "$packet"
 grep -q '"acceptance_verdict": "rejected"' "$packet"
+grep -q 'worker_provenance: {"worker_id":"local-coder"' <<< "$output"
+grep -q '"worker_provenance": {' "$packet"
+grep -q '"worker_id": "local-coder"' "$packet"
 grep -q '"README.md"' "$packet"
 grep -q 'wall-clock timeout exceeded' "$packet"
 grep -q 'parent running' "$packet"
