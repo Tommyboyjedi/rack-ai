@@ -100,6 +100,16 @@ grep -q 'status: checks_passed' <<< "$output"
 grep -q 'acceptance_verdict: approved' <<< "$output"
 grep -q '"status": "checks_passed"' "$packet"
 grep -q '"acceptance_verdict": "approved"' "$packet"
+grep -q 'worker_provenance: {"worker_id":"local-coder"' <<< "$output"
+grep -q '"worker_provenance": {' "$packet"
+grep -q '"worker_id": "local-coder"' "$packet"
+grep -q '"worker_role": "implementer-tester"' "$packet"
+grep -q '"model_id": "eqaq-v2-local-coder"' "$packet"
+grep -q '"backend": "jcode"' "$packet"
+if grep -q '"endpoint"' "$packet"; then
+  echo "worker provenance must not serialize endpoint data" >&2
+  exit 1
+fi
 test ! -d "$worktree/target"
 test ! -d "$worktree/.rack-cargo"
 grep -q 'src/lib.rs' "$packet"

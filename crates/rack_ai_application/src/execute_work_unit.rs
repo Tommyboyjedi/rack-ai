@@ -16,6 +16,7 @@ use crate::RepositoryRegistry;
 use crate::ReviewPacket;
 use crate::WorkUnitRequest;
 use crate::WorkUnitRequestDocument;
+use crate::WorkerExecutionProvenance;
 use crate::WorkspaceExecutor;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,6 +69,8 @@ pub struct ExecuteWorkUnitResult {
     pub work_unit_id: String,
     pub change_id: String,
     pub selected_worker_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_provenance: Option<WorkerExecutionProvenance>,
     pub placement: Placement,
     pub status: ChangeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -133,6 +136,7 @@ fn build_result(
         work_unit_id: request.work_unit_id().value().to_string(),
         change_id: request.change_id(),
         selected_worker_id: runtime.worker_id().to_string(),
+        worker_provenance: packet.worker_provenance().cloned(),
         placement: placement.clone(),
         status: packet.status().clone(),
         acceptance_verdict: packet.acceptance_verdict().cloned(),
@@ -235,6 +239,10 @@ mod tests {
         assert_eq!(result.workload_id, "adaptos");
         assert_eq!(result.work_unit_id, "adaptos-001");
         assert_eq!(result.selected_worker_id, "local-coder");
+        assert_eq!(
+            result.worker_provenance.as_ref().unwrap().worker_id,
+            "local-coder"
+        );
         assert_eq!(result.status, ChangeStatus::ChecksPassed);
         assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Approved));
         assert_eq!(result.accepted_revision, Some("b".repeat(40)));
@@ -353,7 +361,17 @@ mod tests {
                         worker_id.to_string(),
                         worker_id.to_string(),
                         "http://127.0.0.1:8018/v1".to_string(),
-                    ),
+                    )
+                    .with_worker_provenance(crate::WorkerExecutionProvenance {
+                        worker_id: worker_id.to_string(),
+                        worker_role: "implementer-tester".to_string(),
+                        worker_kind: "jcode".to_string(),
+                        model_id: "eqaq-v2-local-coder".to_string(),
+                        provider_profile: worker_id.to_string(),
+                        resource_id: "gpu-2060".to_string(),
+                        backend: "jcode".to_string(),
+                        tool_profile: Some("minimal".to_string()),
+                    }),
                     placement,
                 ),
             }

@@ -1,3 +1,5 @@
+use crate::WorkerExecutionProvenance;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementWorkerRuntime {
     worker_id: String,
@@ -7,6 +9,7 @@ pub struct ImplementWorkerRuntime {
     endpoint: String,
     tool_profile: Option<String>,
     context_window: Option<u32>,
+    worker_provenance: Option<WorkerExecutionProvenance>,
 }
 
 impl ImplementWorkerRuntime {
@@ -25,7 +28,13 @@ impl ImplementWorkerRuntime {
             endpoint,
             tool_profile: None,
             context_window: None,
+            worker_provenance: None,
         }
+    }
+
+    pub fn with_worker_provenance(mut self, provenance: WorkerExecutionProvenance) -> Self {
+        self.worker_provenance = Some(provenance);
+        self
     }
 
     pub fn with_tool_profile(mut self, tool_profile: Option<String>) -> Self {
@@ -64,5 +73,9 @@ impl ImplementWorkerRuntime {
 
     pub fn context_window(&self) -> Option<u32> {
         self.context_window
+    }
+
+    pub fn worker_provenance(&self) -> Option<&WorkerExecutionProvenance> {
+        self.worker_provenance.as_ref()
     }
 }

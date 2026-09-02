@@ -69,6 +69,14 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         println!("work_unit_id: {}", result.work_unit_id);
         println!("change_id: {}", result.change_id);
         println!("selected_worker_id: {}", result.selected_worker_id);
+        if let Some(ref provenance) = result.worker_provenance {
+            println!(
+                "worker_provenance: {}",
+                serde_json::to_string(provenance).map_err(|error| error.to_string())?
+            );
+        } else {
+            println!("worker_provenance: unavailable");
+        }
         println!("status: {:?}", result.status);
         if let Some(ref verdict) = result.acceptance_verdict {
             println!("acceptance_verdict: {:?}", verdict);

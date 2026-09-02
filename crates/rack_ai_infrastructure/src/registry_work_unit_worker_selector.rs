@@ -107,6 +107,10 @@ mod tests {
             selection.placement().resource_ids(),
             ["gpu-2060".to_string()]
         );
+        assert_eq!(
+            selection.runtime().worker_provenance().unwrap().worker_role,
+            "implementer-tester"
+        );
     }
 
     #[test]
@@ -119,6 +123,10 @@ mod tests {
         assert_eq!(
             selection.placement().resource_ids(),
             ["gpu-4060ti".to_string()]
+        );
+        assert_eq!(
+            selection.runtime().worker_provenance().unwrap().worker_role,
+            "planner-verifier"
         );
     }
 
