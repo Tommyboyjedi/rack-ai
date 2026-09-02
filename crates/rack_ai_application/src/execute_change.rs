@@ -180,6 +180,10 @@ impl<'a> ExecuteChange<'a> {
         workspace: &ChangeWorkspace,
         packet: ReviewPacket,
     ) -> Result<ReviewPacket, (ReviewPacket, String)> {
+        let packet = match selected_worker.and_then(ImplementWorkerRuntime::worker_provenance) {
+            Some(provenance) => packet.with_worker_provenance(provenance.clone()),
+            None => packet,
+        };
         let Some(implementer) = self.implementer else {
             return Ok(fail(
                 packet,
@@ -187,10 +191,6 @@ impl<'a> ExecuteChange<'a> {
                 "qualified implementation harness is required for external-repository implementation"
                     .to_string(),
             ));
-        };
-        let packet = match selected_worker.and_then(ImplementWorkerRuntime::worker_provenance) {
-            Some(provenance) => packet.with_worker_provenance(provenance.clone()),
-            None => packet,
         };
         let implement_request = ImplementChangeRequest::new(
             workspace.worktree_path().to_path_buf(),
@@ -968,6 +968,33 @@ mod tests {
         .unwrap();
         assert_eq!(timeout.packet.status(), &ChangeStatus::Failed);
         assert_eq!(timeout.packet.worker_provenance().unwrap().backend, "jcode");
+    }
+
+    #[test]
+    fn selected_worker_missing_harness_retains_provenance() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let policy = ApprovedCommandPolicy::default();
+        let result = ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &SampleRegistry,
+            command_policy: &policy,
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&FakeExecutor::succeeding()),
+            implementer: None,
+        })
+        .execute(ExecuteChangeRequest {
+            document: sample_document(Some("a".repeat(40))),
+            mode: ChangeExecutionMode::ImplementAndVerify,
+            selected_worker: Some(selected_worker()),
+        })
+        .unwrap();
+
+        assert_eq!(result.packet.status(), &ChangeStatus::ExecutorUnavailable);
+        assert_eq!(
+            result.packet.worker_provenance().unwrap().worker_id,
+            "local-coder"
+        );
     }
 
     #[test]
