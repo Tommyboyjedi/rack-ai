@@ -8,6 +8,7 @@ use rack_ai_domain::RetentionStatus;
 use crate::ChangeRequest;
 use crate::ChangeWorkspace;
 use crate::CommandEvidence;
+use crate::GenericWorkerSelectionDecision;
 use crate::GitEvidence;
 use crate::WorkerExecutionProvenance;
 
@@ -36,6 +37,8 @@ pub struct ReviewPacket {
     last_error: Option<String>,
     #[serde(default)]
     worker_provenance: Option<WorkerExecutionProvenance>,
+    #[serde(default)]
+    selection_decision: Option<GenericWorkerSelectionDecision>,
 }
 
 impl ReviewPacket {
@@ -63,6 +66,7 @@ impl ReviewPacket {
             retention: RetentionStatus::Retained,
             last_error: None,
             worker_provenance: None,
+            selection_decision: None,
         }
     }
 
@@ -100,6 +104,7 @@ impl ReviewPacket {
             retention: RetentionStatus::Retained,
             last_error: None,
             worker_provenance: None,
+            selection_decision: None,
         }
     }
 
@@ -195,6 +200,15 @@ impl ReviewPacket {
 
     pub fn acceptance_verdict(&self) -> Option<&AcceptanceVerdict> {
         self.acceptance_verdict.as_ref()
+    }
+
+    pub fn with_selection_decision(mut self, decision: GenericWorkerSelectionDecision) -> Self {
+        self.selection_decision = Some(decision);
+        self
+    }
+
+    pub fn selection_decision(&self) -> Option<&GenericWorkerSelectionDecision> {
+        self.selection_decision.as_ref()
     }
 
     pub fn worker_provenance(&self) -> Option<&WorkerExecutionProvenance> {

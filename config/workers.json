@@ -3,7 +3,7 @@
     {
       "id": "local-primary",
       "kind": "jcode",
-      "role": "planner-verifier",
+      "role": "generic-reasoning-worker",
       "entrypoint": "/home/tomp/.local/bin/jcode",
       "backend": "jcode",
       "resource_id": "gpu-4060ti",
@@ -14,7 +14,7 @@
     {
       "id": "local-coder",
       "kind": "jcode",
-      "role": "implementer-tester",
+      "role": "generic-coding-worker",
       "entrypoint": "/home/tomp/.local/bin/jcode",
       "backend": "jcode",
       "resource_id": "gpu-2060",

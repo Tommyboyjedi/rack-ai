@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use serde::Serialize;
 
+use crate::GenericCapability;
+use crate::GenericPriority;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkUnitRequestDocument {
@@ -44,6 +47,19 @@ pub struct WorkUnitDocument {
     #[serde(default)]
     pub requirements: WorkUnitRequirementsDocument,
     pub limits: WorkUnitLimitsDocument,
+    #[serde(default)]
+    pub routing: Option<GenericRoutingHeaderDocument>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GenericRoutingHeaderDocument {
+    pub source_system: String,
+    pub work_id: String,
+    pub submission_id: String,
+    pub idempotency_key: String,
+    pub required_capabilities: Vec<GenericCapability>,
+    pub priority: GenericPriority,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]

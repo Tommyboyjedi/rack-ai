@@ -299,3 +299,24 @@ The next bounded evolution should add only what is required for generic model se
 - backward compatibility for v1 requests and packets.
 
 It should not add client workflow stages, dependency semantics, a universal media/inference framework, ComfyUI arbitration, preemption, or three-GPU optimization.
+
+
+## PR32 wire contract
+
+`rack-ai/work-unit/v2` is the published generic routing schema. `work_unit.routing` is required only for v2 and has this exact shape:
+
+```json
+{"source_system":"athba","work_id":"opaque-work","submission_id":"opaque-submission","idempotency_key":"opaque-key","required_capabilities":["reasoning","coding"],"priority":"medium"}
+```
+
+`required_capabilities` is a non-empty, duplicate-free set from `reasoning`, `coding`, `visual`, and `audio`. Rack AI canonicalizes its persisted ordering. Complexity remains exactly `small`, `medium`, or `large`; `requires_large_context` remains a boolean eligibility constraint. Priority is exactly `low`, `medium`, `high`, or `paramount` and governs admission/scheduling only.
+
+Source admission is typed Rack AI configuration. `athba` is capped at `medium`; high and paramount requests are rejected before worker selection or execution. The configuration includes an explicit wildcard default ceiling of `paramount`; without either a matching source policy or the wildcard default, admission fails closed.
+
+Profiles are internal. The minimal `local-coder` profile is coding-only, small-only, non-large-context, and retains its minimal JCode constraint. `local-primary` is qualified for reasoning and coding at small, medium, and large complexity according to its configured profile. For a small coding request, least-scarce-sufficient selection chooses `local-coder`; reasoning plus coding at medium selects `local-primary`.
+
+A selected v2 request persists a generic selection decision and must have execution provenance for the same worker. A mismatch fails closed. Selection evidence is retained for terminal accepted, rejected, timeout, protocol, and post-selection executor failures; failures before selection do not fabricate a decision. Resource-capable but busy workers produce the typed temporary-unavailable outcome, distinct from no capable worker.
+
+`work_id`, `submission_id`, and `idempotency_key` are opaque. A submission-specific safe internal transaction identifier preserves distinct submissions for the same work ID. A repeat with the same persisted source/work/submission/idempotency identity is rejected before another execution.
+
+V1 remains readable with its historical singular `implementation` routing semantics. Rack AI never interprets a v1 packet as v2. This compatibility window remains until an explicitly versioned deprecation change. PR32 does not add client dependency scheduling, universal inference/media execution forms, ComfyUI arbitration, preemption, idle-worker overflow, or three-GPU scheduling.
