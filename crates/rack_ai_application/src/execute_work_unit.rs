@@ -362,6 +362,88 @@ mod tests {
         assert!(error.contains("not marked ready"));
     }
 
+    #[test]
+    fn v2_selection_execution_provenance_mismatch_fails_closed() {
+        let fixture = Fixture::new();
+        let git = FixtureGit::new(&fixture.root, vec!["src/lib.rs".to_string()]);
+        let manifests = FixtureManifests::default();
+        let executor = FixtureExecutor::default();
+        let implementer = ScriptedChangeImplementer::new(
+            &executor,
+            vec![ScriptedAttempt {
+                match_worker: Some("local-coder".to_string()),
+                writes: vec![ScriptedWrite {
+                    path: "src/lib.rs".to_string(),
+                    content: "pub fn tiny() -> &'static str { \"ok\" }\n".to_string(),
+                }],
+                output: "completed bounded edit".to_string(),
+                error: None,
+                protocol_error: None,
+                executor_kind: Some("jcode-direct".to_string()),
+            }],
+        );
+        let mut selector = FixedSelector::new(
+            "local-coder",
+            Placement::new(
+                vec!["local-coder".to_string()],
+                vec!["gpu-2060".to_string()],
+            ),
+        );
+        let header = crate::GenericRoutingHeader::new(
+            "neutral".to_string(),
+            "work-opaque".to_string(),
+            "submission-opaque".to_string(),
+            "idempotency-opaque".to_string(),
+            vec![crate::GenericCapability::Coding],
+            crate::GenericPriority::Medium,
+        )
+        .unwrap();
+        selector.selection =
+            selector
+                .selection
+                .with_selection_decision(crate::GenericWorkerSelectionDecision::new(
+                    &header,
+                    rack_ai_domain::WorkUnitComplexity::Small,
+                    false,
+                ));
+        selector.selection.runtime = selector.selection.runtime.clone().with_worker_provenance(
+            crate::WorkerExecutionProvenance {
+                worker_id: "local-primary".to_string(),
+                worker_role: "generic-reasoning-worker".to_string(),
+                worker_kind: "jcode".to_string(),
+                model_id: "gemma4-12b-local-primary".to_string(),
+                provider_profile: "local-primary".to_string(),
+                resource_id: "gpu-4060ti".to_string(),
+                backend: "jcode".to_string(),
+                tool_profile: Some("configured".to_string()),
+            },
+        );
+        let mut document = sample_document();
+        document.version = "rack-ai/work-unit/v2".to_string();
+        document.work_unit.routing = Some(
+            crate::work_unit_request_document::GenericRoutingHeaderDocument {
+                source_system: "neutral".to_string(),
+                work_id: "work-opaque".to_string(),
+                submission_id: "submission-opaque".to_string(),
+                idempotency_key: "idempotency-opaque".to_string(),
+                required_capabilities: vec![crate::GenericCapability::Coding],
+                priority: crate::GenericPriority::Medium,
+            },
+        );
+        let error = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+            registry: &fixture,
+            command_policy: &ApprovedCommandPolicy::default(),
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&executor),
+            implementer: Some(&implementer),
+            selector: &selector,
+        })
+        .execute(document)
+        .unwrap_err();
+        assert_eq!(error, "selection and execution provenance worker mismatch");
+    }
+
     #[derive(Default)]
     struct FixtureExecutor {
         commands: RefCell<Vec<Vec<String>>>,
