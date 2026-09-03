@@ -12,6 +12,7 @@ use rack_ai_domain::WorkloadKind;
 use crate::AcceptanceDocument;
 use crate::ChangeRepositoryDocument;
 use crate::ChangeRequestDocument;
+use crate::GenericRoutingHeader;
 use crate::LimitsDocument;
 use crate::WorkUnitRequestDocument;
 
@@ -30,13 +31,30 @@ pub struct WorkUnitRequest {
     complexity: WorkUnitComplexity,
     requires_large_context: bool,
     limits: LimitsDocument,
+    routing: Option<GenericRoutingHeader>,
 }
 
 impl WorkUnitRequest {
     pub fn from_document(document: WorkUnitRequestDocument) -> Result<Self, String> {
-        if document.version.trim() != "rack-ai/work-unit/v1" {
-            return Err("unsupported work unit version".to_string());
-        }
+        let routing = match document.version.trim() {
+            "rack-ai/work-unit/v1" => None,
+            "rack-ai/work-unit/v2" => {
+                let value = document
+                    .work_unit
+                    .routing
+                    .as_ref()
+                    .ok_or("v2 work unit requires routing header")?;
+                Some(GenericRoutingHeader::new(
+                    value.source_system.clone(),
+                    value.work_id.clone(),
+                    value.submission_id.clone(),
+                    value.idempotency_key.clone(),
+                    value.required_capabilities.clone(),
+                    value.priority,
+                )?)
+            }
+            _ => return Err("unsupported work unit version".to_string()),
+        };
         let workload_id = WorkloadId::new(document.workload.id)?;
         let workload_kind = parse_workload_kind(&document.workload.kind)?;
         let work_unit_id = WorkUnitId::new(document.work_unit.id)?;
@@ -76,6 +94,7 @@ impl WorkUnitRequest {
                 timeout_seconds: document.work_unit.limits.timeout_seconds,
                 network: document.work_unit.limits.network,
             },
+            routing,
         })
     }
 
@@ -103,16 +122,30 @@ impl WorkUnitRequest {
         self.requires_large_context
     }
 
+    pub fn routing(&self) -> Option<&GenericRoutingHeader> {
+        self.routing.as_ref()
+    }
+
+    pub fn is_generic_capability_routed(&self) -> bool {
+        self.routing.is_some()
+    }
+
     pub fn dependency_ids(&self) -> &[WorkUnitId] {
         self.dependency_ids.as_slice()
     }
 
     pub fn change_id(&self) -> String {
-        format!(
+        let base = format!(
             "{}--{}",
             self.workload_id.value(),
             self.work_unit_id.value()
-        )
+        );
+        self.routing.as_ref().map_or(base.clone(), |routing| {
+            format!(
+                "{base}--submission-{}",
+                opaque_suffix(&routing.submission_id)
+            )
+        })
     }
 
     pub fn to_change_request_document(&self) -> ChangeRequestDocument {
@@ -126,6 +159,16 @@ impl WorkUnitRequest {
             limits: self.limits.clone(),
         }
     }
+}
+
+fn opaque_suffix(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .fold(14695981039346656037_u64, |hash, byte| {
+            (hash ^ u64::from(*byte)).wrapping_mul(1099511628211)
+        })
+        .to_string()
 }
 
 fn parse_workload_kind(value: &str) -> Result<WorkloadKind, String> {
@@ -226,5 +269,50 @@ mod tests {
             WorkUnitRequest::from_document(document),
             Err("work unit cannot depend on itself".to_string())
         );
+    }
+
+    #[test]
+    fn parses_v2_capability_sets_and_preserves_opaque_identity() {
+        for capabilities in [
+            vec!["coding"],
+            vec!["reasoning"],
+            vec!["reasoning", "coding"],
+        ] {
+            let request =
+                WorkUnitRequest::from_document(v2_document(capabilities.clone())).unwrap();
+            let routing = request.routing().unwrap();
+            assert_eq!(routing.work_id, "work-opaque");
+            assert_eq!(routing.submission_id, "submission-opaque");
+            assert_eq!(routing.required_capabilities.len(), capabilities.len());
+        }
+    }
+
+    #[test]
+    fn rejects_empty_duplicate_and_unknown_v2_capabilities() {
+        assert!(WorkUnitRequest::from_document(v2_document(vec![])).is_err());
+        assert!(WorkUnitRequest::from_document(v2_document(vec!["coding", "coding"])).is_err());
+        let unknown = serde_json::from_value::<WorkUnitRequestDocument>(serde_json::json!({
+            "version":"rack-ai/work-unit/v2", "workload":{"id":"w","kind":"application-development"}, "repository":{"id":"r","base_ref":"main"},
+            "work_unit":{"id":"u","objective":"bounded", "allowed_paths":["src/"], "acceptance":{"commands":[["cargo","test"]]}, "limits":{"max_implementation_attempts":1,"timeout_seconds":1},
+            "routing":{"source_system":"neutral","work_id":"work","submission_id":"submission","idempotency_key":"key","required_capabilities":["unknown"],"priority":"medium"}}}));
+        assert!(unknown.is_err());
+    }
+
+    #[test]
+    fn distinct_v2_submissions_for_one_work_have_distinct_transaction_ids() {
+        let first = v2_document(vec!["coding"]);
+        let mut second = v2_document(vec!["coding"]);
+        second.work_unit.routing.as_mut().unwrap().submission_id = "submission-other".to_string();
+        let first = WorkUnitRequest::from_document(first).unwrap();
+        let second = WorkUnitRequest::from_document(second).unwrap();
+        assert_ne!(first.change_id(), second.change_id());
+    }
+
+    fn v2_document(capabilities: Vec<&str>) -> WorkUnitRequestDocument {
+        serde_json::from_value(serde_json::json!({
+            "version":"rack-ai/work-unit/v2", "workload":{"id":"w","kind":"application-development"}, "repository":{"id":"r","base_ref":"main"},
+            "work_unit":{"id":"u","objective":"bounded", "allowed_paths":["src/"], "acceptance":{"commands":[["cargo","test"]]}, "limits":{"max_implementation_attempts":1,"timeout_seconds":1},
+            "routing":{"source_system":"neutral","work_id":"work-opaque","submission_id":"submission-opaque","idempotency_key":"key-opaque","required_capabilities":capabilities,"priority":"medium"}}
+        })).unwrap()
     }
 }

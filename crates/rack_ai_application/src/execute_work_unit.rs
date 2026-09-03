@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::Serialize;
 
 use rack_ai_domain::AcceptanceVerdict;
@@ -10,6 +12,7 @@ use crate::CommandPolicy;
 use crate::ExecuteChange;
 use crate::ExecuteChangeDependencies;
 use crate::ExecuteChangeRequest;
+use crate::GenericWorkerSelectionDecision;
 use crate::GitWorktree;
 use crate::ImplementWorkerRuntime;
 use crate::RepositoryRegistry;
@@ -23,11 +26,16 @@ use crate::WorkspaceExecutor;
 pub struct WorkUnitWorkerSelection {
     runtime: ImplementWorkerRuntime,
     placement: Placement,
+    selection_decision: Option<GenericWorkerSelectionDecision>,
 }
 
 impl WorkUnitWorkerSelection {
     pub fn new(runtime: ImplementWorkerRuntime, placement: Placement) -> Self {
-        Self { runtime, placement }
+        Self {
+            runtime,
+            placement,
+            selection_decision: None,
+        }
     }
 
     pub fn runtime(&self) -> &ImplementWorkerRuntime {
@@ -37,10 +45,44 @@ impl WorkUnitWorkerSelection {
     pub fn placement(&self) -> &Placement {
         &self.placement
     }
+
+    pub fn with_selection_decision(mut self, decision: GenericWorkerSelectionDecision) -> Self {
+        self.selection_decision = Some(decision);
+        self
+    }
+
+    pub fn selection_decision(&self) -> Option<&GenericWorkerSelectionDecision> {
+        self.selection_decision.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorkUnitSelectionError {
+    SourceAdmissionDenied,
+    SourceAdmissionPolicyMissing,
+    CapabilityUnavailable,
+    TemporarilyUnavailable,
+    Other(String),
+}
+
+impl fmt::Display for WorkUnitSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::SourceAdmissionDenied => "source priority exceeds configured admission ceiling",
+            Self::SourceAdmissionPolicyMissing => "source admission policy is missing",
+            Self::CapabilityUnavailable => "no eligible capability worker",
+            Self::TemporarilyUnavailable => "eligible worker is temporarily unavailable",
+            Self::Other(value) => value,
+        };
+        formatter.write_str(value)
+    }
 }
 
 pub trait WorkUnitWorkerSelector {
-    fn select(&self, request: &WorkUnitRequest) -> Result<WorkUnitWorkerSelection, String>;
+    fn select(
+        &self,
+        request: &WorkUnitRequest,
+    ) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError>;
 }
 
 pub struct ExecuteWorkUnit<'a> {
@@ -100,7 +142,15 @@ impl<'a> ExecuteWorkUnit<'a> {
         document: WorkUnitRequestDocument,
     ) -> Result<ExecuteWorkUnitResult, String> {
         let request = WorkUnitRequest::from_document(document)?;
-        let selection = self.selector.select(&request)?;
+        if let Some(header) = request.routing() {
+            if self.manifests.has_idempotent_submission(header)? {
+                return Err("duplicate idempotent submission".to_string());
+            }
+        }
+        let selection = self
+            .selector
+            .select(&request)
+            .map_err(|error| error.to_string())?;
         let change = ExecuteChange::new(ExecuteChangeDependencies {
             registry: self.registry,
             command_policy: self.command_policy,
@@ -114,12 +164,24 @@ impl<'a> ExecuteWorkUnit<'a> {
             mode: crate::ChangeExecutionMode::ImplementAndVerify,
             selected_worker: Some(selection.runtime().clone()),
         })?;
+        let mut packet = change.packet;
+        let mut packet_path = change.packet_path;
+        if let Some(decision) = selection.selection_decision().cloned() {
+            packet = packet.with_selection_decision(decision);
+            packet_path = self.manifests.save(&packet)?;
+            let executed = packet
+                .worker_provenance()
+                .map(|value| value.worker_id.as_str());
+            if executed != Some(selection.runtime().worker_id()) {
+                return Err("selection and execution provenance worker mismatch".to_string());
+            }
+        }
         Ok(build_result(
             &request,
             selection.runtime(),
             selection.placement(),
-            &change.packet,
-            change.packet_path,
+            &packet,
+            packet_path,
         ))
     }
 }
@@ -382,7 +444,7 @@ mod tests {
         fn select(
             &self,
             _request: &crate::WorkUnitRequest,
-        ) -> Result<WorkUnitWorkerSelection, String> {
+        ) -> Result<WorkUnitWorkerSelection, super::WorkUnitSelectionError> {
             Ok(self.selection.clone())
         }
     }

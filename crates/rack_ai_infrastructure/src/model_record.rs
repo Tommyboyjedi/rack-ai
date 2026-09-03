@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use rack_ai_application::GenericModelEligibilityProfile;
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct ModelRecord {
     pub id: String,
@@ -16,4 +18,6 @@ pub struct ModelRecord {
     pub context_window: Option<u32>,
     #[serde(default)]
     pub max_num_seqs: Option<u32>,
+    #[serde(default)]
+    pub eligibility_profile: Option<GenericModelEligibilityProfile>,
 }
