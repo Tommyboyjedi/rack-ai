@@ -12,6 +12,8 @@ pub struct ImplementChangeRequest {
     task: String,
     allowed_paths: Option<AllowedPaths>,
     timeout_seconds: u32,
+    // TODO(cleanup): ExecuteChange populates max_turns, but the JCode implementation path
+    // never consumes it. Wire the turn bound into JCode execution or remove the ineffective policy field.
     max_turns: usize,
     network_disabled: bool,
     worker: Option<ImplementWorkerRuntime>,
@@ -81,6 +83,8 @@ impl ImplementChangeRequest {
         self.worker.as_ref().map(ImplementWorkerRuntime::worker_id)
     }
 
+    // TODO(cleanup): The active JCode path consumes worker() directly and no current PR32
+    // caller needs these narrower endpoint/model getters. Remove them if no compatibility caller remains.
     pub fn worker_endpoint(&self) -> Option<&str> {
         self.worker.as_ref().map(ImplementWorkerRuntime::endpoint)
     }
