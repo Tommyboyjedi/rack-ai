@@ -16,23 +16,31 @@ use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
+#[cfg(test)]
 use std::time::SystemTime;
+#[cfg(test)]
 use std::time::UNIX_EPOCH;
 
 use rack_ai_application::ImplementWorkerRuntime;
 
 use crate::jcode_execution_config::JCodeExecutionConfig;
 
+#[path = "jcode_runtime_root.rs"]
+mod runtime_root;
+use runtime_root::{JCodeRuntimeRoot, SOCKET_NAME};
+
 const PROCESS_GROUP_TERM_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_GROUP_KILL_GRACE: Duration = Duration::from_millis(500);
 const EXECUTABLE_BUSY_RETRY_GRACE: Duration = Duration::from_millis(20);
 const EXECUTABLE_BUSY_RETRY_LIMIT: usize = 5;
+#[cfg(test)]
 static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -126,18 +134,18 @@ impl JCodeProcessRunner {
         network_disabled: bool,
         allowed_paths: Option<&AllowedPaths>,
     ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
-        let root = temp_root();
-        let result = run_with_root(
+        let root = JCodeRuntimeRoot::create().map_err(|error| {
+            JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
+        })?;
+        run_with_root(
             runtime,
             task,
             workdir,
             timeout_seconds,
             network_disabled,
-            &root,
+            root.path(),
             allowed_paths,
-        );
-        let _ = fs::remove_dir_all(&root);
-        result
+        )
     }
 }
 
@@ -280,7 +288,7 @@ fn prepare_bubblewrap_command(
     allowed_paths: Option<&AllowedPaths>,
 ) -> Result<PreparedCommand, String> {
     let endpoint = LocalEndpoint::parse(runtime.endpoint())?;
-    let socket_path = root.join("selected-vllm.sock");
+    let socket_path = root.join(SOCKET_NAME);
     let launcher_path = root.join("sandbox-launcher.sh");
     let host_bridge = HostUnixBridge::start(&socket_path, endpoint.port)?;
     let bridge_command = bridge_command(root, &socket_path, endpoint.port)?;
@@ -715,6 +723,7 @@ fn should_retry_spawn(error: &io::Error) -> bool {
     error.raw_os_error() == Some(libc::ETXTBSY)
 }
 
+#[cfg(test)]
 fn temp_root() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1165,3 +1174,7 @@ PY
         root
     }
 }
+
+#[cfg(test)]
+#[path = "jcode_socket_path_tests.rs"]
+mod socket_path_tests;
