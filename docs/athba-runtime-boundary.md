@@ -22,7 +22,7 @@ Rack AI is the physical/trust execution authority for the rack. It may:
 - determine deterministic acceptance/rejection;
 - fail closed when the execution contract cannot be satisfied.
 
-Rack AI may understand generic execution concepts such as an environment identifier, workspace, command, allowed path set, declared generated/ignored paths, resource limits, and network policy.
+Rack AI may understand generic execution concepts such as an execution backend, environment identifier, workspace, command, allowed path set, declared generated/ignored paths, resource limits, and network policy.
 
 ## Rack AI must not own
 
@@ -66,6 +66,8 @@ That may include, for example:
 - Docker/Podman/devcontainer/venv/Nix or other implementation choices.
 
 Rack AI should not need to know whether an environment contains Python, Rust, Node, .NET, or another toolchain. It should execute safely in the environment described or selected by ATHBA.
+
+Rack AI now supports multiple generic executor backends. Trusted host execution is appropriate when ATHBA owns a host-resident environment such as `/srv/ATHBA/.venv`; Podman remains appropriate when container isolation is the correct boundary. This is an execution-backend choice, not a Python feature.
 
 ## Contract shape
 

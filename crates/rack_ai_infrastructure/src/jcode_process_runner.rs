@@ -31,6 +31,8 @@ use crate::jcode_execution_config::JCodeExecutionConfig;
 
 const PROCESS_GROUP_TERM_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_GROUP_KILL_GRACE: Duration = Duration::from_millis(500);
+const EXECUTABLE_BUSY_RETRY_GRACE: Duration = Duration::from_millis(20);
+const EXECUTABLE_BUSY_RETRY_LIMIT: usize = 5;
 static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -161,7 +163,7 @@ fn run_with_root(
     )
     .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
     prepared.command.process_group(0);
-    let mut child = prepared.command.spawn().map_err(|error| {
+    let mut child = spawn_with_retry(&mut prepared.command).map_err(|error| {
         JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
     })?;
     let stdout_handle = spawn_reader(child.stdout.take().ok_or_else(|| {
@@ -692,6 +694,25 @@ fn collect_reader(handle: JoinHandle<Result<String, String>>) -> String {
         Ok(Err(error)) => format!("<<reader error: {error}>>"),
         Err(_) => "<<reader panicked>>".to_string(),
     }
+}
+
+fn spawn_with_retry(command: &mut Command) -> Result<Child, io::Error> {
+    for attempt in 0..EXECUTABLE_BUSY_RETRY_LIMIT {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error)
+                if should_retry_spawn(&error) && attempt + 1 < EXECUTABLE_BUSY_RETRY_LIMIT =>
+            {
+                thread::sleep(EXECUTABLE_BUSY_RETRY_GRACE);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("spawn retry loop must return before exhausting attempts");
+}
+
+fn should_retry_spawn(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ETXTBSY)
 }
 
 fn temp_root() -> PathBuf {

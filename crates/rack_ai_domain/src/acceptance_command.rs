@@ -10,8 +10,8 @@ impl AcceptanceCommand {
             return Err("acceptance command cannot be empty".to_string());
         }
         let program = &argv[0];
-        if program.contains('/') || program.contains('\\') || program.contains("..") {
-            return Err("acceptance command must use an approved program name".to_string());
+        if contains_parent_traversal(program) {
+            return Err("acceptance command executable must not use parent traversal".to_string());
         }
         Ok(Self(argv))
     }
@@ -25,15 +25,21 @@ impl AcceptanceCommand {
     }
 }
 
+fn contains_parent_traversal(program: &str) -> bool {
+    program
+        .split(['/', '\\'])
+        .any(|component| component == "..")
+}
+
 #[cfg(test)]
 mod tests {
     use super::AcceptanceCommand;
 
     #[test]
-    fn rejects_empty_or_path_program() {
+    fn rejects_empty_or_parent_traversal_program() {
         assert!(AcceptanceCommand::new(vec![]).is_err());
-        assert!(AcceptanceCommand::new(vec!["/bin/sh".to_string()]).is_err());
         assert!(AcceptanceCommand::new(vec!["../cargo".to_string()]).is_err());
+        assert!(AcceptanceCommand::new(vec!["bin/../cargo".to_string()]).is_err());
     }
 
     #[test]
@@ -42,5 +48,22 @@ mod tests {
             AcceptanceCommand::new(vec!["cargo".to_string(), "test".to_string()]).unwrap();
         assert_eq!(command.program(), "cargo");
         assert_eq!(command.argv(), ["cargo", "test"]);
+    }
+
+    #[test]
+    fn accepts_absolute_and_workspace_local_executable_paths() {
+        let absolute = AcceptanceCommand::new(vec![
+            "/srv/ATHBA/.venv/bin/python".to_string(),
+            "scripts/assert_test_fails.py".to_string(),
+        ])
+        .unwrap();
+        let local = AcceptanceCommand::new(vec![
+            "./.venv/bin/python".to_string(),
+            "-m".to_string(),
+            "pytest".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(absolute.program(), "/srv/ATHBA/.venv/bin/python");
+        assert_eq!(local.program(), "./.venv/bin/python");
     }
 }

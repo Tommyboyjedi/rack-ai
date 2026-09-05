@@ -19,6 +19,7 @@ use crate::ChangeRepositoryTarget;
 use crate::ChangeRequestDocument;
 use crate::ChangeRequestResolution;
 use crate::CommandPolicy;
+use crate::EnvironmentResourceMount;
 use crate::ResolveGitShaRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -28,6 +29,7 @@ pub struct ChangeRequest {
     task: ChangeTask,
     allowed_paths: AllowedPaths,
     acceptance: AcceptancePolicy,
+    environment_resources: Vec<EnvironmentResourceMount>,
     limits: ChangeLimits,
 }
 
@@ -84,6 +86,9 @@ impl ChangeRequest {
             .map(AcceptanceCommand::new)
             .collect::<Result<Vec<_>, _>>()?;
         assert_commands_allowed(resolution.command_policy, &commands)?;
+        let environment_resources = resolution
+            .registry
+            .authorize_environment_resources(&document.environment_resources)?;
         let artifacts = document
             .acceptance
             .required_artifacts
@@ -106,6 +111,7 @@ impl ChangeRequest {
             task: ChangeTask::new(document.task)?,
             allowed_paths,
             acceptance: AcceptancePolicy::new(commands)?.with_required_artifacts(artifacts),
+            environment_resources,
             limits,
         })
     }
@@ -128,6 +134,10 @@ impl ChangeRequest {
 
     pub fn acceptance(&self) -> &AcceptancePolicy {
         &self.acceptance
+    }
+
+    pub fn environment_resources(&self) -> &[EnvironmentResourceMount] {
+        self.environment_resources.as_slice()
     }
 
     pub fn limits(&self) -> &ChangeLimits {

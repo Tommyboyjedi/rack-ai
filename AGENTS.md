@@ -2,7 +2,16 @@
 
 These rules apply to all human and AI changes to `rack-ai`.
 
-For rationale, architecture detail, safety invariants, and verification guidance, see:
+Before inspecting, planning, editing, testing, or committing code, read and obey:
+
+1. `coding_principles.MD`
+2. `agent.MD`
+3. `docs/engineering-contract.md`
+4. the current PR description and any source-controlled implementation contract relevant to the task
+
+`coding_principles.MD` is mandatory application-level policy, not optional style guidance. Exceptions to its class-size, parameter-count, inheritance, or other architectural rules require explicit user approval and documented rationale.
+
+For architecture detail, safety invariants, and verification guidance, see:
 
 `docs/engineering-contract.md`
 
@@ -20,11 +29,11 @@ For rationale, architecture detail, safety invariants, and verification guidance
 
 - External-repository work must stay inside a Rack AI managed isolated Git worktree.
 - Qualified JCode direct execution is the production model-facing coding harness for external repositories.
-- Deterministic acceptance and build/test execution remain rootless Podman bounded.
+- Deterministic acceptance and build/test execution must remain bounded through the configured generic executor backend. Trusted host execution and rootless Podman are both supported backends; do not force caller-owned host environments through Podman when administrator configuration selects host execution.
 - Workers must not mutate the source/default repository, bypass Rack AI worktree management, or bypass post-run Git/path/acceptance review.
 - The same rule applies to `local-primary` when acting as fallback implementer.
 - Fail closed on safety, timeout, review, path, lease, state-integrity, protocol, or evidence failures.
-- All model, Podman, command, review, and retry operations must be bounded.
+- All model, executor, command, review, and retry operations must be bounded.
 - Preserve durable campaign state and operator intent.
 - Pause/cancel must be checked immediately before commit; late worker completion must not bypass them.
 - Active long-running work must leave durable liveness evidence, with no intended heartbeat gap over 30 seconds.
@@ -55,17 +64,12 @@ Rules:
 
 # Rust Programming Standards
 
+The repository-wide principles in `coding_principles.MD` apply to Rust as well as Python-oriented examples in that document. Use Rust structs/enums/request objects as the equivalent typed parameter/value objects.
+
 ## Size and Responsibility
 
 Keep structs, enums, implementation blocks, and major modules small and focused.
-As a default rule, a class-equivalent implementation unit should remain under approximately 100 lines.
-If an implementation grows beyond roughly 100 lines, assume it is carrying too many responsibilities and refactor it into smaller cohesive types/modules/functions.
-
-Exceptions are allowed only where the extra length is mostly declarative rather than behavioural, for example:
-- exhaustive enum matching
-- serialization/schema declarations
-- generated or externally constrained boilerplate
-- compact trait implementations that remain single-purpose
+A class-equivalent application-owned implementation unit must remain under 100 executable lines unless the user explicitly approves an exception and that exception is documented in an application-level Markdown file.
 
 The intent is to prevent large multi-responsibility units, not to satisfy a line counter mechanically.
 
@@ -74,10 +78,9 @@ The intent is to prevent large multi-responsibility units, not to satisfy a line
 - Prefer composition.
 - Prefer small, cohesive functions and types.
 - Prefer explicit typed domain/request/config objects over unstructured maps or loosely related primitives.
-- If several parameters form one concept, group them into a typed object.
-- Do not apply a rigid parameter-count rule where a small direct Rust signature is clearer.
+- If more than two conceptual inputs are required, group them into a typed request/context/config object rather than growing method signatures.
 - Avoid unexplained magic numbers and magic strings; use constants, enums, configuration, or domain types.
-- Rust `match` may be exhaustive; extract large behavioural branches rather than limiting arm count mechanically.
+- Rust `match` may be exhaustive; extract large behavioural branches into responsible objects/modules rather than letting one coordinator own the entire state machine.
 - Prefer enums over stringly typed state.
 - Keep public APIs minimal.
 - Keep dependencies explicit.
@@ -148,8 +151,9 @@ rack_campaign_live_model_smoke: ok
 
 Get explicit human approval before:
 - introducing repository `unsafe`
+- approving an exception to `coding_principles.MD`
 - weakening a safety boundary
-- enabling host-shell mutation of external repos
+- enabling unbounded host-shell mutation of external repos
 - replacing vLLM
 - re-enabling JCode swarm as the primary cross-provider mechanism
 - removing deterministic or semantic review gates
@@ -159,14 +163,16 @@ Get explicit human approval before:
 
 ## Default Working Method
 
-1. Inspect the existing code and tests.
-2. Identify the real defect/gap.
-3. Make the smallest coherent fix.
-4. Add/update tests.
-5. Run targeted tests.
-6. Run workspace tests.
-7. Run applicable smoke/live tests.
-8. Inspect the final diff.
-9. Report residual risk honestly.
+1. Read `coding_principles.MD`, `agent.MD`, and relevant architecture docs.
+2. Inspect the existing code and tests.
+3. Identify the real defect/gap and affected responsibility boundaries.
+4. Refactor first if the change would extend an overgrown object or violate coding principles.
+5. Make the smallest coherent architectural fix.
+6. Add/update tests.
+7. Run targeted tests.
+8. Run workspace tests.
+9. Run applicable smoke/live tests.
+10. Inspect the final diff.
+11. Report residual risk honestly.
 
 Prefer boring, explicit, typed, bounded, observable, recoverable code.

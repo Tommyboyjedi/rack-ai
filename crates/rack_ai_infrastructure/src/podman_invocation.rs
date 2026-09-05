@@ -1,6 +1,8 @@
 use std::path::Path;
 use std::path::PathBuf;
 
+use rack_ai_application::EnvironmentResourceMount;
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PodmanInvocation {
     image: String,
@@ -12,6 +14,7 @@ pub struct PodmanInvocation {
     argv: Vec<String>,
     stdin: Option<String>,
     cidfile: Option<PathBuf>,
+    environment_resources: Vec<EnvironmentResourceMount>,
 }
 
 impl PodmanInvocation {
@@ -32,6 +35,7 @@ impl PodmanInvocation {
             argv: Vec::new(),
             stdin: None,
             cidfile: None,
+            environment_resources: Vec::new(),
         })
     }
 
@@ -70,6 +74,14 @@ impl PodmanInvocation {
         self
     }
 
+    pub fn with_environment_resources(
+        mut self,
+        environment_resources: Vec<EnvironmentResourceMount>,
+    ) -> Self {
+        self.environment_resources = environment_resources;
+        self
+    }
+
     pub fn image(&self) -> &str {
         self.image.as_str()
     }
@@ -104,6 +116,10 @@ impl PodmanInvocation {
 
     pub fn cidfile(&self) -> Option<&Path> {
         self.cidfile.as_deref()
+    }
+
+    pub fn environment_resources(&self) -> &[EnvironmentResourceMount] {
+        self.environment_resources.as_slice()
     }
 }
 

@@ -80,61 +80,82 @@ impl<'a> ExecuteChange<'a> {
             git: self.git,
         })
         .execute(&change_request)?;
-        let mut packet = ReviewPacket::from_request(&change_request).with_workspace(&workspace);
-        packet = match self.inspect_into(&change_request, &workspace, packet) {
+        let packet = self.execute_prepared(
+            &request,
+            &change_request,
+            &workspace,
+            ReviewPacket::from_request(&change_request).with_workspace(&workspace),
+        );
+        self.persist(packet)
+    }
+
+    fn execute_prepared(
+        &self,
+        request: &ExecuteChangeRequest,
+        change_request: &ChangeRequest,
+        workspace: &ChangeWorkspace,
+        mut packet: ReviewPacket,
+    ) -> ReviewPacket {
+        packet = match self.inspect_into(change_request, workspace, packet) {
             Ok(value) => value,
-            Err((packet, error)) => {
-                return self.persist(fail(packet, ChangeStatus::Failed, error));
-            }
+            Err((packet, error)) => return fail(packet, ChangeStatus::Failed, error),
         };
-        if let Some(rejected) = reject_disallowed(&change_request, &packet) {
-            return self.persist(rejected);
+        if let Some(rejected) = reject_disallowed(change_request, &packet) {
+            return rejected;
         }
         if request.mode.runs_implementer() {
-            packet = self.implement(
+            packet = match self.implement(
                 request.selected_worker.as_ref(),
-                &change_request,
-                &workspace,
+                change_request,
+                workspace,
                 packet,
-            )?;
-            if packet.status() == &ChangeStatus::ExecutorUnavailable {
-                return self.persist(packet);
-            }
-            packet = match self.inspect_into(&change_request, &workspace, packet) {
+            ) {
                 Ok(value) => value,
-                Err((packet, error)) => {
-                    return self.persist(fail(packet, ChangeStatus::Failed, error));
-                }
+                Err((packet, error)) => return fail(packet, ChangeStatus::Failed, error),
             };
-            if let Some(rejected) = reject_disallowed(&change_request, &packet) {
-                return self.persist(rejected);
+            if packet.status() == &ChangeStatus::ExecutorUnavailable {
+                return packet;
+            }
+            packet = match self.inspect_into(change_request, workspace, packet) {
+                Ok(value) => value,
+                Err((packet, error)) => return fail(packet, ChangeStatus::Failed, error),
+            };
+            if let Some(rejected) = reject_disallowed(change_request, &packet) {
+                return rejected;
             }
             if packet.status() == &ChangeStatus::Failed {
-                return self.persist(packet);
+                return packet;
             }
         }
         if request.mode.runs_checks() {
-            packet = self.run_checks(&change_request, &workspace, packet)?;
+            packet = match self.run_checks(change_request, workspace, packet.clone()) {
+                Ok(value) => value,
+                Err(error) => return fail(packet, ChangeStatus::Failed, error),
+            };
         }
         if request.mode.runs_implementer() || request.mode.runs_checks() {
             if packet.status() != &ChangeStatus::ExecutorUnavailable {
-                packet = match self.inspect_into(&change_request, &workspace, packet) {
+                packet = match self.inspect_into(change_request, workspace, packet) {
                     Ok(value) => value,
-                    Err((packet, error)) => {
-                        return self.persist(fail(packet, ChangeStatus::Failed, error));
-                    }
+                    Err((packet, error)) => return fail(packet, ChangeStatus::Failed, error),
                 };
-                if let Some(rejected) = reject_disallowed(&change_request, &packet) {
-                    return self.persist(rejected);
+                if let Some(rejected) = reject_disallowed(change_request, &packet) {
+                    return rejected;
                 }
                 if packet.status() == &ChangeStatus::ChecksPassed {
-                    packet =
-                        self.materialize_accepted_revision(&change_request, &workspace, packet)?;
+                    packet = match self.materialize_accepted_revision(
+                        change_request,
+                        workspace,
+                        packet.clone(),
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => return fail(packet, ChangeStatus::Failed, error),
+                    };
                     packet = packet.with_acceptance_verdict(AcceptanceVerdict::Approved);
                 }
             }
         }
-        self.persist(packet)
+        packet
     }
 
     fn inspect_into(
@@ -158,12 +179,12 @@ impl<'a> ExecuteChange<'a> {
         request: &ChangeRequest,
         workspace: &ChangeWorkspace,
         packet: ReviewPacket,
-    ) -> Result<ReviewPacket, String> {
+    ) -> Result<ReviewPacket, (ReviewPacket, String)> {
         let Some(implementer) = self.implementer else {
             return Ok(fail(
                 packet,
                 ChangeStatus::ExecutorUnavailable,
-                "podman-backed coder is required for external-repository implementation"
+                "qualified implementation harness is required for external-repository implementation"
                     .to_string(),
             ));
         };
@@ -186,8 +207,14 @@ impl<'a> ExecuteChange<'a> {
             implement_request
         };
         match implementer.implement(&implement_request) {
-            Ok(result) => Ok(packet.with_implementer_output(result.output().to_string())),
-            Err(error) => Ok(fail(packet, ChangeStatus::Failed, error)),
+            Ok(result) => {
+                let packet = packet.with_implementer_output(result.output().to_string());
+                if let Some(error) = result.protocol_error().or(result.worker_error()) {
+                    return Ok(fail(packet, ChangeStatus::Failed, error.to_string()));
+                }
+                Ok(packet)
+            }
+            Err(error) => Err((packet, error)),
         }
     }
 
@@ -207,7 +234,7 @@ impl<'a> ExecuteChange<'a> {
             return Ok(fail(
                 packet,
                 ChangeStatus::ExecutorUnavailable,
-                "podman is not available; rootless Podman is required for external-repository command execution"
+                "workspace executor is not available for external-repository command execution"
                     .to_string(),
             ));
         };
@@ -219,7 +246,8 @@ impl<'a> ExecuteChange<'a> {
                     workspace.worktree_path().to_path_buf(),
                     command.argv().to_vec(),
                 )?
-                .with_timeout_seconds(timeout),
+                .with_timeout_seconds(timeout)
+                .with_environment_resources(request.environment_resources().to_vec()),
             );
             match result {
                 Ok(execution) => commands.push(execution.evidence().clone()),
@@ -495,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unapproved_acceptance_command() {
+    fn rejects_shell_acceptance_command() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
         let mut document = sample_document(Some("a".repeat(40)));
@@ -521,7 +549,38 @@ mod tests {
                 selected_worker: None,
             })
             .unwrap_err();
-        assert!(error.contains("not approved") || error.contains("approved program"));
+        assert!(error.contains("shell interpreter"));
+    }
+
+    #[test]
+    fn accepts_absolute_executable_paths_in_acceptance_command() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let mut document = sample_document(Some("a".repeat(40)));
+        document.acceptance.commands = vec![vec![
+            "/srv/ATHBA/.venv/bin/python".to_string(),
+            "scripts/assert_test_fails.py".to_string(),
+            "tests/test_reservation_book.py::test_add_duplicate_resource_id".to_string(),
+            "expected failure".to_string(),
+        ]];
+        let registry = SampleRegistry;
+        let policy = ApprovedCommandPolicy::default();
+        let service = ExecuteChange::new(ExecuteChangeDependencies {
+            registry: &registry,
+            command_policy: &policy,
+            git: &git,
+            manifests: &manifests,
+            executor: None,
+            implementer: None,
+        });
+        let result = service
+            .execute(ExecuteChangeRequest {
+                document,
+                mode: ChangeExecutionMode::PrepareOnly,
+                selected_worker: None,
+            })
+            .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::Prepared);
     }
 
     #[test]
@@ -543,7 +602,7 @@ mod tests {
     fn runs_acceptance_commands_through_executor() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let result = execute(
             &git,
             &manifests,
@@ -561,10 +620,35 @@ mod tests {
     }
 
     #[test]
+    fn forwards_environment_resources_to_acceptance_executor() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let mut document = sample_document(Some("a".repeat(40)));
+        document.environment_resources = vec!["/srv/ATHBA/.venv".to_string()];
+        let registry = EnvironmentRegistry;
+        let result = execute_with_registry(
+            &registry,
+            document,
+            &git,
+            &manifests,
+            ChangeExecutionMode::ChecksOnly,
+            Some(&executor),
+            None,
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            executor.seen_environment_resources(),
+            vec![vec!["/srv/ATHBA/.venv".to_string()]]
+        );
+    }
+
+    #[test]
     fn records_failed_acceptance_command() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: true };
+        let executor = FakeExecutor::failing();
         let result = execute(
             &git,
             &manifests,
@@ -586,10 +670,8 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let result = execute(
             &git,
             &manifests,
@@ -618,10 +700,8 @@ mod tests {
     fn no_change_accepted_execution_does_not_create_unnecessary_commit() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let result = execute(
             &git,
             &manifests,
@@ -640,10 +720,8 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: true };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::failing();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let result = execute(
             &git,
             &manifests,
@@ -657,14 +735,105 @@ mod tests {
     }
 
     #[test]
+    fn worker_timeout_becomes_terminal_failed_packet_without_checks() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::with_worker_error(
+            "jcode wall-clock timeout exceeded for worker local-coder after 2 seconds",
+        );
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::Failed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
+        assert_eq!(result.packet.changed_paths(), ["src/lib.rs"]);
+        assert!(result.packet.commands().is_empty());
+        assert_eq!(
+            result.packet.implementer_output(),
+            Some(&"partial output".to_string())
+        );
+        assert!(
+            result
+                .packet
+                .last_error()
+                .unwrap()
+                .contains("wall-clock timeout exceeded")
+        );
+        assert_eq!(git.commit_count(), 0);
+    }
+
+    #[test]
+    fn post_prepare_implementer_error_persists_terminal_packet() {
+        let git = FakeGit::matching("a".repeat(40));
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::with_hard_error("worker config mismatch");
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::Failed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
+        assert_eq!(
+            result.packet.last_error(),
+            Some(&"worker config mismatch".to_string())
+        );
+        assert_eq!(manifests.saved_count(), 1);
+    }
+
+    #[test]
+    fn accepted_revision_materialization_failure_persists_failed_packet() {
+        let git = FakeGit::matching("a".repeat(40))
+            .with_after_paths(vec!["src/lib.rs".to_string()])
+            .with_commit_error("commit failed".to_string());
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
+        let result = execute(
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::Failed);
+        assert_eq!(
+            result.packet.acceptance_verdict(),
+            Some(&AcceptanceVerdict::Rejected)
+        );
+        assert_eq!(
+            result.packet.last_error(),
+            Some(&"commit failed".to_string())
+        );
+        assert_eq!(git.commit_count(), 0);
+        assert_eq!(manifests.saved_count(), 1);
+    }
+
+    #[test]
     fn rejects_out_of_policy_paths_after_implement() {
         let git = FakeGit::matching("a".repeat(40))
             .with_after_paths(vec!["README.md".to_string(), "src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let result = execute(
             &git,
             &manifests,
@@ -689,10 +858,8 @@ mod tests {
             .with_after_paths(vec!["src/lib.rs".to_string()])
             .with_after_checks_paths(vec!["src/lib.rs".to_string(), "README.md".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let result = execute(
             &git,
             &manifests,
@@ -716,10 +883,8 @@ mod tests {
         let git =
             FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
-        let implementer = FakeImplementer {
-            output: "COMPLETE".to_string(),
-        };
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
         let registry = DynamicRegistry::default();
         let result = execute_with_registry(
             &registry,
@@ -746,7 +911,7 @@ mod tests {
     fn fails_closed_when_implementer_missing() {
         let git = FakeGit::matching("a".repeat(40));
         let manifests = FakeManifests::default();
-        let executor = FakeExecutor { fail: false };
+        let executor = FakeExecutor::succeeding();
         let result = execute(
             &git,
             &manifests,
@@ -892,6 +1057,35 @@ mod tests {
         }
     }
 
+    struct EnvironmentRegistry;
+
+    impl RepositoryRegistry for EnvironmentRegistry {
+        fn workspace_root(&self) -> Result<WorkspaceRoot, String> {
+            WorkspaceRoot::new(PathBuf::from("/srv/rack-workspaces"))
+        }
+
+        fn executor_config(&self) -> Result<ExecutorConfig, String> {
+            ExecutorConfig::podman("rust:bookworm".to_string())
+        }
+
+        fn find(&self, id: &RepositoryId) -> Result<RegisteredRepository, String> {
+            if id.value() != "adaptos" {
+                return Err(format!("repository {} is not registered", id.value()));
+            }
+            RegisteredRepository::new(id.clone(), PathBuf::from("/srv/projects/adaptos"))
+        }
+
+        fn authorize_environment_resources(
+            &self,
+            requested_paths: &[String],
+        ) -> Result<Vec<crate::EnvironmentResourceMount>, String> {
+            requested_paths
+                .iter()
+                .map(|path| crate::EnvironmentResourceMount::same_path(PathBuf::from(path)))
+                .collect()
+        }
+    }
+
     struct EmptyRegistry;
 
     impl RepositoryRegistry for EmptyRegistry {
@@ -913,6 +1107,7 @@ mod tests {
         commit_sha: GitSha,
         inspect_count: Cell<usize>,
         commit_calls: RefCell<Vec<Vec<String>>>,
+        commit_error: RefCell<Option<String>>,
         baseline_paths: Vec<String>,
         after_paths: Vec<String>,
         after_checks_paths: Option<Vec<String>>,
@@ -925,6 +1120,7 @@ mod tests {
                 commit_sha: GitSha::new("b".repeat(40)).unwrap(),
                 inspect_count: Cell::new(0),
                 commit_calls: RefCell::new(Vec::new()),
+                commit_error: RefCell::new(None),
                 baseline_paths: Vec::new(),
                 after_paths: Vec::new(),
                 after_checks_paths: None,
@@ -943,6 +1139,11 @@ mod tests {
 
         fn with_after_checks_paths(mut self, after_checks_paths: Vec<String>) -> Self {
             self.after_checks_paths = Some(after_checks_paths);
+            self
+        }
+
+        fn with_commit_error(self, error: String) -> Self {
+            self.commit_error.replace(Some(error));
             self
         }
 
@@ -988,6 +1189,9 @@ mod tests {
         }
 
         fn commit_local(&self, request: &crate::CampaignCommitRequest) -> Result<GitSha, String> {
+            if let Some(error) = self.commit_error.borrow().clone() {
+                return Err(error);
+            }
             self.commit_calls
                 .borrow_mut()
                 .push(request.paths().to_vec());
@@ -1005,6 +1209,10 @@ mod tests {
         fn last_saved(&self) -> Option<ReviewPacket> {
             self.last.borrow().clone()
         }
+
+        fn saved_count(&self) -> usize {
+            self.saved.borrow().len()
+        }
     }
 
     impl ChangeManifestRepository for FakeManifests {
@@ -1017,6 +1225,27 @@ mod tests {
 
     struct FakeExecutor {
         fail: bool,
+        seen_environment_resources: RefCell<Vec<Vec<String>>>,
+    }
+
+    impl FakeExecutor {
+        fn succeeding() -> Self {
+            Self {
+                fail: false,
+                seen_environment_resources: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn failing() -> Self {
+            Self {
+                fail: true,
+                seen_environment_resources: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn seen_environment_resources(&self) -> Vec<Vec<String>> {
+            self.seen_environment_resources.borrow().clone()
+        }
     }
 
     impl WorkspaceExecutor for FakeExecutor {
@@ -1041,6 +1270,13 @@ mod tests {
             &self,
             request: &RunCommandRequest,
         ) -> Result<WorkspaceExecutionResult, String> {
+            self.seen_environment_resources.borrow_mut().push(
+                request
+                    .environment_resources()
+                    .iter()
+                    .map(|item| item.source_path().display().to_string())
+                    .collect(),
+            );
             let code = if self.fail { 1 } else { 0 };
             Ok(WorkspaceExecutionResult::new(CommandEvidence::new(
                 request.argv().to_vec(),
@@ -1051,6 +1287,34 @@ mod tests {
 
     struct FakeImplementer {
         output: String,
+        worker_error: Option<String>,
+        hard_error: Option<String>,
+    }
+
+    impl FakeImplementer {
+        fn successful(output: &str) -> Self {
+            Self {
+                output: output.to_string(),
+                worker_error: None,
+                hard_error: None,
+            }
+        }
+
+        fn with_worker_error(error: &str) -> Self {
+            Self {
+                output: "partial output".to_string(),
+                worker_error: Some(error.to_string()),
+                hard_error: None,
+            }
+        }
+
+        fn with_hard_error(error: &str) -> Self {
+            Self {
+                output: String::new(),
+                worker_error: None,
+                hard_error: Some(error.to_string()),
+            }
+        }
     }
 
     impl ChangeImplementer for FakeImplementer {
@@ -1058,7 +1322,14 @@ mod tests {
             &self,
             _request: &ImplementChangeRequest,
         ) -> Result<ImplementChangeResult, String> {
-            Ok(ImplementChangeResult::new(self.output.clone()))
+            if let Some(error) = &self.hard_error {
+                return Err(error.clone());
+            }
+            let mut result = ImplementChangeResult::new(self.output.clone());
+            if let Some(error) = &self.worker_error {
+                result = result.with_worker_error(error.clone());
+            }
+            Ok(result)
         }
     }
 }

@@ -55,6 +55,14 @@ impl PodmanRunPlan {
             "--env".to_string(),
             "LANG=C.UTF-8".to_string(),
         ];
+        for resource in invocation.environment_resources() {
+            arguments.push("--mount".to_string());
+            arguments.push(format!(
+                "type=bind,src={},dst={},ro",
+                resource.source_path().display(),
+                resource.container_path().display()
+            ));
+        }
         if let Some(cidfile) = invocation.cidfile() {
             arguments.push("--cidfile".to_string());
             arguments.push(cidfile.display().to_string());
@@ -80,6 +88,7 @@ impl PodmanRunPlan {
 mod tests {
     use super::PodmanRunPlan;
     use crate::PodmanInvocation;
+    use rack_ai_application::EnvironmentResourceMount;
     use std::path::PathBuf;
 
     #[test]
@@ -91,6 +100,9 @@ mod tests {
             )
             .unwrap()
             .with_cidfile(PathBuf::from("/tmp/work.cid"))
+            .with_environment_resources(vec![
+                EnvironmentResourceMount::same_path(PathBuf::from("/srv/runtime/.venv")).unwrap(),
+            ])
             .with_argv(vec!["cargo".to_string(), "test".to_string()]),
         )
         .unwrap();
@@ -100,6 +112,7 @@ mod tests {
         assert!(plan.contains("ALL"));
         assert!(plan.contains("no-new-privileges"));
         assert!(plan.contains("type=bind,src=/tmp/work,dst=/workspace"));
+        assert!(plan.contains("type=bind,src=/srv/runtime/.venv,dst=/srv/runtime/.venv,ro"));
         assert!(plan.contains("--cidfile"));
         assert!(plan.contains("/tmp/work.cid"));
         assert!(plan.contains("HOME=/rack-build"));

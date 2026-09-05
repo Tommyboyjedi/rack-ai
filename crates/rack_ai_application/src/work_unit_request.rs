@@ -24,6 +24,7 @@ pub struct WorkUnitRequest {
     objective: ChangeTask,
     allowed_paths: Vec<String>,
     acceptance: AcceptanceDocument,
+    environment_resources: Vec<String>,
     dependency_ids: Vec<WorkUnitId>,
     capability: WorkUnitCapability,
     complexity: WorkUnitComplexity,
@@ -65,6 +66,7 @@ impl WorkUnitRequest {
                 commands: document.work_unit.acceptance.commands,
                 required_artifacts: document.work_unit.acceptance.required_artifacts,
             },
+            environment_resources: document.work_unit.environment_resources,
             dependency_ids,
             capability,
             complexity,
@@ -120,6 +122,7 @@ impl WorkUnitRequest {
             task: self.objective.value().to_string(),
             allowed_paths: self.allowed_paths.clone(),
             acceptance: self.acceptance.clone(),
+            environment_resources: self.environment_resources.clone(),
             limits: self.limits.clone(),
         }
     }
