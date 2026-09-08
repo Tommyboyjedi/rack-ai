@@ -19,6 +19,10 @@ The target repository is the workload; Rack AI remains the control plane and doe
 
 `docs/rack-operations.md` is the headless operating runbook for unattended supervision, restart, retention, and safe upgrade behavior.
 
+## Heavyweight local reasoning
+
+`docs/pr33-heavyweight-local-reasoning.md` records the design and qualification plan for an exclusive heavyweight local reasoning mode using the full rack. It establishes GPT-OSS-120B MXFP4 as the baseline, Qwen3.8-Flash-Next as the preferred larger challenger, heterogeneous multi-GPU/CPU/NVMe placement strategy, and a hard acceptance gate of more than 10 generated tokens/second at useful context.
+
 PR14 harness qualification is recorded in:
 
 - `docs/pr14-rust-harness-qualification-contract.md` — final qualification/routing contract;
