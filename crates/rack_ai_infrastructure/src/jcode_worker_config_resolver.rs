@@ -26,6 +26,7 @@ impl JCodeWorkerConfigResolver {
         if worker.kind != "jcode" {
             return Err(format!("worker is not configured for JCode: {worker_id}"));
         }
+        let provenance = worker.execution_provenance()?;
         let provider_profile = worker
             .provider_profile
             .clone()
@@ -52,7 +53,8 @@ impl JCodeWorkerConfigResolver {
             model.endpoint,
         )
         .with_tool_profile(worker.tool_profile)
-        .with_context_window(model.context_window))
+        .with_context_window(model.context_window)
+        .with_worker_provenance(provenance))
     }
 
     pub fn resolve_default_implementer(&self) -> Result<ImplementWorkerRuntime, String> {
@@ -94,6 +96,10 @@ mod tests {
         assert_eq!(runtime.endpoint(), "http://127.0.0.1:8018/v1");
         assert_eq!(runtime.tool_profile(), Some("minimal"));
         assert_eq!(runtime.context_window(), Some(16368));
+        assert_eq!(
+            runtime.worker_provenance().unwrap().model_id,
+            "eqaq-v2-local-coder"
+        );
     }
 
     #[test]

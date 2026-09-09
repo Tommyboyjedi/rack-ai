@@ -72,6 +72,12 @@ fn live_podman_bash_forbidden_write_rejected_by_path_gate() {
     let fixture = init_fixture(root.join("app"));
     let rack = root.join("rack");
     fs::create_dir_all(rack.join("config")).unwrap();
+    let status = Command::new("git")
+        .args(["init", "-b", "main"])
+        .current_dir(&rack)
+        .status()
+        .unwrap();
+    assert!(status.success());
     fs::write(
         rack.join("config/repositories.json"),
         format!(

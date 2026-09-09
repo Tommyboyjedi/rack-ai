@@ -1,3 +1,5 @@
+use std::fmt;
+
 use serde::Serialize;
 
 use rack_ai_domain::AcceptanceVerdict;
@@ -10,23 +12,30 @@ use crate::CommandPolicy;
 use crate::ExecuteChange;
 use crate::ExecuteChangeDependencies;
 use crate::ExecuteChangeRequest;
+use crate::GenericWorkerSelectionDecision;
 use crate::GitWorktree;
 use crate::ImplementWorkerRuntime;
 use crate::RepositoryRegistry;
 use crate::ReviewPacket;
 use crate::WorkUnitRequest;
 use crate::WorkUnitRequestDocument;
+use crate::WorkerExecutionProvenance;
 use crate::WorkspaceExecutor;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WorkUnitWorkerSelection {
     runtime: ImplementWorkerRuntime,
     placement: Placement,
+    selection_decision: Option<GenericWorkerSelectionDecision>,
 }
 
 impl WorkUnitWorkerSelection {
     pub fn new(runtime: ImplementWorkerRuntime, placement: Placement) -> Self {
-        Self { runtime, placement }
+        Self {
+            runtime,
+            placement,
+            selection_decision: None,
+        }
     }
 
     pub fn runtime(&self) -> &ImplementWorkerRuntime {
@@ -36,10 +45,44 @@ impl WorkUnitWorkerSelection {
     pub fn placement(&self) -> &Placement {
         &self.placement
     }
+
+    pub fn with_selection_decision(mut self, decision: GenericWorkerSelectionDecision) -> Self {
+        self.selection_decision = Some(decision);
+        self
+    }
+
+    pub fn selection_decision(&self) -> Option<&GenericWorkerSelectionDecision> {
+        self.selection_decision.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum WorkUnitSelectionError {
+    SourceAdmissionDenied,
+    SourceAdmissionPolicyMissing,
+    CapabilityUnavailable,
+    TemporarilyUnavailable,
+    Other(String),
+}
+
+impl fmt::Display for WorkUnitSelectionError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let value = match self {
+            Self::SourceAdmissionDenied => "source priority exceeds configured admission ceiling",
+            Self::SourceAdmissionPolicyMissing => "source admission policy is missing",
+            Self::CapabilityUnavailable => "no eligible capability worker",
+            Self::TemporarilyUnavailable => "eligible worker is temporarily unavailable",
+            Self::Other(value) => value,
+        };
+        formatter.write_str(value)
+    }
 }
 
 pub trait WorkUnitWorkerSelector {
-    fn select(&self, request: &WorkUnitRequest) -> Result<WorkUnitWorkerSelection, String>;
+    fn select(
+        &self,
+        request: &WorkUnitRequest,
+    ) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError>;
 }
 
 pub struct ExecuteWorkUnit<'a> {
@@ -68,6 +111,8 @@ pub struct ExecuteWorkUnitResult {
     pub work_unit_id: String,
     pub change_id: String,
     pub selected_worker_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worker_provenance: Option<WorkerExecutionProvenance>,
     pub placement: Placement,
     pub status: ChangeStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -97,7 +142,15 @@ impl<'a> ExecuteWorkUnit<'a> {
         document: WorkUnitRequestDocument,
     ) -> Result<ExecuteWorkUnitResult, String> {
         let request = WorkUnitRequest::from_document(document)?;
-        let selection = self.selector.select(&request)?;
+        if let Some(header) = request.routing() {
+            if self.manifests.has_idempotent_submission(header)? {
+                return Err("duplicate idempotent submission".to_string());
+            }
+        }
+        let selection = self
+            .selector
+            .select(&request)
+            .map_err(|error| error.to_string())?;
         let change = ExecuteChange::new(ExecuteChangeDependencies {
             registry: self.registry,
             command_policy: self.command_policy,
@@ -111,12 +164,24 @@ impl<'a> ExecuteWorkUnit<'a> {
             mode: crate::ChangeExecutionMode::ImplementAndVerify,
             selected_worker: Some(selection.runtime().clone()),
         })?;
+        let mut packet = change.packet;
+        let mut packet_path = change.packet_path;
+        if let Some(decision) = selection.selection_decision().cloned() {
+            packet = packet.with_selection_decision(decision);
+            packet_path = self.manifests.save(&packet)?;
+            let executed = packet
+                .worker_provenance()
+                .map(|value| value.worker_id.as_str());
+            if executed != Some(selection.runtime().worker_id()) {
+                return Err("selection and execution provenance worker mismatch".to_string());
+            }
+        }
         Ok(build_result(
             &request,
             selection.runtime(),
             selection.placement(),
-            &change.packet,
-            change.packet_path,
+            &packet,
+            packet_path,
         ))
     }
 }
@@ -133,6 +198,7 @@ fn build_result(
         work_unit_id: request.work_unit_id().value().to_string(),
         change_id: request.change_id(),
         selected_worker_id: runtime.worker_id().to_string(),
+        worker_provenance: packet.worker_provenance().cloned(),
         placement: placement.clone(),
         status: packet.status().clone(),
         acceptance_verdict: packet.acceptance_verdict().cloned(),
@@ -235,6 +301,10 @@ mod tests {
         assert_eq!(result.workload_id, "adaptos");
         assert_eq!(result.work_unit_id, "adaptos-001");
         assert_eq!(result.selected_worker_id, "local-coder");
+        assert_eq!(
+            result.worker_provenance.as_ref().unwrap().worker_id,
+            "local-coder"
+        );
         assert_eq!(result.status, ChangeStatus::ChecksPassed);
         assert_eq!(result.acceptance_verdict, Some(AcceptanceVerdict::Approved));
         assert_eq!(result.accepted_revision, Some("b".repeat(40)));
@@ -290,6 +360,88 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("not marked ready"));
+    }
+
+    #[test]
+    fn v2_selection_execution_provenance_mismatch_fails_closed() {
+        let fixture = Fixture::new();
+        let git = FixtureGit::new(&fixture.root, vec!["src/lib.rs".to_string()]);
+        let manifests = FixtureManifests::default();
+        let executor = FixtureExecutor::default();
+        let implementer = ScriptedChangeImplementer::new(
+            &executor,
+            vec![ScriptedAttempt {
+                match_worker: Some("local-coder".to_string()),
+                writes: vec![ScriptedWrite {
+                    path: "src/lib.rs".to_string(),
+                    content: "pub fn tiny() -> &'static str { \"ok\" }\n".to_string(),
+                }],
+                output: "completed bounded edit".to_string(),
+                error: None,
+                protocol_error: None,
+                executor_kind: Some("jcode-direct".to_string()),
+            }],
+        );
+        let mut selector = FixedSelector::new(
+            "local-coder",
+            Placement::new(
+                vec!["local-coder".to_string()],
+                vec!["gpu-2060".to_string()],
+            ),
+        );
+        let header = crate::GenericRoutingHeader::new(
+            "neutral".to_string(),
+            "work-opaque".to_string(),
+            "submission-opaque".to_string(),
+            "idempotency-opaque".to_string(),
+            vec![crate::GenericCapability::Coding],
+            crate::GenericPriority::Medium,
+        )
+        .unwrap();
+        selector.selection =
+            selector
+                .selection
+                .with_selection_decision(crate::GenericWorkerSelectionDecision::new(
+                    &header,
+                    rack_ai_domain::WorkUnitComplexity::Small,
+                    false,
+                ));
+        selector.selection.runtime = selector.selection.runtime.clone().with_worker_provenance(
+            crate::WorkerExecutionProvenance {
+                worker_id: "local-primary".to_string(),
+                worker_role: "generic-reasoning-worker".to_string(),
+                worker_kind: "jcode".to_string(),
+                model_id: "gemma4-12b-local-primary".to_string(),
+                provider_profile: "local-primary".to_string(),
+                resource_id: "gpu-4060ti".to_string(),
+                backend: "jcode".to_string(),
+                tool_profile: Some("configured".to_string()),
+            },
+        );
+        let mut document = sample_document();
+        document.version = "rack-ai/work-unit/v2".to_string();
+        document.work_unit.routing = Some(
+            crate::work_unit_request_document::GenericRoutingHeaderDocument {
+                source_system: "neutral".to_string(),
+                work_id: "work-opaque".to_string(),
+                submission_id: "submission-opaque".to_string(),
+                idempotency_key: "idempotency-opaque".to_string(),
+                required_capabilities: vec![crate::GenericCapability::Coding],
+                priority: crate::GenericPriority::Medium,
+            },
+        );
+        let error = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+            registry: &fixture,
+            command_policy: &ApprovedCommandPolicy::default(),
+            git: &git,
+            manifests: &manifests,
+            executor: Some(&executor),
+            implementer: Some(&implementer),
+            selector: &selector,
+        })
+        .execute(document)
+        .unwrap_err();
+        assert_eq!(error, "selection and execution provenance worker mismatch");
     }
 
     #[derive(Default)]
@@ -353,7 +505,17 @@ mod tests {
                         worker_id.to_string(),
                         worker_id.to_string(),
                         "http://127.0.0.1:8018/v1".to_string(),
-                    ),
+                    )
+                    .with_worker_provenance(crate::WorkerExecutionProvenance {
+                        worker_id: worker_id.to_string(),
+                        worker_role: "implementer-tester".to_string(),
+                        worker_kind: "jcode".to_string(),
+                        model_id: "eqaq-v2-local-coder".to_string(),
+                        provider_profile: worker_id.to_string(),
+                        resource_id: "gpu-2060".to_string(),
+                        backend: "jcode".to_string(),
+                        tool_profile: Some("minimal".to_string()),
+                    }),
                     placement,
                 ),
             }
@@ -364,7 +526,7 @@ mod tests {
         fn select(
             &self,
             _request: &crate::WorkUnitRequest,
-        ) -> Result<WorkUnitWorkerSelection, String> {
+        ) -> Result<WorkUnitWorkerSelection, super::WorkUnitSelectionError> {
             Ok(self.selection.clone())
         }
     }

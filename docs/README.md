@@ -12,7 +12,7 @@ The first non-swarm orchestration path is the JSON task contract executed by `bi
 It can also auto-select a template from the request text and preview the generated spec without running it.
 
 External-repository work is specified by `docs/external-repository-change-workflow.md` and executed by `bin/rack-change`.
-The current change command now uses the qualified JCode direct harness for model-facing coding work, followed by deterministic Git/path/acceptance gates and an `acceptance_verdict`. It does not yet run the full local-primary planner/implementer/verifier DAG.
+The current change command now uses the qualified JCode direct harness for model-facing coding work, followed by deterministic Git/path/acceptance gates and an `acceptance_verdict`. Acceptance commands run through Rack AI's generic `WorkspaceExecutor`, which may be backed by trusted host execution or Podman depending on administrator configuration. It does not yet run the full local-primary planner/implementer/verifier DAG.
 The target repository is the workload; Rack AI remains the control plane and does not self-modify as part of a normal change job.
 
 `docs/autonomous-campaign-runner-contract.md` is the implementation contract for the next feature: a bounded, restartable, operator-controlled, local-only campaign runner for unattended external-repository work.
@@ -38,3 +38,5 @@ The older bespoke native coder/tool loop has been removed from production
 code. Direct rack wrappers still exist where useful, but they route to the
 qualified JCode harness rather than a separate model-facing implementation
 loop.
+
+PR29 trusted-host execution is recorded in `docs/pr29-trusted-host-execution.md`.

@@ -182,6 +182,33 @@ This proves:
 
 PR28 does not add Python, pytest, ReservationBook, Node, cargo semantics, Gatekeeper logic, or ATHBA-specific development behaviour to Rack AI.
 
+PR28 also keeps the ATHBA runtime boundary intact: Rack AI trusts the approved
+workspace and executor boundary, not a Rack AI-maintained allow-list of
+language- or framework-specific executable names.
+
 ATHBA continues to decide **what** software-development work means.
 
 Rack AI continues to decide **how** to execute bounded agent work safely on available rack resources.
+
+
+## Environment resources
+
+PR28 also adds a second administrator-owned trust boundary for execution environments/resources. This is separate from repository trust.
+
+`config/repositories.json` may now contain:
+
+```json
+{
+  "trusted_environment_roots": [
+    {
+      "id": "athba-runtime",
+      "root": "/srv/ATHBA/.venv",
+      "enabled": true
+    }
+  ]
+}
+```
+
+A change or work-unit request may include generic `environment_resources` paths. Rack AI canonicalizes each requested path, rejects traversal and symlink escape, refuses paths resolving into the live Rack AI repository, requires the requested path to be beneath an enabled trusted environment root, and then mounts it read-only into the Podman executor at the same absolute container path.
+
+Rack AI does not interpret what the path contains. ATHBA still owns runtime/toolchain semantics; Rack AI only authorizes and exposes an administrator-approved host resource inside bounded execution.

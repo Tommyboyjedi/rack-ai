@@ -1,7 +1,7 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExecutorConfig {
     backend: String,
-    image: String,
+    image: Option<String>,
     workspace_mount: String,
     memory: String,
     pids_limit: u32,
@@ -14,11 +14,21 @@ impl ExecutorConfig {
         }
         Ok(Self {
             backend: "podman".to_string(),
-            image,
+            image: Some(image),
             workspace_mount: "/workspace".to_string(),
             memory: "2g".to_string(),
             pids_limit: 256,
         })
+    }
+
+    pub fn host() -> Self {
+        Self {
+            backend: "host".to_string(),
+            image: None,
+            workspace_mount: "/workspace".to_string(),
+            memory: "2g".to_string(),
+            pids_limit: 256,
+        }
     }
 
     pub fn with_workspace_mount(mut self, workspace_mount: String) -> Self {
@@ -40,8 +50,8 @@ impl ExecutorConfig {
         self.backend.as_str()
     }
 
-    pub fn image(&self) -> &str {
-        self.image.as_str()
+    pub fn image(&self) -> Option<&str> {
+        self.image.as_deref()
     }
 
     pub fn workspace_mount(&self) -> &str {
@@ -65,7 +75,16 @@ mod tests {
     fn builds_podman_defaults() {
         let config = ExecutorConfig::podman("docker.io/library/rust:bookworm".to_string()).unwrap();
         assert_eq!(config.backend(), "podman");
+        assert_eq!(config.image(), Some("docker.io/library/rust:bookworm"));
         assert_eq!(config.workspace_mount(), "/workspace");
         assert_eq!(config.pids_limit(), 256);
+    }
+
+    #[test]
+    fn builds_host_defaults() {
+        let config = ExecutorConfig::host();
+        assert_eq!(config.backend(), "host");
+        assert_eq!(config.image(), None);
+        assert_eq!(config.workspace_mount(), "/workspace");
     }
 }

@@ -9,6 +9,8 @@ pub struct ChangeRequestDocument {
     pub task: String,
     pub allowed_paths: Vec<String>,
     pub acceptance: AcceptanceDocument,
+    #[serde(default)]
+    pub environment_resources: Vec<String>,
     pub limits: LimitsDocument,
 }
 
@@ -65,5 +67,6 @@ mod tests {
         assert_eq!(document.limits.network, "disabled");
         assert!(document.repository.base_sha.is_none());
         assert!(document.repository.root.is_none());
+        assert!(document.environment_resources.is_empty());
     }
 }

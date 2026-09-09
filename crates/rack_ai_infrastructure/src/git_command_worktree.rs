@@ -70,7 +70,10 @@ impl GitWorktree for GitCommandWorktree {
         if &head != request.expected_base_sha() {
             return Err("worktree is not at the recorded base sha".to_string());
         }
-        let status = GitCommand::run(request.worktree_path(), &["status", "--porcelain"])?;
+        let status = GitCommand::run(
+            request.worktree_path(),
+            &["status", "--porcelain=v1", "-uall"],
+        )?;
         let diff = GitCommand::run(request.worktree_path(), &["diff"])?;
         let diff_stat = GitCommand::run(request.worktree_path(), &["diff", "--stat"])?;
         Ok(GitEvidence::new(head, status.clone())
@@ -88,7 +91,7 @@ impl GitWorktree for GitCommandWorktree {
         }
         run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?;
         let head = GitSha::new(run_campaign_git(worktree_path, &["rev-parse", "HEAD"])?)?;
-        let status = run_campaign_git(worktree_path, &["status", "--porcelain"])?;
+        let status = run_campaign_git(worktree_path, &["status", "--porcelain=v1", "-uall"])?;
         let diff = run_campaign_git(worktree_path, &["diff"])?;
         let diff_stat = run_campaign_git(worktree_path, &["diff", "--stat"])?;
         Ok(GitEvidence::new(head, status.clone())
@@ -257,6 +260,152 @@ mod tests {
             branch_change_id("rack/campaign-adaptos-foundation-20260821"),
             "adaptos-foundation-20260821"
         );
+    }
+
+    #[test]
+    fn reports_untracked_file_exactly_and_preserves_single_file_path_policy() {
+        let fixture = init_fixture();
+        let git = GitCommandWorktree;
+        let sha = git
+            .resolve_sha(&ResolveGitShaRequest::new(
+                fixture.clone(),
+                GitRef::new("main".to_string()).unwrap(),
+            ))
+            .unwrap();
+        let worktree = fixture.parent().unwrap().join(format!(
+            "change-worktree-single-file-{}/repo",
+            fixture.file_name().unwrap().to_string_lossy()
+        ));
+        git.create(
+            &CreateChangeWorktreeRequest::new(fixture.clone(), sha.clone())
+                .with_branch_name("rack/change-job-single-file".to_string())
+                .with_worktree_path(worktree.clone()),
+        )
+        .unwrap();
+        let test_file = worktree.join("tests/test_reservation_book.py");
+        fs::create_dir_all(test_file.parent().unwrap()).unwrap();
+        fs::write(
+            &test_file,
+            "def test_placeholder():
+    assert True
+",
+        )
+        .unwrap();
+        let untracked = git
+            .inspect(&InspectChangeWorktreeRequest::new(
+                worktree.clone(),
+                sha.clone(),
+            ))
+            .unwrap();
+        assert_eq!(
+            untracked.changed_paths(),
+            ["tests/test_reservation_book.py"]
+        );
+        let exact_allow = rack_ai_domain::AllowedPaths::new(vec![
+            rack_ai_domain::AllowedPath::new("tests/test_reservation_book.py".to_string()).unwrap(),
+        ])
+        .unwrap();
+        assert!(
+            exact_allow
+                .reject_disallowed(untracked.changed_paths())
+                .is_empty()
+        );
+        fs::write(
+            worktree.join("tests/helper.py"),
+            "def helper():
+    return 1
+",
+        )
+        .unwrap();
+        let with_sibling = git
+            .inspect(&InspectChangeWorktreeRequest::new(worktree, sha))
+            .unwrap();
+        let rejected = exact_allow.reject_disallowed(with_sibling.changed_paths());
+        assert!(
+            rejected
+                .iter()
+                .any(|path| path.as_str() == "tests/helper.py")
+        );
+    }
+
+    #[test]
+    fn reports_multiple_untracked_files_exactly() {
+        let fixture = init_fixture();
+        let git = GitCommandWorktree;
+        let sha = git
+            .resolve_sha(&ResolveGitShaRequest::new(
+                fixture.clone(),
+                GitRef::new("main".to_string()).unwrap(),
+            ))
+            .unwrap();
+        let worktree = fixture.parent().unwrap().join(format!(
+            "change-worktree-untracked-{}/repo",
+            fixture.file_name().unwrap().to_string_lossy()
+        ));
+        git.create(
+            &CreateChangeWorktreeRequest::new(fixture.clone(), sha.clone())
+                .with_branch_name("rack/change-job-untracked".to_string())
+                .with_worktree_path(worktree.clone()),
+        )
+        .unwrap();
+        fs::create_dir_all(worktree.join("tests/subdir")).unwrap();
+        fs::write(
+            worktree.join("tests/test_reservation_book.py"),
+            "def test_one():
+    assert True
+",
+        )
+        .unwrap();
+        fs::write(
+            worktree.join("tests/subdir/test_other.py"),
+            "def test_two():
+    assert True
+",
+        )
+        .unwrap();
+        let dirty = git
+            .inspect(&InspectChangeWorktreeRequest::new(worktree, sha))
+            .unwrap();
+        assert!(
+            dirty
+                .changed_paths()
+                .iter()
+                .any(|path| path == "tests/test_reservation_book.py")
+        );
+        assert!(
+            dirty
+                .changed_paths()
+                .iter()
+                .any(|path| path == "tests/subdir/test_other.py")
+        );
+        assert!(!dirty.changed_paths().iter().any(|path| path == "tests/"));
+    }
+
+    #[test]
+    fn reports_deleted_files_exactly() {
+        let fixture = init_fixture();
+        let git = GitCommandWorktree;
+        let sha = git
+            .resolve_sha(&ResolveGitShaRequest::new(
+                fixture.clone(),
+                GitRef::new("main".to_string()).unwrap(),
+            ))
+            .unwrap();
+        let worktree = fixture.parent().unwrap().join(format!(
+            "change-worktree-delete-{}/repo",
+            fixture.file_name().unwrap().to_string_lossy()
+        ));
+        git.create(
+            &CreateChangeWorktreeRequest::new(fixture.clone(), sha.clone())
+                .with_branch_name("rack/change-job-delete".to_string())
+                .with_worktree_path(worktree.clone()),
+        )
+        .unwrap();
+        fs::remove_file(worktree.join("src/lib.rs")).unwrap();
+        let dirty = git
+            .inspect(&InspectChangeWorktreeRequest::new(worktree, sha))
+            .unwrap();
+        assert_eq!(dirty.changed_paths(), ["src/lib.rs"]);
     }
 
     #[test]

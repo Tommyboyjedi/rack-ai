@@ -40,6 +40,16 @@ impl FileSystemRegistryRepository {
             serde_json::from_str::<ModelsDocument>(&content).map_err(|error| error.to_string())?;
         Ok(document.models)
     }
+
+    pub fn load_source_admission_policies(
+        &self,
+    ) -> Result<Vec<rack_ai_application::GenericSourceAdmissionPolicy>, String> {
+        let content =
+            fs::read_to_string(self.paths.models_path()).map_err(|error| error.to_string())?;
+        let document =
+            serde_json::from_str::<ModelsDocument>(&content).map_err(|error| error.to_string())?;
+        Ok(document.source_admission_policies)
+    }
 }
 
 #[cfg(test)]

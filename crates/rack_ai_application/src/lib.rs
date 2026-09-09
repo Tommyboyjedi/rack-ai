@@ -27,10 +27,12 @@ pub mod command_evidence;
 pub mod command_policy;
 pub mod create_change_worktree_request;
 pub mod durable_file;
+pub mod environment_resource_mount;
 pub mod execute_change;
 pub mod execute_work_unit;
 pub mod execution_queue_repository;
 pub mod executor_config;
+pub mod generic_routing;
 pub mod git_evidence;
 pub mod git_worktree;
 pub mod implement_change_request;
@@ -67,6 +69,7 @@ pub mod work_unit_request;
 pub mod work_unit_request_document;
 pub mod worker_binding;
 pub mod worker_catalog;
+pub mod worker_execution_provenance;
 pub mod workspace_execution_result;
 pub mod workspace_executor;
 pub mod workspace_path;
@@ -165,9 +168,11 @@ pub use change_workspace::ChangeWorkspace;
 pub use clock::Clock;
 pub use durable_file::CampaignLock;
 pub use durable_file::atomic_write;
+pub use environment_resource_mount::EnvironmentResourceMount;
 pub use execute_work_unit::ExecuteWorkUnit;
 pub use execute_work_unit::ExecuteWorkUnitDependencies;
 pub use execute_work_unit::ExecuteWorkUnitResult;
+pub use execute_work_unit::WorkUnitSelectionError;
 pub use execute_work_unit::WorkUnitWorkerSelection;
 pub use execute_work_unit::WorkUnitWorkerSelector;
 
@@ -182,6 +187,12 @@ pub use execute_change::ExecuteChangeRequest;
 pub use execute_change::ExecuteChangeResult;
 pub use execution_queue_repository::ExecutionQueueRepository;
 pub use executor_config::ExecutorConfig;
+pub use generic_routing::{
+    GenericCapability, GenericModelEligibilityProfile, GenericPriority, GenericQualificationStatus,
+    GenericResourceAvailability, GenericResourceAvailabilityEvidence, GenericRoutingHeader,
+    GenericSelectionReason, GenericSourceAdmissionPolicy, GenericWorkerIneligibility,
+    GenericWorkerIneligibilityReason, GenericWorkerSelectionDecision,
+};
 pub use git_evidence::GitEvidence;
 pub use git_worktree::GitWorktree;
 pub use implement_change_request::ImplementChangeRequest;
@@ -227,6 +238,7 @@ pub use work_unit_request::WorkUnitRequest;
 pub use work_unit_request_document::WorkUnitRequestDocument;
 pub use worker_binding::WorkerBinding;
 pub use worker_catalog::WorkerCatalog;
+pub use worker_execution_provenance::WorkerExecutionProvenance;
 pub use workspace_execution_result::WorkspaceExecutionResult;
 pub use workspace_executor::WorkspaceExecutor;
 pub use workspace_path::WorkspacePath;

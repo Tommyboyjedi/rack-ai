@@ -4,11 +4,11 @@ use std::path::PathBuf;
 use rack_ai_application::ExecuteWorkUnit;
 use rack_ai_application::ExecuteWorkUnitDependencies;
 use rack_ai_application::RepositoryRegistry;
+use rack_ai_infrastructure::ConfiguredWorkspaceExecutor;
 use rack_ai_infrastructure::FileSystemChangeManifestRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
 use rack_ai_infrastructure::JCodeChangeImplementer;
-use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RegistryWorkUnitWorkerSelector;
 use rack_ai_infrastructure::RepositoryPaths;
@@ -46,7 +46,7 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     let git = GitCommandWorktree;
     let manifests = FileSystemChangeManifestRepository::new(RepositoryPaths::new(state_root));
     let policy = registry.command_policy()?;
-    let executor = PodmanWorkspaceExecutor::new(registry.executor_config()?);
+    let executor = ConfiguredWorkspaceExecutor::new(registry.executor_config()?)?;
     let implementer = JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), None);
     let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(repo_root));
     let result = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
@@ -69,6 +69,14 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
         println!("work_unit_id: {}", result.work_unit_id);
         println!("change_id: {}", result.change_id);
         println!("selected_worker_id: {}", result.selected_worker_id);
+        if let Some(ref provenance) = result.worker_provenance {
+            println!(
+                "worker_provenance: {}",
+                serde_json::to_string(provenance).map_err(|error| error.to_string())?
+            );
+        } else {
+            println!("worker_provenance: unavailable");
+        }
         println!("status: {:?}", result.status);
         if let Some(ref verdict) = result.acceptance_verdict {
             println!("acceptance_verdict: {:?}", verdict);

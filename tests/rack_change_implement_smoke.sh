@@ -64,6 +64,8 @@ base_sha="$(git -C "$fixture" rev-parse HEAD)"
 rack="$tmp/rack"
 mkdir -p "$rack/config" "$rack/state/changes"
 git -C "$rack" init -b main >/dev/null
+cp "$repo_root/config/workers.json" "$rack/config/workers.json"
+cp "$repo_root/config/models.json" "$rack/config/models.json"
 cat > "$rack/config/repositories.json" <<EOF
 {
   "workspace_root": "$tmp/workspaces",
@@ -98,11 +100,24 @@ grep -q 'status: checks_passed' <<< "$output"
 grep -q 'acceptance_verdict: approved' <<< "$output"
 grep -q '"status": "checks_passed"' "$packet"
 grep -q '"acceptance_verdict": "approved"' "$packet"
+grep -q 'worker_provenance: {"worker_id":"local-coder"' <<< "$output"
+grep -q '"worker_provenance": {' "$packet"
+grep -q '"worker_id": "local-coder"' "$packet"
+grep -q '"worker_role": "implementer-tester"' "$packet"
+grep -q '"model_id": "eqaq-v2-local-coder"' "$packet"
+grep -q '"backend": "jcode"' "$packet"
+if grep -q '"endpoint"' "$packet"; then
+  echo "worker provenance must not serialize endpoint data" >&2
+  exit 1
+fi
 test ! -d "$worktree/target"
 test ! -d "$worktree/.rack-cargo"
 grep -q 'src/lib.rs' "$packet"
 grep -q '42' "$worktree/src/lib.rs"
-test "$(git -C "$worktree" rev-parse HEAD)" = "$base_sha"
+accepted_revision="$(sed -n 's/^accepted_revision: //p' <<< "$output")"
+test -n "$accepted_revision"
+test "$(git -C "$worktree" rev-parse HEAD)" = "$accepted_revision"
+test "$accepted_revision" != "$base_sha"
 test "$(git -C "$fixture" rev-parse HEAD)" = "$base_sha"
 test "$(git -C "$repo_root" rev-parse HEAD)" = "$before_sha"
 
