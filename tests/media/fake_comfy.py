@@ -118,6 +118,11 @@ async def native(request):
     return web.Response(content_type="text/html", text="<html><title>ComfyUI fixture</title><h1>ComfyUI fixture</h1><script>const s=new WebSocket('ws://'+location.host+'/ws');s.onmessage=()=>document.body.dataset.ws='connected';</script></html>")
 
 
+async def asset(request):
+    await asyncio.sleep(0.3)
+    return web.Response(text="export const ready=true;",content_type="text/javascript")
+
+
 async def websocket(request):
     ws = web.WebSocketResponse()
     await ws.prepare(request)
@@ -139,5 +144,6 @@ app.router.add_get("/rack-gate/status", queue)
 app.router.add_post("/rack-gate/barrier", queue)
 app.router.add_get("/", native)
 app.router.add_get("/ws", websocket)
+app.router.add_get("/assets/{name}", asset)
 (root / "machine.json").write_text(json.dumps({"active": False, "pid": os.getpid(), "invocation": ""}))
 web.run_app(app, host="127.0.0.1", port=int(sys.argv[2]), print=None)

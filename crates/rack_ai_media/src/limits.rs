@@ -14,3 +14,5 @@ pub const SOCKET_SECONDS: u64 = 3600;
 pub const AUTHORITY_SECONDS: u64 = 20;
 pub const HEARTBEAT_SECONDS: u64 = 2;
 pub const IMAGE_MAX_EDGE: u32 = 1024;
+pub const NATIVE_WAITERS: usize = 128;
+pub const NATIVE_WAIT_SECONDS: u64 = 5;

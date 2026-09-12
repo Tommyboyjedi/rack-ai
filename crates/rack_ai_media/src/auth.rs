@@ -65,9 +65,6 @@ pub fn origin_allowed(headers: &axum::http::HeaderMap, app: &WebState) -> bool {
         .is_some_and(|v| v == app.config.public_origin || v == app.config.native_origin)
 }
 pub async fn guard(State(app): State<WebState>, mut request: Request, next: Next) -> Response {
-    let Ok(_permit) = app.connections.clone().try_acquire_owned() else {
-        return StatusCode::SERVICE_UNAVAILABLE.into_response();
-    };
     let host = request
         .headers()
         .get(header::HOST)
@@ -81,6 +78,35 @@ pub async fn guard(State(app): State<WebState>, mut request: Request, next: Next
         });
     if !allowed {
         return StatusCode::BAD_REQUEST.into_response();
+    }
+    // HTTP/2 module preloads arrive in bursts. Bound their waiting room while
+    // keeping API/status admission independent of native assets.
+    let native_host = app
+        .config
+        .native_origin
+        .split_once("://")
+        .map(|(_, h)| h.trim_end_matches('/'));
+    let _native_waiter;
+    let _permit;
+    if native_host == Some(host) {
+        _native_waiter = match app.native_waiters.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+        _permit = match tokio::time::timeout(
+            std::time::Duration::from_secs(crate::limits::NATIVE_WAIT_SECONDS),
+            app.native_connections.clone().acquire_owned(),
+        )
+        .await
+        {
+            Ok(Ok(p)) => p,
+            _ => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
+    } else {
+        _permit = match app.connections.clone().try_acquire_owned() {
+            Ok(p) => p,
+            Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        };
     }
     if request.uri().path() == "/login" {
         return next.run(request).await;

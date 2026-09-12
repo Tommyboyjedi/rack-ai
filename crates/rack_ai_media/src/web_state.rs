@@ -7,6 +7,8 @@ pub struct WebState {
     pub client: reqwest::Client,
     pub connections: Arc<tokio::sync::Semaphore>,
     pub sockets: Arc<tokio::sync::Semaphore>,
+    pub native_connections: Arc<tokio::sync::Semaphore>,
+    pub native_waiters: Arc<tokio::sync::Semaphore>,
 }
 impl WebState {
     pub fn new(config: Config) -> Result<Self, String> {
@@ -21,6 +23,10 @@ impl WebState {
                 .build()
                 .map_err(|e| e.to_string())?,
             connections: Arc::new(tokio::sync::Semaphore::new(crate::limits::HTTP_CONCURRENCY)),
+            native_connections: Arc::new(tokio::sync::Semaphore::new(
+                crate::limits::HTTP_CONCURRENCY,
+            )),
+            native_waiters: Arc::new(tokio::sync::Semaphore::new(crate::limits::NATIVE_WAITERS)),
             sockets: Arc::new(tokio::sync::Semaphore::new(
                 crate::limits::SOCKET_CONCURRENCY,
             )),

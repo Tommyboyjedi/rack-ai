@@ -122,3 +122,15 @@ def test_oversized_body_and_spoofed_host_are_rejected(tmp_path):
         headers = dict(env["headers"], Host="evil.invalid")
         assert requests.get(api + "/status", headers=headers, timeout=3).status_code == 400
         assert not json.loads((env["root"] / "machine.json").read_text())["active"]
+
+
+def test_native_module_burst_queues_without_starving_status(tmp_path):
+    with receiver(tmp_path / "machine") as env:
+        owner = {"Authorization":"Bearer "+TOKEN}
+        requests.post(env["api"]+"/api/media/v1/sessions",
+            json={"schema":"rack-ai/media/v1","idempotency_key":"module-burst"},headers=owner,timeout=3).raise_for_status()
+        wait_for(lambda: requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=3).json()["state"] == "ready")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=96) as pool:
+            futures = [pool.submit(requests.get,env["native"]+f"/assets/module-{i}.js",headers=owner,timeout=8) for i in range(96)]
+            assert requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).status_code == 200
+            assert {future.result().status_code for future in futures} == {200}
