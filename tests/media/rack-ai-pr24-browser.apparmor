@@ -1,0 +1,6 @@
+# Scope: root-owned pinned Playwright Chromium 151.0.7922.34, PR24/PR33 proof only.
+abi <abi/4.0>,
+include <tunables/global>
+profile rack-ai-pr24-browser /opt/rack-ai-pr24-browser/chrome-headless-shell flags=(unconfined) {
+  userns,
+}

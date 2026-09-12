@@ -202,7 +202,7 @@ pub use implement_worker_runtime::ImplementWorkerRuntime;
 pub use inspect_change_worktree_request::InspectChangeWorktreeRequest;
 pub use inspect_status::InspectStatus;
 pub use inspect_status::InspectStatusDependencies;
-pub use lease_repository::LeaseRepository;
+pub use lease_repository::{LeaseHandle, LeaseRepository, LeaseRequest};
 pub use lease_state::LeaseState;
 pub use lease_state_repository::LeaseStateRepository;
 pub use operations_config::OperationsConfig;

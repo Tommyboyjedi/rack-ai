@@ -1,0 +1,6 @@
+pytest>=8,<10
+requests>=2.32,<3
+aiohttp>=3.11,<4
+Pillow>=11,<13
+playwright==1.62.0
+jsonschema>=4.23,<5

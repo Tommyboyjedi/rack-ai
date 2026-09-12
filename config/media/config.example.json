@@ -1,0 +1,59 @@
+{
+  "listen": "127.0.0.1:8191",
+  "native_listen": "127.0.0.1:8192",
+  "public_origin": "https://your-rack.your-tailnet.ts.net:8443",
+  "native_origin": "https://your-rack.your-tailnet.ts.net:8444",
+  "backend": "http://127.0.0.1:8190",
+  "state_root": "/srv/rack-ai-media-candidate/state",
+  "resource_root": "/srv/rack-ai/state/resources",
+  "output_root": "/srv/rack-ai-media-candidate/output",
+  "authority_file": "/srv/rack-ai-media-candidate/authority.json",
+  "control_secret_file": "/srv/rack-ai-media-candidate/secrets/control",
+  "unit": "rack-ai-comfyui-pr24.service",
+  "media_uuid": "REPLACE_WITH_VERIFIED_FULL_4080_SUPER_UUID",
+  "protected": [
+    {
+      "container": "vllm-coder",
+      "uuid": "REPLACE_WITH_VERIFIED_FULL_PROTECTED_UUID"
+    },
+    {
+      "container": "vllm-primary",
+      "uuid": "REPLACE_WITH_VERIFIED_FULL_PROTECTED_UUID"
+    }
+  ],
+  "profile": {
+    "id": "local-image",
+    "version": 1,
+    "checkpoint": "/srv/fast/comfyui-models/checkpoints/approved-image.safetensors",
+    "checkpoint_sha256": "REPLACE_WITH_LOCALLY_VERIFIED_SHA256",
+    "runtime_revision": "9113c08c2e14f1ca6c0ccab64920777fd01e1bb9",
+    "available": true
+  },
+  "start_timeout": 180,
+  "drain_timeout": 900,
+  "stop_timeout": 90,
+  "idle_seconds": 30,
+  "session_seconds": 14400,
+  "min_memory_mb": 20000,
+  "min_disk_mb": 10000,
+  "principals": [
+    {
+      "id": "operator",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_RANDOM_OPERATOR_CREDENTIAL",
+      "ceiling": "paramount",
+      "operator": true
+    },
+    {
+      "id": "music-director",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_DIRECTOR_CREDENTIAL",
+      "ceiling": "medium",
+      "operator": false
+    },
+    {
+      "id": "athba",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_ATHBA_CREDENTIAL",
+      "ceiling": "medium",
+      "operator": false
+    }
+  ]
+}

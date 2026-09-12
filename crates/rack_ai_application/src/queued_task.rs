@@ -1,3 +1,4 @@
+#[derive(Clone)]
 pub struct QueuedTask {
     task_id: String,
     spec_path: String,

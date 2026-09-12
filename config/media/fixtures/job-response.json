@@ -1,0 +1,27 @@
+{
+  "schema": "rack-ai/media/v1",
+  "id": "00000000-0000-4000-8000-000000000001",
+  "location": "/api/media/v1/jobs/00000000-0000-4000-8000-000000000001",
+  "work_id": "synthetic-project-image",
+  "submission_id": "fixture-submission-1",
+  "state": "waiting",
+  "profile": "local-image",
+  "profile_version": 1,
+  "parameters": {
+    "prompt": "A blue ceramic cup on a wooden table in soft daylight",
+    "negative_prompt": "",
+    "seed": 42,
+    "width": 512,
+    "height": 512,
+    "steps": 20
+  },
+  "prompt_id": "00000000-0000-4000-8000-000000000002",
+  "activation": null,
+  "workflow_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "model_identity": "1111111111111111111111111111111111111111111111111111111111111111",
+  "created_at": 1,
+  "updated_at": 1,
+  "cancel_requested": false,
+  "artifacts": [],
+  "error": null
+}

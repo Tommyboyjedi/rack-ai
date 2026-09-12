@@ -3,11 +3,15 @@ use std::path::PathBuf;
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RepositoryPaths {
     root: PathBuf,
+    resource_root: Option<PathBuf>,
 }
 
 impl RepositoryPaths {
     pub fn new(root: PathBuf) -> Self {
-        Self { root }
+        Self {
+            root,
+            resource_root: None,
+        }
     }
 
     pub fn root(&self) -> &PathBuf {
@@ -30,8 +34,17 @@ impl RepositoryPaths {
         self.root.join("state/queue/history")
     }
 
+    pub fn with_resource_root(mut self, root: PathBuf) -> Self {
+        self.resource_root = Some(root);
+        self
+    }
+    pub fn resource_root(&self) -> PathBuf {
+        self.resource_root
+            .clone()
+            .unwrap_or_else(|| self.root.join("state/resources"))
+    }
     pub fn leases_dir(&self) -> PathBuf {
-        self.root.join("state/resources/leases")
+        self.resource_root().join("leases")
     }
 
     pub fn changes_dir(&self) -> PathBuf {
