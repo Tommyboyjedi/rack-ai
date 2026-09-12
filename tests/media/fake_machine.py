@@ -29,10 +29,12 @@ if program == "systemctl":
 elif program == "nvidia-smi":
     if any("query-gpu" in a for a in args):
         print(f"{media}, NVIDIA GeForce RTX 4080 SUPER\n{protected[0]}, NVIDIA GeForce RTX 2060\n{protected[1]}, NVIDIA GeForce RTX 4060 Ti")
-    elif state.get("foreign"):
-        print(f"{media}, 1")
-    elif state["active"]:
-        print(f"{media}, {state['pid']}")
+    elif "-x" in args:
+        pid = 1 if state.get("foreign") else state["pid"] if state["active"] else None
+        process = f"<process_info><pid>{pid}</pid><type>{state.get('process_type','C')}</type></process_info>" if pid else ""
+        print(f"<nvidia_smi_log><gpu><uuid>{media}</uuid><processes>{process}</processes></gpu></nvidia_smi_log>")
+    else:
+        sys.exit(4)
 elif program == "docker":
     print(json.dumps([{"DeviceIDs": [protected[0] if "coder" in args else protected[1]]}]))
 else:

@@ -29,9 +29,10 @@ def test_invalid_placement_never_starts(tmp_path, change):
         assert not machine["active"] and not machine.get("mutations")
         assert not list((env["root"]/"resources/leases").glob("*.json"))
 
-def test_foreign_gpu_process_waits_without_effects(tmp_path):
+@pytest.mark.parametrize("process_type", ["C", "G", "C+G"])
+def test_foreign_gpu_process_waits_without_effects(tmp_path, process_type):
     with receiver(tmp_path/"machine") as env:
-        fault(env, machine={"foreign": True})
+        fault(env, machine={"foreign": True, "process_type": process_type})
         submit(env)
         wait_for(lambda: status(env)["state"] == "waiting")
         assert not json.loads((env["root"]/"machine.json").read_text()).get("mutations")

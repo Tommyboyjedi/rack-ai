@@ -26,3 +26,6 @@ state/campaigns/**
 !state/campaigns/.gitkeep
 state/workspaces/**
 .idea/
+
+state/resources/authority.lock
+state/resources/releases/*.json

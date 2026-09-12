@@ -2,6 +2,7 @@ use std::{
     io::Read,
     process::{Command, Stdio},
 };
+const MAX_PROBE_BYTES: u64 = 256 * 1024;
 pub fn run(program: &str, args: &[&str]) -> Result<String, String> {
     // timeout owns only this bounded inspection/control subprocess, never a GPU process.
     let mut child = Command::new("/usr/bin/timeout")
@@ -18,9 +19,9 @@ pub fn run(program: &str, args: &[&str]) -> Result<String, String> {
         .stdout
         .take()
         .ok_or("command stdout missing")?
-        .take(65537)
+        .take(MAX_PROBE_BYTES + 1)
         .read_to_end(&mut bytes);
-    if bytes.len() > 65536 {
+    if bytes.len() as u64 > MAX_PROBE_BYTES {
         let _ = child.kill();
         let _ = child.wait();
         return Err("probe output oversized".into());

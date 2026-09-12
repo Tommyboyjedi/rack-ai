@@ -12,6 +12,7 @@ pub mod dispatch;
 pub mod download;
 pub mod execution;
 pub mod gpu;
+pub mod gpu_processes;
 pub mod lifecycle;
 pub mod limits;
 pub mod native;

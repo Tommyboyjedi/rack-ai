@@ -3,7 +3,7 @@
   "info": {
     "title": "Rack AI private media API",
     "version": "1.0.0",
-    "description": "Bearer principals are server-configured. Browser sessions use HttpOnly cookies and exact Origin checks. Maximum JSON body 16 KiB, 128 active jobs, 2048 retained jobs, 64 HTTP operations and 16 WebSockets. Job admission never requires an interactive session. Retained identities are never silently evicted; full retention returns 503 until deliberate operator archival."
+    "description": "Bearer principals are server-configured. Browser sessions use HttpOnly cookies and exact Origin checks. Maximum JSON body 16 KiB, 128 active jobs, 2048 retained jobs, 64 active API operations, 64 active native operations with a 128-request admission bound and five-second waiting deadline, and 16 WebSockets. Job admission never requires an interactive session. Retained identities are never silently evicted; full retention returns 503 until deliberate operator archival."
   },
   "security": [
     {

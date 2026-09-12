@@ -91,8 +91,11 @@ def test_launcher_native_assets_websocket_and_csrf(tmp_path):
         page.get_by_label("Operator credential").fill(TOKEN)
         page.get_by_role("button", name="Sign in").click()
         page.wait_for_url(env["api"] + "/")
+        page.wait_for_function("document.querySelector('#state').textContent === 'stopped'")
+        assert page.locator("#open").is_hidden()
         page.get_by_role("button", name="Start ComfyUI").click()
         page.locator("#open").wait_for(state="visible", timeout=30000)
+        assert page.locator("#state").inner_text() == "ready"
         with page.expect_popup() as popup:
             page.get_by_role("link", name="Open ComfyUI").click()
         native = popup.value
@@ -103,6 +106,8 @@ def test_launcher_native_assets_websocket_and_csrf(tmp_path):
         page.reload()
         page.get_by_role("button", name="Finish session").click()
         page.wait_for_function("document.querySelector('#state').textContent === 'stopped'", timeout=30000)
+        assert page.locator("#open").is_hidden()
+        assert page.locator("#open").get_attribute("href") is None
         context.close()
         browser.close()
 

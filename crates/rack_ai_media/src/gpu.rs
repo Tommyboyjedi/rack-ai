@@ -10,21 +10,8 @@ impl GpuProbe<'_> {
         .verify()
     }
     pub fn pids(&self) -> Result<Vec<u32>, String> {
-        let raw = run(
-            "nvidia-smi",
-            &[
-                "--query-compute-apps=gpu_uuid,pid",
-                "--format=csv,noheader,nounits",
-            ],
-        )?;
-        let mut pids = vec![];
-        for line in raw.lines().filter(|l| !l.trim().is_empty()) {
-            let (uuid, pid) = line.split_once(',').ok_or("ambiguous GPU process probe")?;
-            if uuid.trim() == self.config.media_uuid {
-                pids.push(pid.trim().parse().map_err(|_| "invalid GPU PID")?);
-            }
-        }
-        Ok(pids)
+        let raw = run("nvidia-smi", &["-q", "-x", "-i", &self.config.media_uuid])?;
+        crate::gpu_processes::parse(&raw, &self.config.media_uuid)
     }
     pub fn owned(&self, observed: &Observation) -> Result<(), String> {
         if observed.pid == 0 || observed.invocation.is_empty() || observed.cgroup.is_empty() {
