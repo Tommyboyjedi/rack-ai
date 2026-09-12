@@ -1,37 +1,47 @@
-# PR24 Codex handoff
+# Codex handoff v2 — one coordinated end-to-end task
 
-Use one implementation request for both milestones. The source-controlled contract carries the detailed decisions and acceptance cases; the prompt should not duplicate that entire document. No particular model's token usage or one-run completion is guaranteed.
+Revision: 2026-09-12. Replaces the earlier CLI-only/two-milestone prompt. Paste the prompt below into the existing local Codex environment that has authorized access to gpurack. Use the user's selected model/reasoning setting. One task covers both repositories; no guaranteed duration or single-run completion is implied.
+
+Before leaving it unattended, let its initial access check finish and handle any genuinely required scoped access approvals. A prompt cannot grant OS/service-manager/Git/network permissions. Do not disable safeguards or bypass host-key validation to remove approval prompts.
 
 ## Implementation prompt
 
 ```text
-Implement Rack AI PR24 end to end: dedicated ComfyUI service ownership plus one bounded managed image workflow. This is an implementation task, not another design proposal. Complete both milestones and their tests in this run where the environment permits.
+Implement the complete ComfyUI user journey in one coordinated task. Do not stop at a plan, CLI, unused API client or scaffolding. The contracts are written; execute them, test, self-review/fix, commit/push and perform the authorized live qualification.
 
-Repository: Tommyboyjedi/rack-ai
-PR: 24
-Head branch: roadmap/pr24-comfyui-resource-switching
-Contract: docs/pr24-comfyui-resource-switching.md
-Source review/map: docs/pr24-code-review.md
+Repositories and existing PR branches:
+- Tommyboyjedi/rack-ai, PR24, roadmap/pr24-comfyui-resource-switching.
+- Tommyboyjedi/musicvideo-director, PR33, integration/rack-ai-media.
+This is Music Director PR33, NOT Rack AI's heavyweight-inference PR33.
 
-Respect the current checkout's AGENTS.md before operating. Fetch current refs, check ancestry and local worktree status, and prepare the PR24 branch in an isolated clean worktree. Incorporate current origin/main through an ordinary merge, preserving PR24's documentation and all unrelated/uncommitted work. The reviewed main was e197079c26cd0d0cb0fb2a85ba5a2af605c244b8; PR32 is already incorporated. Do not force-push, reset a live checkout, revive old PR stacks, or merge PR24 into main. In the prepared worktree, read the applicable mandatory documents and the PR24 contract/review once before implementation; those PR24 files are not present on the older main checkout.
+Start with an access check: use the existing authorized ssh tomp@gpurack route, verify Git access to BOTH repositories, isolated writable worktree/install paths and service-manager permissions. Rack build/test/service work runs on gpurack, not a replacement NUC runtime. Report any required approval immediately; never bypass permissions, host-key checks or authentication. Do not reveal credentials.
 
-Use the source map for targeted inspection, not another whole-repository research sweep. Implement the contract in two internal milestones: A, correct resource ownership and native interactive ComfyUI lifecycle; B, typed managed image submission, reconciliation, artifacts and durable outcomes. Do not stop at milestone A, scaffolding, documentation, or mocked success. Preserve the existing Rust architecture/coding rules and workspace v1/v2 behavior; add focused collaborators, not a new monolithic manager.
+Follow each repository's applicable agent/coding rules. Fetch current refs, inspect local changes and prepare clean isolated worktrees for both branches, retaining their documentation. Incorporate current origin/main by ordinary merge as needed. Do not switch/reset the working /srv/rack-ai checkout, force-push or merge either PR into main. Clone the second repository into an isolated workspace if needed and already authorized.
 
-Non-negotiable: keep the 2060/4060 Ti development services and ATHBA untouched. Use verified UUID placement for the dedicated 4080; do not invent its UUID. No automatic GPU reassignment, vLLM restart, whole-stack Compose operation, driver/dependency upgrade of existing runtimes, heavyweight inference, universal scheduler, frontend replacement or video/audio automation. A busy/uncertain GPU waits or fails closed.
+Read once, then use targeted source inspection:
+- Rack AI: docs/pr24-comfyui-resource-switching.md, revision v2 complete user journey (authoritative), and docs/pr24-code-review.md (historical source map).
+- Music Director: docs/rack-ai-media-integration.md.
+The contracts are on the PR branches, not necessarily main. The old CLI-only exclusions are superseded. I authorize this specific companion Music Director change under its own rules; do not modify ATHBA or put private application data/code into the public Rack AI repo.
 
-Implement owner-safe canonical reservations, recovery, native submission fencing including in-flight requests, bounded service control and the separate image execution path specified in the contract. ComfyUI history is not durable and repeating a prompt UUID does not deduplicate execution. Do not weaken those safeguards to shorten the task.
+Deliver ALL four internal milestones without asking me to approve routine design choices:
+1. Dedicated 4080 ownership, isolated ComfyUI lifecycle, recovery and native submission fencing.
+2. Durable bounded image jobs, one approved local image workflow, safe replay/cancellation and verified artifacts.
+3. Always-available authenticated private receiver/API and a small browser launcher: Start, status, Open normal ComfyUI, Finish session. Return the actual usable URL after deployment.
+4. Wire Music Director's real image Generate action to Rack AI, including settings/Test connection, durable asynchronous progress and exact image import into the correct project. Generation must start ComfyUI automatically; preserve the direct/VastAI backend.
 
-Work efficiently: use fixtures rather than additional local/hosted LLM calls for development tests; no paid inference or subagent swarm. Run targeted tests while developing, then the full workspace suite and one final diff review. Keep progress reports brief. Audit legacy smoke scripts before running them: the existing resource-admission smoke deletes a gpu-2060 lease and must never run unchanged against live state. Tests use temporary job AND resource roots and fake workers/GPU probes; include real middleware/HTTP race tests.
+Keep the 2060/4060 Ti vLLM services, existing development runtime, databases, media and unrelated local changes intact. Verify UUIDs; never guess them. No whole-stack Compose operations, driver updates, automatic GPU reassignment, heavyweight inference, paid generation, model collections or additional LLM/subagent swarm calls. Use existing compatible model assets. Prepare only isolated candidate services/environments and disposable application test data; do not overwrite the user's running application or production database.
 
-When authorized gpurack access exists, perform read-only preflight first. You may prepare an isolated ComfyUI environment and start/stop only the newly owned ComfyUI service. Reuse available local model assets; do not download model collections or alter existing environments. Perform the contract's real image/non-interference/release proof only when prerequisites are satisfied. Missing access, permissions or model assets must not stop completion of code, fixture tests and the runbook; record the exact live gate instead of fabricating success.
+Follow the contracts' resource/authentication/CSRF/native-UI/recovery/idempotency/artifact safeguards. Implement shared schema fixtures and actual cross-repository HTTP/browser tests, not just mocked clients. Use fake GPUs/workers and temporary resource roots for dangerous cases. Never run the legacy lease-deleting resource smoke against live state. Run focused tests, full applicable suites and a final self-review/fix pass. Keep progress brief and persist a concise completion checklist/evidence paths for recovery from interruption.
 
-Commit and push the scoped work to PR24 without rewriting history. Keep the PR draft until live acceptance is evidenced. Update its implementation/qualification status. Final response: commit SHA; concise changes; exact tests/results; CODE_COMPLETE and LIVE_QUALIFIED separately; remaining blockers; exact commands to open ComfyUI, submit the example, inspect and release. Do not merge.
+Deploy and qualify the new media services through the existing authorized private access path when permitted. Prove native UI use and Music Director Generate from a stopped ComfyUI backend with a real local image, correct project import, duplicate prevention and verified resource release. A disposable candidate test is not proof the existing client installation was updated. Missing access/model/permission must be reported precisely while you complete all independent code/tests/runbooks; never invent a pass.
+
+Commit/push scoped work to both existing PRs and update their status; do not merge. Final report: both SHAs/PRs, CODE_COMPLETE, FIXTURE_E2E_PASSED, RACK_LIVE_QUALIFIED, DIRECTOR_LIVE_QUALIFIED, deployed SHAs, actual launcher URL or NOT_DEPLOYED, non-secret connection/activation instructions, exact tests and blockers, stop/rollback instructions. Do not call the task complete while required paths remain TODOs or live evidence is missing; distinguish implemented, tested and deployed.
 ```
 
-## Only when a first run leaves a concrete blocker
+## Only after an actual interruption or remaining prerequisite
 
-Use this continuation only after resolving the stated prerequisite or to repair an actual failing test. Do not start a second design/review cycle by default.
+Resume the same task/thread and retained work rather than launching a duplicate implementation. A short continuation is sufficient:
 
 ```text
-Continue PR24 from its current head and retained evidence. Read the implementation status and docs/pr24-comfyui-resource-switching.md. Do not redesign or restart completed work. Resolve the specifically recorded remaining implementation/test/live-qualification gates, run the affected regression checks, and finish the real ComfyUI image/coexistence/release proof when authorized prerequisites are present. Preserve working development services, local changes, and all ownership/safety rules. Commit/push only scoped corrections to the same PR; do not merge. Report the new SHA, exact evidence, CODE_COMPLETE, LIVE_QUALIFIED, and any remaining blocker honestly.
+Continue the PR24 v2 + musicvideo-director PR33 task from the current branches and retained checklist/evidence. Do not restart research or redesign completed work. Finish only the remaining implementation/test/deployment gates, preserving all safety rules and running services; push scoped corrections to the same PRs, do not merge, and update the separate completion/qualification fields honestly.
 ```
