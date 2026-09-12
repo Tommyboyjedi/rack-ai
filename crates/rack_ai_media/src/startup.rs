@@ -33,6 +33,15 @@ impl StartupObservation<'_> {
         }
         let current = r.store.read()?.service;
         if current.invocation.is_some() && (Lifecycle { runtime: r }).verify(&current).is_ok() {
+            let released = r
+                .store
+                .read()?
+                .sessions
+                .iter()
+                .any(|s| Some(&s.id) == current.session.as_ref() && s.release_requested);
+            if released {
+                return Lifecycle { runtime: r }.transition(ServiceState::Draining);
+            }
             Lifecycle { runtime: r }.authority(&current)?;
             let gate = r.backend.gate()?;
             if gate.mode != current.mode {

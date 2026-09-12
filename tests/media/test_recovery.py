@@ -66,6 +66,8 @@ def test_changed_invocation_quarantines_without_stopping_foreign_service(tmp_pat
         assert machine["active"]
         assert all("stop" not in args for args in machine["mutations"])
         assert list((env["root"]/"resources/leases").glob("*.json"))
+        jobs=json.loads((env["root"]/"state/state.json").read_text())["jobs"]
+        assert all(j["state"] == "interrupted" for j in jobs if j["cleanup_pending"])
 
 def test_cancel_during_render_never_publishes_late_image(tmp_path):
     with receiver(tmp_path/"machine") as env:
@@ -122,3 +124,36 @@ def test_corrupt_state_is_preserved_and_startup_fails_closed(tmp_path):
             env=env["environment"],capture_output=True,timeout=5)
         assert result.returncode != 0 and path.read_text() == "{broken"
         assert not json.loads((env["root"]/"machine.json").read_text())["active"]
+
+
+def test_backend_loss_after_release_reconciles_session_without_restart(tmp_path):
+    with receiver(tmp_path/"machine") as env:
+        owner={"Authorization":"Bearer "+TOKEN}
+        session=requests.post(env["api"]+"/api/media/v1/sessions",
+            json={"schema":"rack-ai/media/v1","idempotency_key":"release-reboot"},headers=owner,timeout=3).json()
+        wait_for(lambda: status(env)["state"] == "ready")
+        requests.post(env["api"]+session["location"]+"/release",headers=owner,json={},timeout=3).raise_for_status()
+        fault(env,machine={"active":False})
+        env["restart"]()
+        wait_for(lambda: status(env)["state"] == "stopped")
+        assert status(env)["session_id"] is None
+        assert not list((env["root"]/"resources/leases").glob("*.json"))
+
+
+def test_release_during_startup_never_reopens_ready_admission(tmp_path):
+    with receiver(tmp_path/"machine") as env:
+        owner={"Authorization":"Bearer "+TOKEN}
+        fault(env,machine={"start_ignored":True})
+        session=requests.post(env["api"]+"/api/media/v1/sessions",
+            json={"schema":"rack-ai/media/v1","idempotency_key":"late-ready"},headers=owner,timeout=3).json()
+        wait_for(lambda: status(env)["state"] == "starting")
+        wait_for(lambda: any("start" in args for args in json.loads((env["root"]/"machine.json").read_text()).get("mutations",[])))
+        requests.post(env["api"]+session["location"]+"/release",headers=owner,json={},timeout=3).raise_for_status()
+        fault(env,machine={"active":True,"invocation":uuid.uuid4().hex})
+        seen=[]
+        def stopped():
+            value=status(env)["state"]
+            seen.append(value)
+            return value=="stopped"
+        wait_for(stopped)
+        assert "ready" not in seen

@@ -49,6 +49,16 @@ pub fn quarantine(runtime: &Runtime, error: &str) -> Result<(), String> {
     runtime.store.update(|s| {
         s.service.state = ServiceState::RecoveryRequired;
         s.service.error = Some(error.into());
+        for job in &mut s.jobs {
+            if job.cleanup_pending && !job.state.terminal() {
+                job.state = JobState::Interrupted;
+                job.error = Some(
+                    "backend ownership or outcome requires recovery; no redispatch permitted"
+                        .into(),
+                );
+                job.updated_at = now();
+            }
+        }
         Ok(())
     })?;
     closed
@@ -80,10 +90,15 @@ pub fn recover(runtime: &Runtime) -> Result<(), String> {
                 for j in &mut s.jobs {
                     if j.cleanup_pending {
                         j.cleanup_pending = false;
-                        if !j.cancel_requested {
+                        if !j.state.terminal() {
                             j.state = JobState::Interrupted;
                             j.error = Some("backend lost during receiver restart".into());
                         }
+                    }
+                }
+                for session in &mut s.sessions {
+                    if session.release_requested {
+                        session.stopped = true;
                     }
                 }
                 s.service = Service::default();
