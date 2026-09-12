@@ -8,6 +8,8 @@ pub struct ToolCallRecord {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementChangeResult {
     output: String,
+    // TODO(cleanup): The generic ExecuteChange -> ReviewPacket route currently persists
+    // output/errors but drops stderr, parsed tool_calls and executor_kind. Preserve that evidence or remove the dead route data.
     stderr: Option<String>,
     tool_calls: Vec<ToolCallRecord>,
     protocol_error: Option<String>,

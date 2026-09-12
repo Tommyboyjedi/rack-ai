@@ -12,6 +12,7 @@
       "properties": {
         "id": {"type": "string"},
         "registered_root": {"type": "string"},
+        "root": {"type": "string"},
         "base_ref": {"type": "string"},
         "base_sha": {"type": ["string", "null"]}
       }

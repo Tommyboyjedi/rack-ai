@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use rack_ai_domain::AcceptanceCommand;
 use rack_ai_domain::AllowedPath;
 use rack_ai_domain::AllowedPaths;
@@ -17,6 +19,7 @@ use crate::ChangeRepositoryTarget;
 use crate::ChangeRequestDocument;
 use crate::ChangeRequestResolution;
 use crate::CommandPolicy;
+use crate::EnvironmentResourceMount;
 use crate::ResolveGitShaRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -26,6 +29,7 @@ pub struct ChangeRequest {
     task: ChangeTask,
     allowed_paths: AllowedPaths,
     acceptance: AcceptancePolicy,
+    environment_resources: Vec<EnvironmentResourceMount>,
     limits: ChangeLimits,
 }
 
@@ -34,9 +38,13 @@ impl ChangeRequest {
         document: ChangeRequestDocument,
         resolution: &ChangeRequestResolution,
     ) -> Result<Self, String> {
+        assert_root_fields_are_consistent(&document)?;
         let change_id = ChangeId::new(document.change_id)?;
         let repository_id = RepositoryId::new(document.repository.id)?;
-        let registered = resolution.registry.find(&repository_id)?;
+        let requested_root = document.repository.root.as_deref().map(Path::new);
+        let registered = resolution
+            .registry
+            .resolve_target(&repository_id, requested_root)?;
         if !registered.enabled() {
             return Err(format!("repository {} is disabled", repository_id.value()));
         }
@@ -78,6 +86,9 @@ impl ChangeRequest {
             .map(AcceptanceCommand::new)
             .collect::<Result<Vec<_>, _>>()?;
         assert_commands_allowed(resolution.command_policy, &commands)?;
+        let environment_resources = resolution
+            .registry
+            .authorize_environment_resources(&document.environment_resources)?;
         let artifacts = document
             .acceptance
             .required_artifacts
@@ -100,6 +111,7 @@ impl ChangeRequest {
             task: ChangeTask::new(document.task)?,
             allowed_paths,
             acceptance: AcceptancePolicy::new(commands)?.with_required_artifacts(artifacts),
+            environment_resources,
             limits,
         })
     }
@@ -124,9 +136,20 @@ impl ChangeRequest {
         &self.acceptance
     }
 
+    pub fn environment_resources(&self) -> &[EnvironmentResourceMount] {
+        self.environment_resources.as_slice()
+    }
+
     pub fn limits(&self) -> &ChangeLimits {
         &self.limits
     }
+}
+
+fn assert_root_fields_are_consistent(document: &ChangeRequestDocument) -> Result<(), String> {
+    if document.repository.registered_root.is_some() && document.repository.root.is_some() {
+        return Err("repository must not specify both registered_root and root".to_string());
+    }
+    Ok(())
 }
 
 fn assert_commands_allowed(

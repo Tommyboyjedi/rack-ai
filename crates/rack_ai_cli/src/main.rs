@@ -41,6 +41,7 @@ use rack_ai_infrastructure::UtcDateCommandClock;
 mod campaign_command;
 mod change_command;
 mod sandbox_tcp_bridge;
+mod work_unit_command;
 use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Map;
@@ -175,10 +176,13 @@ fn execute() -> Result<i32, String> {
     } else if command == "task" {
         run_task_from_arguments(roots.repo_root, &arguments[2..])
     } else if command == "coordinator" {
-        run_coordinator_command(roots.repo_root, &arguments[2..])    } else if command == "healthcheck" {
+        run_coordinator_command(roots.repo_root, &arguments[2..])
+    } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
     } else if command == "change" {
         change_command::run(roots.repo_root, roots.state_root, &arguments[2..])
+    } else if command == "work-unit" {
+        work_unit_command::run(roots.repo_root, roots.state_root, &arguments[2..])
     } else if command == "campaign" {
         campaign_command::run(roots.repo_root, roots.state_root, &arguments[2..])
     } else {

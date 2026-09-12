@@ -6,12 +6,12 @@ use rack_ai_application::ExecuteChange;
 use rack_ai_application::ExecuteChangeDependencies;
 use rack_ai_application::ExecuteChangeRequest;
 use rack_ai_application::RepositoryRegistry;
+use rack_ai_infrastructure::ConfiguredWorkspaceExecutor;
 use rack_ai_infrastructure::FileSystemChangeManifestRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
 use rack_ai_infrastructure::GitCommandWorktree;
 use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::JCodeWorkerConfigResolver;
-use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 
@@ -66,14 +66,17 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
     } else {
         None
     };
-    let executor = executor_config.clone().map(PodmanWorkspaceExecutor::new);
-    let default_worker = if mode.runs_implementer() {
+    let executor = executor_config
+        .clone()
+        .map(ConfiguredWorkspaceExecutor::new)
+        .transpose()?;
+    let selected_worker = if mode.runs_implementer() {
         Some(runtime_resolver.resolve_default_implementer()?)
     } else {
         None
     };
-    let implementer = default_worker.map(|worker| {
-        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker))
+    let implementer = selected_worker.as_ref().map(|worker| {
+        JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), Some(worker.clone()))
     });
     let service = ExecuteChange::new(ExecuteChangeDependencies {
         registry: &registry,
@@ -87,7 +90,11 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
             .as_ref()
             .map(|item| item as &dyn rack_ai_application::ChangeImplementer),
     });
-    let result = service.execute(ExecuteChangeRequest { document, mode })?;
+    let result = service.execute(ExecuteChangeRequest {
+        document,
+        mode,
+        selected_worker,
+    })?;
     println!("change_id: {}", result.packet.change_id());
     println!("branch: {}", result.packet.branch());
     println!("worktree: {}", result.packet.worktree_path());
@@ -100,6 +107,17 @@ pub fn run(repo_root: PathBuf, state_root: PathBuf, arguments: &[String]) -> Res
             "acceptance_verdict: {}",
             verdict.as_str().unwrap_or("unknown")
         );
+    }
+    if result.packet.acceptance_verdict() == Some(&rack_ai_domain::AcceptanceVerdict::Approved) {
+        println!("accepted_revision: {}", result.packet.head_sha());
+    }
+    if let Some(provenance) = result.packet.worker_provenance() {
+        println!(
+            "worker_provenance: {}",
+            serde_json::to_string(provenance).map_err(|error| error.to_string())?
+        );
+    } else {
+        println!("worker_provenance: unavailable");
     }
     println!("packet: {}", result.packet_path);
     if let Some(error) = result.packet.last_error() {

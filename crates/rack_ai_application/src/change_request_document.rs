@@ -2,26 +2,33 @@ use serde::Deserialize;
 use serde::Serialize;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChangeRequestDocument {
     pub change_id: String,
     pub repository: ChangeRepositoryDocument,
     pub task: String,
     pub allowed_paths: Vec<String>,
     pub acceptance: AcceptanceDocument,
+    #[serde(default)]
+    pub environment_resources: Vec<String>,
     pub limits: LimitsDocument,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ChangeRepositoryDocument {
     pub id: String,
     #[serde(default)]
     pub registered_root: Option<String>,
+    #[serde(default)]
+    pub root: Option<String>,
     pub base_ref: String,
     #[serde(default)]
     pub base_sha: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct AcceptanceDocument {
     pub commands: Vec<Vec<String>>,
     #[serde(default)]
@@ -29,6 +36,7 @@ pub struct AcceptanceDocument {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct LimitsDocument {
     pub max_implementation_attempts: u32,
     pub timeout_seconds: u32,
@@ -58,5 +66,7 @@ mod tests {
         assert_eq!(document.change_id, "adaptos-001");
         assert_eq!(document.limits.network, "disabled");
         assert!(document.repository.base_sha.is_none());
+        assert!(document.repository.root.is_none());
+        assert!(document.environment_resources.is_empty());
     }
 }

@@ -26,6 +26,7 @@ use rack_ai_application::ScriptedChangeImplementer;
 use rack_ai_application::ScriptedImplementerDocument;
 use rack_ai_application::SystemRecoverySleeper;
 use rack_ai_application::SystemUnixClock;
+use rack_ai_infrastructure::ConfiguredWorkspaceExecutor;
 use rack_ai_infrastructure::EndpointProbe;
 use rack_ai_infrastructure::FileSystemRegistryRepository;
 use rack_ai_infrastructure::FileSystemRepositoryRegistry;
@@ -34,7 +35,6 @@ use rack_ai_infrastructure::JCodeChangeImplementer;
 use rack_ai_infrastructure::LocalPrimaryRecoveryReasoner;
 use rack_ai_infrastructure::LocalPrimaryReviewer;
 use rack_ai_infrastructure::PodmanAvailability;
-use rack_ai_infrastructure::PodmanWorkspaceExecutor;
 use rack_ai_infrastructure::RegistryPaths;
 
 struct RegistryWorkers {
@@ -97,12 +97,20 @@ impl CampaignHealth for LiveHealth {
     }
 
     fn assert_executor(&self) -> Result<(), String> {
-        PodmanAvailability::ensure()?;
         let registry =
             FileSystemRepositoryRegistry::new(RegistryPaths::new(self.repo_root.clone()));
         let config = registry.executor_config()?;
-        PodmanAvailability::ensure_image("podman", config.image())?;
-        Ok(())
+        match config.backend() {
+            "host" => Ok(()),
+            "podman" => {
+                PodmanAvailability::ensure()?;
+                let image = config
+                    .image()
+                    .ok_or("podman executor image is not configured".to_string())?;
+                PodmanAvailability::ensure_image("podman", image)
+            }
+            value => Err(format!("unsupported executor backend: {value}")),
+        }
     }
 }
 
@@ -612,8 +620,10 @@ where
     let git = GitCommandWorktree;
     let executor_config = registry.executor_config()?;
     let container_tracker = Arc::new(CampaignContainerTracker::new(state_root.clone()));
-    let executor = PodmanWorkspaceExecutor::new(executor_config.clone())
-        .with_observer(container_tracker.clone());
+    let executor = ConfiguredWorkspaceExecutor::with_observer(
+        executor_config.clone(),
+        container_tracker.clone(),
+    )?;
     let live_implementer = JCodeChangeImplementer::new(RegistryPaths::new(repo_root.clone()), None);
     let fixture_document = load_fixture_document(fixture)?;
     let scripted = fixture_document

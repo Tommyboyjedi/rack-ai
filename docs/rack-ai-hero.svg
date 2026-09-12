@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="520" viewBox="0 0 1600 520" role="img" aria-labelledby="title desc">
+  <title id="title">Rack AI</title>
+  <desc id="desc">One rack. Many models. One intelligent control plane.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0b1020"/>
+      <stop offset="50%" stop-color="#111b36"/>
+      <stop offset="100%" stop-color="#162a4f"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6ee7ff"/>
+      <stop offset="100%" stop-color="#7c8cff"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="10" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+  <rect width="1600" height="520" rx="28" fill="url(#bg)"/>
+  <circle cx="1320" cy="90" r="170" fill="#284c83" opacity="0.18"/>
+  <circle cx="1450" cy="420" r="230" fill="#425fc8" opacity="0.13"/>
+  <g transform="translate(1120 110)">
+    <rect x="0" y="0" width="300" height="300" rx="28" fill="#0c1428" stroke="#48658f" stroke-width="2"/>
+    <rect x="35" y="35" width="230" height="54" rx="12" fill="#14213d" stroke="#5cc8ff" stroke-width="2"/>
+    <circle cx="65" cy="62" r="8" fill="#5ee39a"/>
+    <circle cx="92" cy="62" r="8" fill="#5cc8ff"/>
+    <rect x="116" y="54" width="112" height="16" rx="8" fill="#28466c"/>
+    <rect x="35" y="123" width="230" height="54" rx="12" fill="#14213d" stroke="#7c8cff" stroke-width="2"/>
+    <circle cx="65" cy="150" r="8" fill="#5ee39a"/>
+    <circle cx="92" cy="150" r="8" fill="#7c8cff"/>
+    <rect x="116" y="142" width="112" height="16" rx="8" fill="#33467b"/>
+    <rect x="35" y="211" width="230" height="54" rx="12" fill="#14213d" stroke="#55d6be" stroke-width="2"/>
+    <circle cx="65" cy="238" r="8" fill="#5ee39a"/>
+    <circle cx="92" cy="238" r="8" fill="#55d6be"/>
+    <rect x="116" y="230" width="112" height="16" rx="8" fill="#285a62"/>
+    <path d="M-95 150 H0 M265 62 H355 M265 150 H355 M265 238 H355" stroke="url(#accent)" stroke-width="4" stroke-linecap="round" opacity="0.85" filter="url(#glow)"/>
+  </g>
+  <text x="110" y="185" fill="#ffffff" font-size="92" font-family="Inter,Segoe UI,Arial,sans-serif" font-weight="800" letter-spacing="1">Rack AI</text>
+  <text x="110" y="252" fill="#b8c9e8" font-size="34" font-family="Inter,Segoe UI,Arial,sans-serif" font-weight="500">One rack. Many models. One intelligent control plane.</text>
+  <rect x="110" y="303" width="660" height="4" rx="2" fill="url(#accent)" opacity="0.9"/>
+  <text x="110" y="360" fill="#dfe9fb" font-size="27" font-family="Inter,Segoe UI,Arial,sans-serif">Route work • protect resources • keep evidence • stay local</text>
+  <text x="110" y="408" fill="#7f96bc" font-size="22" font-family="Inter,Segoe UI,Arial,sans-serif">Local AI infrastructure for software, media and autonomous workloads</text>
+</svg>

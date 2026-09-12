@@ -5,6 +5,7 @@ use serde::Serialize;
 pub struct ExecutorRecord {
     #[serde(default = "podman_backend")]
     pub backend: String,
+    #[serde(default)]
     pub image: String,
     #[serde(default = "workspace_mount")]
     pub workspace_path: String,
@@ -42,5 +43,12 @@ mod tests {
         .unwrap();
         assert_eq!(record.backend, "podman");
         assert_eq!(record.workspace_path, "/workspace");
+    }
+
+    #[test]
+    fn parses_host_backend_without_image() {
+        let record = serde_json::from_str::<ExecutorRecord>("{\"backend\":\"host\"}").unwrap();
+        assert_eq!(record.backend, "host");
+        assert_eq!(record.image, "");
     }
 }

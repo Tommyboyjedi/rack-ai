@@ -1,20 +1,47 @@
 {
+  "source_admission_policies": [
+    {
+      "source_system": "athba",
+      "max_priority": "medium"
+    },
+    {
+      "source_system": "*",
+      "max_priority": "paramount"
+    }
+  ],
   "models": [
     {
       "id": "gemma4-12b-local-primary",
       "label": "Gemma 4 12B",
-      "role": "planner-verifier",
+      "role": "generic-reasoning-worker",
       "backend": "vllm",
       "worker_id": "local-primary",
       "api_model_id": "local-primary",
       "endpoint": "http://127.0.0.1:8017/v1",
       "port": 8017,
-      "status": "active"
+      "status": "active",
+      "eligibility_profile": {
+        "model_profile_id": "local-primary-v1",
+        "capabilities": [
+          "reasoning",
+          "coding"
+        ],
+        "max_complexity": "large",
+        "large_context_eligible": true,
+        "qualification_status": "qualified",
+        "qualification_evidence_refs": [
+          "docs/pr14-harness-qualification-report.md"
+        ],
+        "profile_version": "v1",
+        "execution_constraints": [
+          "configured-jcode-route"
+        ]
+      }
     },
     {
       "id": "eqaq-v2-local-coder",
       "label": "NotaMG/eqaq-v2",
-      "role": "implementer-tester",
+      "role": "generic-coding-worker",
       "backend": "vllm",
       "worker_id": "local-coder",
       "api_model_id": "local-coder",
@@ -22,7 +49,23 @@
       "port": 8018,
       "status": "active",
       "context_window": 16368,
-      "max_num_seqs": 1
+      "max_num_seqs": 1,
+      "eligibility_profile": {
+        "model_profile_id": "local-coder-v1",
+        "capabilities": [
+          "coding"
+        ],
+        "max_complexity": "small",
+        "large_context_eligible": false,
+        "qualification_status": "qualified_with_constraints",
+        "qualification_evidence_refs": [
+          "docs/pr14-local-coder-qwen35-qualification.md"
+        ],
+        "profile_version": "v1",
+        "execution_constraints": [
+          "minimal-tool-profile"
+        ]
+      }
     }
   ]
 }

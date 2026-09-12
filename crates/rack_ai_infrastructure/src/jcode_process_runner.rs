@@ -1,3 +1,4 @@
+use rack_ai_domain::AllowedPaths;
 use std::fs;
 use std::io;
 use std::io::Read;
@@ -15,21 +16,31 @@ use std::process::ExitStatus;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+#[cfg(test)]
 use std::sync::atomic::AtomicU64;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::Instant;
+#[cfg(test)]
 use std::time::SystemTime;
+#[cfg(test)]
 use std::time::UNIX_EPOCH;
 
 use rack_ai_application::ImplementWorkerRuntime;
 
 use crate::jcode_execution_config::JCodeExecutionConfig;
 
+#[path = "jcode_runtime_root.rs"]
+mod runtime_root;
+use runtime_root::{JCodeRuntimeRoot, SOCKET_NAME};
+
 const PROCESS_GROUP_TERM_GRACE: Duration = Duration::from_millis(500);
 const PROCESS_GROUP_KILL_GRACE: Duration = Duration::from_millis(500);
+const EXECUTABLE_BUSY_RETRY_GRACE: Duration = Duration::from_millis(20);
+const EXECUTABLE_BUSY_RETRY_LIMIT: usize = 5;
+#[cfg(test)]
 static TEMP_ROOT_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug)]
@@ -87,17 +98,54 @@ impl JCodeProcessRunner {
         timeout_seconds: u32,
         network_disabled: bool,
     ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
-        let root = temp_root();
-        let result = run_with_root(
+        Self::run_internal(
             runtime,
             task,
             workdir,
             timeout_seconds,
             network_disabled,
-            &root,
-        );
-        let _ = fs::remove_dir_all(&root);
-        result
+            None,
+        )
+    }
+
+    pub fn run_with_allowed_paths(
+        runtime: &ImplementWorkerRuntime,
+        task: &str,
+        workdir: &Path,
+        timeout_seconds: u32,
+        network_disabled: bool,
+        allowed_paths: &AllowedPaths,
+    ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+        Self::run_internal(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            Some(allowed_paths),
+        )
+    }
+
+    fn run_internal(
+        runtime: &ImplementWorkerRuntime,
+        task: &str,
+        workdir: &Path,
+        timeout_seconds: u32,
+        network_disabled: bool,
+        allowed_paths: Option<&AllowedPaths>,
+    ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+        let root = JCodeRuntimeRoot::create().map_err(|error| {
+            JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
+        })?;
+        run_with_root(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            root.path(),
+            allowed_paths,
+        )
     }
 }
 
@@ -108,6 +156,7 @@ fn run_with_root(
     timeout_seconds: u32,
     network_disabled: bool,
     root: &Path,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
@@ -118,10 +167,11 @@ fn run_with_root(
         root,
         &execution_config,
         network_disabled,
+        allowed_paths,
     )
     .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
     prepared.command.process_group(0);
-    let mut child = prepared.command.spawn().map_err(|error| {
+    let mut child = spawn_with_retry(&mut prepared.command).map_err(|error| {
         JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
     })?;
     let stdout_handle = spawn_reader(child.stdout.take().ok_or_else(|| {
@@ -179,17 +229,30 @@ fn build_command(
     root: &Path,
     execution_config: &JCodeExecutionConfig,
     network_disabled: bool,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<PreparedCommand, String> {
     let mut prepared = if network_disabled {
-        prepare_bubblewrap_command(runtime, workdir, root)?
+        prepare_bubblewrap_command(runtime, workdir, root, allowed_paths)?
     } else {
         PreparedCommand {
             command: Command::new(runtime.entrypoint()),
             isolation: None,
         }
     };
+
+    let jcode_runtime_dir = execution_config.home_dir().join(".jcode/runtime");
+    let jcode_scratch_dir = execution_config.home_dir().join(".jcode/scratch");
+    let cargo_target_dir = execution_config.home_dir().join(".cargo-target");
+    fs::create_dir_all(&jcode_runtime_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&jcode_scratch_dir).map_err(|error| error.to_string())?;
+    fs::create_dir_all(&cargo_target_dir).map_err(|error| error.to_string())?;
+
     prepared
         .command
+        .env("JCODE_RUNTIME_DIR", &jcode_runtime_dir)
+        .env("JCODE_SCRATCH_DIR", &jcode_scratch_dir)
+        .env("TMPDIR", &jcode_scratch_dir)
+        .env("CARGO_TARGET_DIR", &cargo_target_dir)
         .arg("--no-update")
         .arg("--no-selfdev")
         .arg("--quiet")
@@ -222,9 +285,10 @@ fn prepare_bubblewrap_command(
     runtime: &ImplementWorkerRuntime,
     workdir: &Path,
     root: &Path,
+    allowed_paths: Option<&AllowedPaths>,
 ) -> Result<PreparedCommand, String> {
     let endpoint = LocalEndpoint::parse(runtime.endpoint())?;
-    let socket_path = root.join("selected-vllm.sock");
+    let socket_path = root.join(SOCKET_NAME);
     let launcher_path = root.join("sandbox-launcher.sh");
     let host_bridge = HostUnixBridge::start(&socket_path, endpoint.port)?;
     let bridge_command = bridge_command(root, &socket_path, endpoint.port)?;
@@ -238,12 +302,22 @@ fn prepare_bubblewrap_command(
         .arg("--ro-bind")
         .arg("/")
         .arg("/")
-        .arg("--bind")
+        .arg("--ro-bind")
         .arg(workdir)
         .arg(workdir)
         .arg("--bind")
         .arg(root)
-        .arg(root)
+        .arg(root);
+
+    if let Some(allowed_paths) = allowed_paths {
+        for allowed_path in allowed_paths.values() {
+            let path = workdir.join(allowed_path.value());
+            ensure_sandbox_bind_target(&path, allowed_path.value())?;
+            command.arg("--bind").arg(&path).arg(&path);
+        }
+    }
+
+    command
         .arg("--dev")
         .arg("/dev")
         .arg("--proc")
@@ -260,6 +334,34 @@ fn prepare_bubblewrap_command(
         command,
         isolation: Some(NetworkIsolationGuard { host_bridge }),
     })
+}
+
+fn ensure_sandbox_bind_target(path: &Path, relative: &str) -> Result<(), String> {
+    if path.exists() {
+        return Ok(());
+    }
+    // Bubblewrap cannot bind a missing path. Campaigns often allow a file the
+    // worker is required to create (README.md). Create an empty bind target on
+    // the host so the worktree can stay read-only except allowed paths.
+    if relative.ends_with('/') {
+        fs::create_dir_all(path).map_err(|error| {
+            format!("failed to create allowed directory {relative} for sandbox bind: {error}")
+        })?;
+        return Ok(());
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("failed to create parent of allowed path {relative} for sandbox bind: {error}")
+        })?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(path)
+        .map_err(|error| {
+            format!("failed to create allowed path {relative} for sandbox bind: {error}")
+        })?;
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -602,6 +704,26 @@ fn collect_reader(handle: JoinHandle<Result<String, String>>) -> String {
     }
 }
 
+fn spawn_with_retry(command: &mut Command) -> Result<Child, io::Error> {
+    for attempt in 0..EXECUTABLE_BUSY_RETRY_LIMIT {
+        match command.spawn() {
+            Ok(child) => return Ok(child),
+            Err(error)
+                if should_retry_spawn(&error) && attempt + 1 < EXECUTABLE_BUSY_RETRY_LIMIT =>
+            {
+                thread::sleep(EXECUTABLE_BUSY_RETRY_GRACE);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!("spawn retry loop must return before exhausting attempts");
+}
+
+fn should_retry_spawn(error: &io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ETXTBSY)
+}
+
+#[cfg(test)]
 fn temp_root() -> PathBuf {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -628,6 +750,8 @@ mod tests {
     use std::time::UNIX_EPOCH;
 
     use rack_ai_application::ImplementWorkerRuntime;
+    use rack_ai_domain::AllowedPath;
+    use rack_ai_domain::AllowedPaths;
 
     use super::JCodeProcessRunner;
 
@@ -734,6 +858,107 @@ PY
     }
 
     #[test]
+    fn sandbox_allows_writes_only_inside_allowed_paths() {
+        let root = temp_root();
+        let workdir = root.join("worktree");
+        fs::create_dir_all(workdir.join("src")).unwrap();
+        fs::write(
+            workdir.join("Cargo.toml"),
+            "[package]\nname = \"fixture\"\n",
+        )
+        .unwrap();
+
+        let script = root.join("fake-jcode.sh");
+        write_script(
+            &script,
+            r#"#!/bin/bash
+set -euo pipefail
+
+echo 'allowed' > src/generated.rs
+touch "$JCODE_RUNTIME_DIR/runtime-probe"
+touch "$JCODE_SCRATCH_DIR/scratch-probe"
+touch "$CARGO_TARGET_DIR/target-probe"
+
+if echo 'forbidden' > Cargo.toml 2>/dev/null; then
+    echo 'unexpectedly wrote outside allowed paths' >&2
+    exit 91
+fi
+
+test "$(cat src/generated.rs)" = "allowed"
+grep -q 'name = "fixture"' Cargo.toml
+
+printf 'COMPLETE\n'
+"#,
+        );
+
+        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+
+        let allowed_paths =
+            AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap();
+
+        let output = JCodeProcessRunner::run_with_allowed_paths(
+            &runtime,
+            "sandbox paths",
+            &workdir,
+            10,
+            true,
+            &allowed_paths,
+        )
+        .unwrap();
+
+        assert!(output.stdout().contains("COMPLETE"));
+        assert_eq!(
+            fs::read_to_string(workdir.join("src/generated.rs")).unwrap(),
+            "allowed\n"
+        );
+        assert_eq!(
+            fs::read_to_string(workdir.join("Cargo.toml")).unwrap(),
+            "[package]\nname = \"fixture\"\n"
+        );
+    }
+
+    #[test]
+    fn sandbox_creates_missing_allowed_file_so_worker_can_write_it() {
+        let root = temp_root();
+        let workdir = root.join("worktree");
+        fs::create_dir_all(workdir.join("src")).unwrap();
+
+        let script = root.join("fake-jcode.sh");
+        write_script(
+            &script,
+            r#"#!/bin/bash
+set -euo pipefail
+printf '# Tiny Ticket\n' > README.md
+test -s README.md
+printf 'COMPLETE\n'
+"#,
+        );
+
+        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+        let allowed_paths = AllowedPaths::new(vec![
+            AllowedPath::new("src/".to_string()).unwrap(),
+            AllowedPath::new("README.md".to_string()).unwrap(),
+        ])
+        .unwrap();
+
+        let output = JCodeProcessRunner::run_with_allowed_paths(
+            &runtime,
+            "add readme",
+            &workdir,
+            10,
+            true,
+            &allowed_paths,
+        )
+        .unwrap();
+
+        assert!(output.stdout().contains("COMPLETE"), "{:?}", output);
+        assert_eq!(
+            fs::read_to_string(workdir.join("README.md")).unwrap(),
+            "# Tiny Ticket\n"
+        );
+    }
+
+    #[test]
     fn network_isolation_keeps_selected_loopback_and_blocks_external_even_after_clearing_ld_preload()
      {
         let root = temp_root();
@@ -822,22 +1047,21 @@ PY
         write_script(&enabled_script, script_body.as_str());
         let disabled_script = disabled_root.join("fake-jcode.sh");
         write_script(&disabled_script, script_body.as_str());
-        let enabled_runtime =
-            coder_runtime(&enabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
-        let disabled_runtime =
-            coder_runtime(&disabled_script, &format!("http://127.0.0.1:{selected_port}/v1"));
+        let enabled_runtime = coder_runtime(
+            &enabled_script,
+            &format!("http://127.0.0.1:{selected_port}/v1"),
+        );
+        let disabled_runtime = coder_runtime(
+            &disabled_script,
+            &format!("http://127.0.0.1:{selected_port}/v1"),
+        );
 
         let enabled =
             JCodeProcessRunner::run(&enabled_runtime, "network", &enabled_workdir, 10, false)
                 .unwrap();
-        let disabled = JCodeProcessRunner::run(
-            &disabled_runtime,
-            "network",
-            &disabled_workdir,
-            10,
-            true,
-        )
-        .unwrap_err();
+        let disabled =
+            JCodeProcessRunner::run(&disabled_runtime, "network", &disabled_workdir, 10, true)
+                .unwrap_err();
 
         assert!(enabled.stdout().contains("COMPLETE"));
         assert!(disabled.message().contains("jcode exited unsuccessfully"));
@@ -950,3 +1174,7 @@ PY
         root
     }
 }
+
+#[cfg(test)]
+#[path = "jcode_socket_path_tests.rs"]
+mod socket_path_tests;

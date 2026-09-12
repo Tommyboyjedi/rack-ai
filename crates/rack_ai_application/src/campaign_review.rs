@@ -184,13 +184,15 @@ pub fn review_attempt(input: ReviewInput<'_>) -> CoordinatorReview {
             evidence_refs,
         );
     }
-    if let Some(output) = input.implementer_output {
-        if looks_like_markdown_tool_call(output) {
-            return retryable(
-                FailureClassification::ToolProtocolViolation,
-                "worker emitted markdown or JSON text instead of a valid tool call",
-                evidence_refs,
-            );
+    if input.tool_calls == 0 {
+        if let Some(output) = input.implementer_output {
+            if looks_like_markdown_tool_call(output) {
+                return retryable(
+                    FailureClassification::ToolProtocolViolation,
+                    "worker emitted markdown or JSON text instead of a valid tool call",
+                    evidence_refs,
+                );
+            }
         }
     }
     if matches!(input.step.kind, CampaignStepKind::Implementation)

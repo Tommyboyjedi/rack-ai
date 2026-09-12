@@ -2,6 +2,7 @@ use rack_ai_application::ChangeImplementer;
 use rack_ai_application::ImplementChangeRequest;
 use rack_ai_application::ImplementChangeResult;
 use rack_ai_application::ImplementWorkerRuntime;
+use rack_ai_application::ToolCallRecord;
 
 use crate::JCodeProcessFailure;
 use crate::JCodeProcessRunner;
@@ -40,29 +41,80 @@ impl JCodeChangeImplementer {
 impl ChangeImplementer for JCodeChangeImplementer {
     fn implement(&self, request: &ImplementChangeRequest) -> Result<ImplementChangeResult, String> {
         let runtime = self.resolve_runtime(request)?;
-        let output = JCodeProcessRunner::run(
+        let output = JCodeProcessRunner::run_with_allowed_paths(
             &runtime,
             request.task(),
             request.worktree_path(),
             request.timeout_seconds(),
             request.network_disabled(),
+            request.allowed_paths()?,
         );
         match output {
-            Ok(result) => Ok(
-                ImplementChangeResult::new(result.stdout().trim().to_string())
-                    .with_stderr(result.stderr().to_string())
-                    .with_executor_kind("jcode-direct".to_string()),
-            ),
+            Ok(result) => {
+                let tool_calls = extract_jcode_tool_calls(result.stdout());
+                Ok(
+                    ImplementChangeResult::new(result.stdout().trim().to_string())
+                        .with_stderr(result.stderr().to_string())
+                        .with_tool_calls(tool_calls)
+                        .with_executor_kind("jcode-direct".to_string()),
+                )
+            }
             Err(error) => Ok(build_failure_result(error)),
         }
     }
 }
 
 fn build_failure_result(error: JCodeProcessFailure) -> ImplementChangeResult {
+    let tool_calls = extract_jcode_tool_calls(error.stdout());
     ImplementChangeResult::new(error.stdout().trim().to_string())
         .with_stderr(error.stderr().to_string())
+        .with_tool_calls(tool_calls)
         .with_executor_kind("jcode-direct".to_string())
         .with_worker_error(error.message().to_string())
+}
+
+fn extract_jcode_tool_calls(output: &str) -> Vec<ToolCallRecord> {
+    let lines: Vec<&str> = output.lines().collect();
+    let mut calls = Vec::new();
+
+    for (index, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let Some(close) = trimmed.find(']') else {
+            continue;
+        };
+
+        if !trimmed.starts_with('[') || close <= 1 {
+            continue;
+        }
+
+        let name = &trimmed[1..close];
+        if !name
+            .chars()
+            .all(|character| character.is_ascii_lowercase() || character == '_')
+        {
+            continue;
+        }
+
+        let has_token_record = lines
+            .iter()
+            .skip(index + 1)
+            .take(3)
+            .map(|line| line.trim())
+            .find(|line| !line.is_empty())
+            .is_some_and(|line| line.starts_with("[Tokens]"));
+
+        if !has_token_record {
+            continue;
+        }
+
+        calls.push(ToolCallRecord {
+            name: name.to_string(),
+            arguments: trimmed[close + 1..].trim().to_string(),
+            result: String::new(),
+        });
+    }
+
+    calls
 }
 
 fn assert_runtime_matches(
@@ -131,7 +183,34 @@ mod tests {
     use rack_ai_application::ImplementWorkerRuntime;
 
     use super::JCodeChangeImplementer;
+    use super::extract_jcode_tool_calls;
     use crate::RegistryPaths;
+
+    #[test]
+    fn extracts_real_jcode_trace_tool_calls_only() {
+        let output = r#"[read] src/lib.rs
+
+[Tokens] upload: 100 download: 20
+
+[write] src/store.rs
+
+[Tokens] upload: 120 download: 30
+
+[Tokens] upload: 140 download: 10
+
+```rust
+[write] fake.rs
+```
+"#;
+
+        let calls = extract_jcode_tool_calls(output);
+
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].name, "read");
+        assert_eq!(calls[0].arguments, "src/lib.rs");
+        assert_eq!(calls[1].name, "write");
+        assert_eq!(calls[1].arguments, "src/store.rs");
+    }
 
     #[test]
     fn rejects_request_runtime_context_mismatch() {
