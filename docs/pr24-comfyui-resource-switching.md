@@ -1,189 +1,168 @@
-# PR24 — ComfyUI service ownership and bounded image execution
+# PR24 — ComfyUI access, remote media API and Music Director integration
 
-Revision: 2026-09-12. Status: implementation contract; runtime implementation and live qualification are not yet complete.
+Revision: 2026-09-12, **v2 — complete user journey**. Status: implementation contract; code and live qualification are not yet complete.
 
-## 1. Outcome and scope
+This revision replaces the CLI-only scope. A thin authenticated HTTP interface, a small browser launcher and the companion Music Director connector are REQUIRED, not deferred. All resource, execution and evidence safeguards from v1 remain required. The source review in `docs/pr24-code-review.md` remains historical evidence; this contract defines the revised deliverable.
 
-Deliver two milestones in the same implementation task:
+## 1. Definition of done from the user's perspective
 
-**A. Interactive ComfyUI:** Rack AI safely reserves the RTX 4080 Super, starts an isolated ComfyUI service, lets the operator use the normal ComfyUI browser interface, then drains and releases it without disturbing the existing development services.
+**Interactive:** Tom opens a stable private launcher bookmark, sees Stopped/Starting/Ready/Busy/Recovery required, clicks Start ComfyUI, and opens the normal ComfyUI interface when ready. Finish session closes admission, drains accepted work and releases the service safely. He does not SSH to start it or write JSON each time. Closing a browser does not cancel a render or falsely release its GPU.
 
-**B. Managed image execution:** Rack AI accepts one bounded, typed image-generation request, executes an administrator-approved ComfyUI API workflow, and retains a durable result and verified image artifacts. Supply one real local image workflow profile, not a model/profile collection. The managed path must work without browser automation.
+**Application:** In Music Director, Tom selects the Rack AI image backend and a supported image workflow, then clicks Generate. The application shows Waiting for rack / Starting / Generating / Complete or an actionable failure. Rack AI starts ComfyUI automatically if needed; the resulting image is downloaded into the correct project/segment. No separate Start ComfyUI click, copying image files or pasting job IDs is required.
 
-The initial deployment is deliberately partitioned:
+Implement these as ONE coordinated Codex task, with separate repository branches and PRs:
 
-| Resource | Initial assignment |
+- `Tommyboyjedi/rack-ai`, PR24, `roadmap/pr24-comfyui-resource-switching`: resource correctness, lifecycle, native admission gate, managed image execution, always-available request receiver, launcher, API, artifacts and deployment.
+- `Tommyboyjedi/musicvideo-director`, `integration/rack-ai-media`: optional Rack AI image backend, settings, asynchronous job tracking, artifact import and UI tests. Its companion contract is `docs/rack-ai-media-integration.md`.
+
+The user has authorized this specific second-repository integration. Work under each repository's own instructions in separate worktrees; do not put Django/project semantics into Rack AI or edit ATHBA. This task-specific scope does not relax other safety/coding rules. Do not copy private application data/code into the public Rack AI repository; use synthetic contract fixtures.
+
+## 2. Bounded scope and baseline
+
+Reviewed Rack AI main: `e197079c26cd0d0cb0fb2a85ba5a2af605c244b8`. PR32, merged 2026-09-09, already incorporates the PR29–32 stack. Remaining open roadmap PRs did not contain a newer runtime at review. Recheck current refs and local changes; documentation claiming that PR32 remains unmerged is stale.
+
+In clean isolated worktrees incorporate current main into each integration branch with ordinary merges, retaining contract commits. Do not reset/checkout over the live `/srv/rack-ai`, force-push, revive superseded stacks or merge either PR into main. Inspect relevant newer changes rather than repeating the complete previous review. Read each repository's applicable agent/coding rules.
+
+Initial placement: 2060 6 GB remains local-coder; 4060 Ti 16 GB remains local-primary; 4080 Super 16 GB is the dedicated media resource. Existing vLLM and ATHBA configuration/processes remain untouched. A busy or ambiguous media GPU waits or fails closed; no automatic reclamation of development GPUs.
+
+The managed proof supports ONE administrator-approved local image workflow and its bounded typed parameters. Include a real usable example plus a GPU-free fixture. No universal scheduler, dynamic reassignment, heavyweight inference, model catalog, video/audio automation, autonomous music-video orchestration or replacement ComfyUI frontend. Native ComfyUI may run installed compatible workflows; that is not qualification of every video/model combination. Preserve Music Director's existing direct-ComfyUI backend; unsupported Rack AI workflows must be explicit, not silently rerouted.
+
+## 3. Architecture and authority
+
+Keep workspace v1/v2 contracts intact. `visual` metadata does not turn the JCode/Git-worktree executor into a renderer. Add a separate bounded media/service boundary; do not fake a repository, Git revision, JCode worker or workspace transaction for an image.
+
+Reuse generic identity, priority admission, atomic persistence and suitable resource primitives. HTTP, systemd, GPU probes, ComfyUI protocol and files belong in adapters. Use small typed Rust collaborators and narrowly scoped Python admission glue; obey the existing size/parameter/safety rules. Do not grow another monolithic `main.rs` or `campaign_runner.rs` subsystem.
+
+The HTTP adapter, launcher and CLI use the SAME application use cases, state and resource authority. Do not expose arbitrary shell execution or shell out to a CLI whose caller can choose a state root. A small always-on receiver/supervisor remains available while ComfyUI is stopped and consumes no resident image model merely to receive requests. Its startup must reconcile durable state before enabling generation. HTTP request handlers enqueue/control work and return promptly; they do not hold an HTTP request open throughout loading/rendering.
+
+## 4. Actual resource ownership
+
+The direct workspace/JCode route is not the existing GPU-leased queue route, and campaign/repository leases are not GPU leases. This release enforces a dedicated media slot, not fictional global arbitration.
+
+Require a verified administrator mapping to a full physical GPU UUID; never guess GPU index 0. Reject overlap with enabled development worker bindings/protected live inference services, duplicate UUIDs, foreign GPU processes, unknown placement or ambiguous ownership. Retain existing resource IDs/backward-compatible loading; register the real 4080 and retire the planned 3090 placeholder as an active placement option. Host-specific mappings belong in local administrator configuration with checked-in examples. Missing media configuration must not break existing development.
+
+CUDA visibility is placement, not a hostile-code sandbox. Do not promise protection against root/out-of-band administrator reconfiguration or malicious custom nodes. Shared GPUs are separate but CPU/RAM/disk/cooling remain shared: preflight workflow-specific host-memory and disk headroom and use explicit limits.
+
+Harden the common queue/media GPU reservation boundary:
+
+- Bounded serialized acquisition, not `exists()` then write. One canonical administrator-configured machine resource root, independent of job state roots/worktrees; tests inject disposable roots. No implicit live-state migration.
+- Owner/generation-bearing handles for acquire/renew/release, not PID/resource-only deletion. Update affected callers; owner-blind release must not delete a media reservation. Legacy/malformed/unknown records block, never grant permission.
+- Atomic durable records; roll back partial acquisition on ordinary errors. Crash remnants block until reconciled. A claimed queue item must not be stranded by an acquisition race or preparation/persistence failure.
+- Correct affected cleanup/error paths and add bounded queue backoff when all jobs are blocked. Scope refactoring to those responsibilities.
+
+Reservations survive the requesting CLI/browser and remain held while a service/models may be resident, while draining and while cleanup is uncertain. Idle utilization, empty queue, stale heartbeat or `/free` HTTP 200 is not proof of release.
+
+## 5. Owned ComfyUI lifecycle and native admission
+
+Use one isolated, pinned ComfyUI Python environment and an owned user-systemd process tree with verified invocation identity. The Rust receiver/supervisor coordinates it. Do not replace NVIDIA drivers, modify vLLM dependencies or execute whole-stack Compose operations. The tracked Compose model definitions are not proof of the current deployment. No automatic backend restart may bypass reservation/gating.
+
+Persist desired intent before effects. Model `stopped -> reserving -> starting -> ready -> draining -> stopping -> stopped`, plus explicit waiting/failed/recovery_required outcomes. Distinguish desired state from observed facts so late health checks cannot undo release/cancel.
+
+Reserve before start; verify process/UUID/protocol/gate readiness before Ready. On startup failure stop only the owned activation. Release ownership only after its process tree and GPU allocations are confirmed gone; otherwise quarantine the reservation. Close admission and account for in-flight enqueue requests before draining. Drain/stop deadlines produce visible recovery state, not silent interruption of other work. Explicit abort/cancel is separate from graceful Finish session.
+
+Recovery covers receiver/backend restart, host reboot, PID reuse, corrupted state and an unrelated server listening on the port. Never attach by health check alone. All locks, probes, HTTP calls, startup/drain/stop operations are bounded; active supervision retains heartbeats at no intended interval over 30 seconds. Record restoration/recovery evidence. Use configurable idle retention for managed sessions followed by verified stop; do not restart between every queued image. Interactive ownership is explicitly released; document any finite session expiry and drain rather than killing active work.
+
+Native UI needs a REAL admission gate, not just a CLI state flag. Supply tested Rack-AI-owned middleware/extension without upstream fork or frontend modification. Cover `/prompt`, `/api/prompt` and actual pinned routing aliases; serialize gate closure with requests already validating/enqueuing. Start closed; missing/stale/malformed authority closes new admission. Private control credentials never reach browser clients/logs. Check the pinned startup registration path in tests.
+
+Interactive and managed sessions are mutually exclusive initially. In managed mode only authorized supervisor submissions and job controls may mutate the queue; browsers cannot inject/clear jobs. Interactive requests wait behind active managed work, and managed requests wait while an interactive reservation remains open. Status identifies the reason without leaking another principal's data. Neither mode steals a reservation or starts a second conflicting backend.
+
+## 6. Remote API contract — required
+
+Implement and check in a versioned schema/OpenAPI description with shared synthetic request/response fixtures consumed by both repositories. Prefer these routes under `/api/media/v1`; publish exact final forms if an existing framework necessitates a minor change:
+
+| Method and route | Purpose |
 | --- | --- |
-| RTX 2060 6 GB | Existing local-coder service; unchanged |
-| RTX 4060 Ti 16 GB | Existing local-primary service; unchanged |
-| RTX 4080 Super 16 GB | Dedicated ComfyUI/media service managed by this PR |
+| GET `/status` | Authorized service state, readiness and generic waiting reason |
+| GET `/profiles` | Only available/qualified image operations, versions and permitted parameter bounds |
+| POST `/sessions` | Idempotently request an interactive session; return session ID, state and authorized access address when ready |
+| GET `/sessions/{id}` | Session state/access details for its owner/operator |
+| POST `/sessions/{id}/release` | Durable graceful release intent; return draining/stopped state, not false immediate success |
+| POST `/jobs` | Durable managed image admission; implicitly request/start the backend |
+| GET `/jobs/{id}` | Durable lifecycle/result/error and artifact manifest |
+| POST `/jobs/{id}/cancel` | Durable authorized per-job cancel intent |
+| GET `/jobs/{id}/artifacts/{artifact_id}` | Authorized bounded binary download; never an arbitrary filesystem path |
 
-This replaces the old assumption that every ComfyUI session requires development to stop. A conflicting reservation produces a bounded wait/deferred result, not forced reclamation. Sharing a host still shares RAM, CPU, storage and cooling; separate GPUs do not imply zero performance interference.
+For new accepted work return HTTP 202 with an opaque ID and status location; the request is acknowledged only after it is durably recorded. Identical replay returns that same resource. Changed-payload identity reuse returns 409. Define typed validation/unsupported/unauthorized/unavailable errors, limits and retry semantics. Reads do not start services or render. `Test connection` only tests authentication/version/profile availability.
 
-**Not included:** automatic vLLM drain/restart, dynamic GPU reassignment, heavyweight multi-GPU inference, general preemption/fairness, a universal scheduler, model discovery/download catalogs, a new graphical interface, media application semantics, automated video/audio workflow support, or a ComfyUI fork. Native interactive workflows remain ComfyUI's responsibility, subject to the installed service's resource envelope. Those broader features remain PR25/PR33 work.
+A job carries versioned opaque work/submission/idempotency identities, an image operation/profile version, permitted prompt/seed/dimension/step parameters, and bounded timeout/priority requirements. Profile identity describes requested functionality, not caller-selected infrastructure. Do not require GPU IDs, shell commands, endpoint locations, repository paths or ComfyUI graph details from Music Director. Freeze resolved template/version/hash and parameters before dispatch.
 
-## 2. Implementation baseline
+Bind source identity/ceilings to the authenticated principal server-side. Do not trust a submitted `source_system` to impersonate an operator or escape ATHBA's medium ceiling. Scope idempotency, sessions, jobs and artifacts by principal and validate on every read/write/download. Unknown credentials fail closed. Job/session IDs are not authorization secrets.
 
-Reviewed Rack AI baseline: `main` at `e197079c26cd0d0cb0fb2a85ba5a2af605c244b8`.
+Use authenticated private access over the existing permitted network/tunnel; no public forwarding/Funnel or open unauthenticated listener. Raw ComfyUI stays loopback-only. Protect launcher/API AND ComfyUI HTTP/assets/WebSockets through a verified authenticated access path. A working JSON API alone is not native UI access. Prefer serving the native UI at the root of its own protected origin over assuming ComfyUI works under an arbitrary subpath; test actual paths and WebSockets. Do not overwrite existing Tailscale/proxy configuration. When private publication needs unavailable permission, complete the code and report that specific deployment gate.
 
-PR32 was merged on 2026-09-09 and incorporates the PR29–32 execution stack. Its head `469dc13c4d669266de21c629cc449f889364b7e2` is an ancestor of the reviewed main. The remaining open PR18/24/25/33 changes are documentation, not a newer runtime. Older README/PR32-document statements that this stack is unmerged are stale.
+Use a small existing-framework authentication approach: scoped application credentials kept server-side for Music Director; secure operator browser sessions or validated private identity proxy. Do not put bearer/reservation tokens in query strings, returned URLs, localStorage, HTML, diagnostics, commits or final output. Browser state-changing requests require CSRF/origin controls; GETs are side-effect-free, allowed hosts/origins explicit, no wildcard credentialed CORS. Reject spoofed proxy identity headers. Credentials are provisioned into protected local files/configuration, not printed. No general multi-user identity product is required.
 
-Implement on this PR's branch, `roadmap/pr24-comfyui-resource-switching`, after incorporating current `origin/main` with an ordinary merge in a clean, isolated worktree. Preserve these documentation commits. Do not force-push, reset another worktree, revive superseded branches, or merge this PR into main. Recheck ancestry and unpushed local changes before editing; an unexamined live checkout is not assumed identical to GitHub.
+Bound body size, parameter counts, queue depth, concurrent connections, request deadlines and artifact byte counts. Use maintained HTTP/proxy/auth libraries, not handwritten HTTP/crypto. Receiver handlers must not block status/cancel while a render runs.
 
-Read the repository's mandatory agent/coding rules and `docs/pr24-code-review.md`. The review is a source map, not a requirement to repeat a repository-wide investigation.
+## 7. Minimal launcher — required
 
-## 3. Architectural boundaries
+Serve a small plain HTML/JavaScript page with status, Start ComfyUI, Open ComfyUI, Finish session, and clear busy/error/recovery messages. No React build, workflow editor or general rack dashboard.
 
-Keep the existing workspace transaction and its v1/v2 wire contracts intact. `visual` is currently a generic routing label; the implementation selector still requires JCode and `ExecuteWorkUnit` still executes a Git worktree change. Do not force a ComfyUI render through `ChangeImplementer`, `WorkspaceExecutor`, JCode, a fake repository or a fake Git revision.
+The launcher stays available while ComfyUI is stopped. Start is an explicit authenticated action, not a side effect of bookmarking/prefetching a GET. Poll durable session state; disable inappropriate controls and make double-click/reload idempotent. Open the normal protected ComfyUI UI in a new tab when ready. Show what is waiting and that Finish lets accepted work drain. Page refresh/browser closure must not lose the session or cancel accepted jobs.
 
-Add a separate media/service application boundary. Reuse generic identity, source-priority policy, typed errors, atomic persistence and resource primitives where they genuinely fit. Keep ComfyUI HTTP, systemd, GPU probes and filesystem handling in infrastructure adapters. The Rust domain/application layers must not import ComfyUI or contain Python workflow-engine logic.
+Provide the ACTUAL verified private launcher URL in the final handoff, or explicitly say it is not deployed. An SSH command or invented URL is not the required user experience.
 
-Use small typed collaborators for configuration, reservation, lifecycle transitions, service control, ComfyUI protocol, job persistence and artifact validation. Respect `coding_principles.MD`; do not append another large subsystem to `main.rs` or `campaign_runner.rs`. Thin CLI dispatch is sufficient. No new Rack AI HTTP server or dashboard is required.
+## 8. Managed rendering, replay and outputs
 
-## 4. Dedicated-resource admission, not a fictional global scheduler
+Use a registered API-format ComfyUI template, not editor graph JSON. Permit only typed explicitly mapped inputs; reject arbitrary node replacement, unknown parameters and caller paths. One qualifying local image workflow is sufficient. Do not silently change seed, model or dimensions on failure.
 
-The existing `run-next` queue uses GPU lease files, while the direct workspace/JCode paths do not share that admission boundary. Campaign/repository leases are not GPU leases. This PR must not claim to fix all rack-wide scheduling merely by adding a service record.
+Persist a canonical prompt UUID, exact request and dispatch intent before POST. The reviewed upstream accepts caller UUIDs but DOES NOT deduplicate repeated POSTs. A lost acknowledgement/timeout after possible enqueue is `submission_uncertain`; do not blindly POST again. Reconcile the known ID against the same activation's queue/history with bounded reads. Missing/evicted history or a restarted backend cannot prove success or non-execution. Keep explicit unknown/interrupted outcomes; a new render needs a new caller-authorized submission. Concurrent duplicate requests must not double-render.
 
-For this bounded release, **enforce the dedicated-slot restriction**:
+Use bounded polling initially; WebSocket progress is optional for managed job correctness. ComfyUI history is in memory/clearable. Rack AI's own persisted job/manifest is authoritative. HTTP 200, a prompt ID or an end event is not success: require valid successful terminal state, required output nodes and validated artifacts. Partial output/node-validation errors fail the expected-output contract.
 
-- The configured media resource and physical GPU UUID must not overlap any enabled development worker's binding or any protected live inference service.
-- Verify the administrator's deployment mapping and actual processes before activation. An unknown/conflicting binding, foreign GPU process, duplicate physical UUID or ambiguous ownership fails closed.
-- Never repurpose the 2060 or 4060 Ti, and never change their running model configuration. Reassignment while a media reservation exists is unsupported and must be rejected by the new configuration/activation path.
-- Managed activation requires a qualified dedicated deployment. Arbitrary out-of-band administrator changes and hostile custom nodes are not a security boundary this PR can enforce. State that limitation rather than promising protection against root or manually launched foreign software.
+Persist cancellation before side effects. Late completion cannot erase cancellation. Use verified atomic owned-job cancellation support or safe exclusive-session cleanup, never check-then-global-interrupt on a shared queue. Artifacts associated with a late cancelled job may be retained as evidence but not promoted to successful output.
 
-Represent the real 4080 resource without inventing a UUID. Retain existing resource IDs and backward-compatible loading; retire the planned 3090 placeholder as an active placement option. Put host-specific verified bindings in administrator-owned configuration, with a checked-in example. Missing media configuration leaves existing development use working but media unavailable.
+Use isolated per-job output namespaces; associate files with the exact output nodes/job, copy into a Rack AI-owned artifact root and validate normalized paths/symlink escapes, type/content, expected count and size bounds. Hash and durably manifest files before success; no directory scan or recent-history fallback to unrelated results. Never fabricate a Git result. Retain profile/workflow/runtime/model identity, resource UUID/activation, prompt ID, fixed parameters, timestamps and error/cancel evidence, excluding secrets. Persistence failure is not success and unconfirmed cleanup keeps ownership blocked. Do not promise pixel equality across runtime changes.
 
-Use a full GPU UUID for the ComfyUI launch binding. CUDA device numbering inside that process may be remapped; do not assume the physical 4080 is always GPU index 0. `CUDA_VISIBLE_DEVICES` is placement configuration, not a hostile-code sandbox.
+## 9. Music Director companion — same task, separate PR
 
-## 5. Resource reservation correctness
+Implement the companion contract in `musicvideo-director` under that repository's rules. Do not leave it as a future task or claim changing its existing Remote ComfyUI URL implements the new API.
 
-Harden the GPU reservation primitive used by cooperating queue/media callers rather than introducing a second competing lock directory:
+Add optional image backend selection, Rack AI URL and server-side credential configuration, read-only Test connection and discovery of supported profiles. Preserve the existing direct/VastAI backend and current projects/workflow designer; avoid unrelated refactoring or live database/media replacement.
 
-1. Serialize acquisition with bounded locking; the existing `exists()` followed by `fs::write()` is insufficient.
-2. Return an owner/generation-bearing reservation handle. Release and renewal must verify that handle, not just a resource name or PID.
-3. Roll back partial acquisition on ordinary errors. If a process dies mid-transaction, remaining records must block admission until reconciled; never leave an apparently free resource whose service may still run.
-4. Use atomic durable writes. Malformed, unknown or legacy lease records block new ownership; do not silently delete them or treat missing fields as permission.
-5. Use one administrator-configured, canonical machine resource-state location for media and the cooperating queue path. Per-job `--state-root` and another Git worktree must not create an independent ownership universe for the same real GPU. Tests explicitly use temporary resource roots; no automatic live-state migration.
-6. Preserve old serialized fields/read compatibility where possible. An ownership-aware internal lease API change is allowed, with all affected callers/tests updated. Owner-blind release must not remain a route capable of deleting a media reservation.
-7. Correct directly affected queue error paths: acquisition races must not strand a claimed task; persistence/execution failures must not silently leak or incorrectly release ownership. A runner repeatedly finding only blocked work needs bounded backoff, not a busy loop.
+Route the real image Generate action through a replaceable gateway. Persist submission identity before networking and a recoverable mapping to the intended project/segment/image slot. Generate sends one `/jobs` request without opening an interactive session. Existing background machinery should poll/import independently of a browser request. Where missing, add the smallest durable worker/reconciliation path and its startup configuration, not a full new queue platform. A browser refresh or process restart must not recreate the render; acknowledge network uncertainty and retry only the identical Rack AI submission. Regenerate deliberately creates a new submission.
 
-A service reservation outlives the requesting CLI process and browser connection. It remains held while models are resident, while draining, and whenever cleanup is uncertain. Neither an empty queue, idle GPU utilization, `/free` returning HTTP 200, nor a stale heartbeat is proof that the GPU is released.
+Show queued/starting/running/completed/failed/cancelled/uncertain states appropriately. Download only job-owned artifacts through authenticated bounded streaming; validate manifest/hash/content and atomically persist into application media. An import retry fetches the SAME artifact, not a new render. A download error or unmatched output cannot count as a successful project image. Preserve original project provenance and approval flow; no unrelated cached-output fallback on this route.
 
-## 6. Service lifecycle and deployment
+Unsupported custom workflows/video/lip sync show explicit unsupported status under the Rack AI backend. Never silently switch to a billed provider or reinterpret a custom graph as an approved profile. The existing embedded designer remains usable for the existing direct backend; Rack AI managed generation does not secretly acquire an interactive session.
 
-Provide a single-host, administrator-configured ComfyUI service adapter. Prefer a dedicated user-systemd unit for the ComfyUI process tree and a small Rust media supervisor; do not build multiple deployment backends in this PR. Give commands and configuration explicit deadlines and bounds. Use service-manager process-tree ownership and invocation identity, not PID-only killing.
+Additive migrations are tested on disposable databases. The private project's existing secrets/media/database must not be printed, committed, overwritten or migrated in production without a backup and specific authorization. Prepare a disposable test instance when live application changes would be disruptive. Provide exact activation steps for the existing application.
 
-The service definition must pin an independently installed ComfyUI environment and required dependencies/custom nodes. Do not install into a vLLM environment, replace NVIDIA drivers, or run whole-stack `compose down/up`. The tracked Compose file is not proof of current live model configuration. No worker auto-restart may bypass reservation/admission; a restarted supervisor must reconcile before authorizing work.
+## 10. Deployment and efficient execution
 
-Required state transitions, with durable intent before side effects:
+Use the existing authorized `ssh tomp@gpurack` route; rack build/test/service work belongs on the rack, not a replacement NUC runtime. Verify access, repo read/write permissions, dependencies, Git authentication, isolated paths and service-manager availability FIRST and report any approval needed immediately. Never change host-key checks or provision broad privileges to make access work.
 
-`stopped -> reserving -> starting -> ready -> draining -> stopping -> stopped`
+Inspect the real deployment read-only. Build in isolated worktrees, use an independently versioned candidate install and start only new Rack AI media/ComfyUI services; don't replace the working development binary/processes. Deploy candidate media API/launcher when existing permissions allow. Use a disposable Music Director instance for tests if the working app is elsewhere or in use. Record exact installed SHAs/config paths and rollback/stop instructions. Do not merge for deployment.
 
-Include explicit `waiting`, `failed` and `recovery_required` outcomes. Keep desired operator state separate from observed process/backend state so a late health check cannot undo release or cancellation.
+Prepare the isolated ComfyUI environment and required dependencies, reusing available compatible local models. No model collections or paid inference. If no usable image checkpoint is available, report that prerequisite rather than downloading an unbounded collection or accepting new gated license terms. Everything not dependent on that asset must still be implemented/tested. A smoke fixture is not GPU qualification.
 
-Startup reserves the GPU before starting the process, verifies its identity and physical placement, checks ComfyUI protocol readiness and the admission gate, and only then exposes a ready session. Failed startup stops only the process tree owned by that activation. Release the reservation only after confirming cleanup; otherwise retain it with recovery evidence.
+Use four internal milestones without four user prompts: ownership/lifecycle; managed image; API/launcher; Music Director/end-to-end. Follow the source map once, implement focused tests, then full applicable suites and one self-review/fix pass. No duplicate whole-repository research or subagent swarm. Persist a compact progress/acceptance checklist, exact commands and evidence paths so resumption uses existing work. Do not declare completion with placeholders/TODOs in required paths.
 
-Release closes admission, accounts for in-flight submissions, drains accepted work within a configured deadline, stops the owned service, and verifies that its process tree and GPU allocations are gone before releasing ownership. A drain timeout leaves the session closed to new work and still reserved; cancellation/abort is a separate explicit operator action. Never kill unrelated processes, reset a GPU or clear another user's jobs to make a test pass.
+## 11. Verification and handoff
 
-Recovery distinguishes supervisor restart, backend restart, complete host reboot, PID reuse, stale state and an unknown service already listening on the port. Do not attach to an unrelated ComfyUI instance because its HTTP health check happens to pass. Persist ownership/activation identity and reconcile actual service/process/GPU facts. Every individual probe, lock acquisition, startup, drain and stop attempt is bounded; an intentionally long-lived supervisor is not an excuse for unbounded operations. Active supervision must retain liveness evidence with no intended heartbeat gap over 30 seconds.
+Automated verification must use isolated job AND canonical resource roots, fake GPU/service probes, controllable real HTTP fixtures, the actual Python gate/middleware, and disposable application databases. Required cases:
 
-Default to loopback access and document browser access through an existing authorized tunnel. Do not expose an unauthenticated public listener. Provide resource limits appropriate to the qualified workflow, including host-memory and disk-headroom checks; do not promise that arbitrary workflows fit in 16 GB.
+- simultaneous acquisition, stale/wrong owner release, partial failure, corrupt/legacy records, independent worktrees sharing resource authority;
+- duplicate/missing/wrong UUID, protected resource overlap, foreign processes, zero mutation of existing inference services;
+- startup/drain/stop deadlines, in-flight POST drain barrier, browser/CLI exit, supervisor/backend restart, PID reuse, late control races and persistence failure;
+- identical/concurrent replay, changed payload, acknowledgement loss, backend/history loss, partial/error output, cancellation versus success;
+- unauthorized/spoofed identity, cross-owner reads/cancel/artifacts, CSRF/origin attacks, oversized bodies, path/symlink traversal, invalid/stale/oversized artifacts;
+- actual launcher browser controls, readiness/error messages, native UI assets/WebSockets, page reload, stopped-backend startup and receiver responsiveness;
+- Music Director settings, real Generate wiring, durable mapping/polling, retry/resume/import, missing credentials, unsupported workflow and legacy backend regression;
+- shared schema fixtures and real cross-repository HTTP transport test (fake GPU is permitted here, but an in-process mocked gateway alone is not enough).
 
-## 7. Real submission fencing for the native UI
+The legacy `tests/rack_resource_admission_smoke.sh` deletes/writes a gpu-2060 lease and invokes the coder. NEVER run it unchanged against live state; isolate the fixture/fake worker and audit other scripts first. No test may delete a live lease or unexpectedly invoke an LLM.
 
-A CLI flag alone cannot drain a server whose native browser can still POST work. Implement a small Rack-AI-owned ComfyUI admission extension/middleware, without modifying the frontend or forking upstream. Its mechanism must be tested against the pinned ComfyUI startup/routing behavior.
+Run `cargo fmt --check`, `cargo test --workspace --offline`, focused Python/middleware/API/browser tests, Music Director's applicable tests and `git diff --check` in each repo. Fetch justified dependencies separately when necessary; distinguish missing offline cache from passing tests. Preserve safety tests. Record exact passes, failures, skips and unrelated pre-existing failures honestly.
 
-The gate starts closed and is authorized only for the current activation/reservation generation. Missing, stale or malformed authorization closes admission. Cover both native `/prompt` and the `/api/prompt` alias. Closing the gate must serialize with submissions already validating/enqueuing; a queue snapshot taken before those submissions finish is not a drain barrier.
+Live acceptance is a separate gate: protected development identities/placement/health captured before -> launcher loads with backend stopped -> Start/Open native UI -> real local image -> Finish and verified release -> Music Director Generate while ComfyUI is stopped automatically starts it -> correct image appears in the right project -> replay/import retry causes no second render -> managed idle release/repeat activation -> protected development identities remain unchanged/healthy. Use fakes for destructive conflict/crash tests. Do not claim a real browser/device interaction, GPU run or process comparison without evidence.
 
-Use a protected local control channel. Do not expose service-management authority or reservation credentials to ordinary browser clients or log secrets. When the supervisor loses authority, new submissions stop; already accepted work may finish, with the GPU still reserved until reconciliation.
+For browser tests run a real browser against the candidate deployment/fixture where available. A fixture integration pass does not certify Tom's particular remote browser or existing Music Director installation. Report a private-network/actual-client acceptance gate separately when that machine is inaccessible.
 
-Interactive sessions and managed sessions are mutually exclusive in this MVP. Interactive mode preserves ordinary ComfyUI behavior while admitted. Managed mode allows only the supervisor's submissions and authorized per-job control, preventing the browser from injecting or clearing unrelated work during the managed execution. Do not implement simultaneous mixed ownership of one queue in this PR.
+Completion report: separate repository SHAs/PR links; CODE_COMPLETE; FIXTURE_E2E_PASSED; RACK_LIVE_QUALIFIED; DIRECTOR_LIVE_QUALIFIED; deployed component SHAs; exact launcher URL (or NOT_DEPLOYED); connection setup without secrets; actual workflow/profile used; how to finish/stop/rollback; explicit remaining blockers. Retain progress if interrupted. Do not claim an unattended duration or guaranteed single-run success. Keep PRs draft until required evidence exists and never merge without explicit instruction.
 
-## 8. Bounded managed image contract
+## Source references
 
-Add a separate versioned media request/result schema and CLI path. The caller supplies opaque work/submission/idempotency identities, a registered image operation/profile, allowed parameters and bounded execution requirements. A workflow/profile identifier describes the requested operation, not a caller-selected GPU, endpoint, executable or arbitrary filesystem path.
+Static code review: `docs/pr24-code-review.md`. ComfyUI protocol research snapshot: `Comfy-Org/ComfyUI@9113c08c2e14f1ca6c0ccab64920777fd01e1bb9`, `server.py`, `execution.py`, `main.py`; verify the actual pinned installed revision. Source snapshot is not deployment proof.
 
-Validate and record source-priority admission using the existing policy semantics; do not raise ATHBA's ceiling. This release does not promise global priority scheduling or preemption. Managed work waiting for an interactive session to end stays durably queued with a clear reason, without occupying the 2060/4060 Ti.
-
-Use an administrator-approved **API-format** workflow template, not the UI editor graph JSON. Supply one real local image-generation example and a separate GPU-free test fixture. Reuse an available model where possible. Permit only explicitly mapped typed parameters, such as prompt, seed and bounded dimensions/steps; reject unknown parameters, arbitrary node replacement and caller-provided paths. Freeze the resolved workflow and profile/version/hash before dispatch. Do not quietly change the model, seed or resolution after failure.
-
-Persist a unique canonical ComfyUI prompt UUID and submission intent before POST. Record the acknowledgement and backend activation identity durably. The reviewed upstream accepts caller-supplied UUIDs but **does not deduplicate repeated POSTs with that UUID**. Therefore:
-
-- Identical idempotent replay returns the existing Rack AI job/result without another render. Reusing an identity for a changed payload is a conflict, including concurrent submissions.
-- A timeout/lost response after a possible enqueue becomes `submission_uncertain`, not an automatic retry.
-- Reconcile that known ID against the same backend's queue/history with bounded reads. If the outcome cannot be established, retain an explicit unknown/interrupted outcome and require a new caller-authorized submission for a new render.
-- A backend restart or missing history cannot be converted into success or proof that the POST never executed.
-
-Use bounded HTTP polling of queue/history for the initial implementation. WebSocket previews/progress are optional and must not be required for correctness. ComfyUI history is in memory and may be cleared/evicted; Rack AI's own persisted job and terminal manifest are authoritative across restarts.
-
-HTTP 200, a returned prompt ID, or a WebSocket end event is not rendering success. Validate terminal status, required output-node success and all expected artifacts. A partial-output validation response or error history must not be reported as a complete job.
-
-Persist operator cancellation before effects; late completion cannot erase it. Cancel only the owned job using a verified, atomic per-job API where available, or a safe exclusive-session cleanup path. Never use a check-then-global-interrupt sequence against a shared queue. Pin and verify API support rather than guessing the installed version has it.
-
-## 9. Artifacts and evidence
-
-Write managed outputs into an isolated per-job output namespace. Copy/retain expected files in a Rack AI-owned job-artifact root before declaring success. Validate normalized paths, allowed output roots, symlink/traversal escapes, file type/content, count and byte limits. Do not scan a directory and assume any existing image belongs to the current job. Retain hashes and exact output associations.
-
-Record: Rack AI job identity, effective request/profile, resolved workflow hash, fixed seed/parameters, ComfyUI revision and dependency/model identity available to the profile, selected resource/physical UUID, backend activation identity, prompt ID, timestamps, status/error/cancellation evidence, and artifact manifest. No credentials, arbitrary environment dump or fabricated Git result.
-
-Persist terminal evidence before cleanup removes the only recoverable result. A persistence or artifact failure is not success. An unconfirmed stop may coexist with a terminal job failure but must keep the resource quarantined/reserved. Do not promise pixel-identical reproduction across runtime/hardware changes.
-
-## 10. Operator surface and bounded implementation order
-
-Provide documented equivalents of these new CLI operations, with machine-readable output and meaningful exit codes:
-
-- `media preflight`, `media open`, `media status`, `media release`;
-- `media submit <request>`, `media inspect <id>`, `media cancel <id>`;
-- `media supervise`, including a bounded `--once` reconciliation for tests/operations.
-
-Preflight is read-only and distinguishes code readiness, configuration readiness, backend readiness and workflow qualification. Opening/submitting must not pretend that queued/waiting work is already usable/complete. Include install/start/access/release/recovery instructions and an opt-in qualification command.
-
-Implement A, test it, then B, test it, in one task. Do not stop after planning, after adding types/configuration, or after a fake-only proof. Do not start a separate scheduler/refactoring project. Additional abstractions, dependencies and files must earn their place through these concrete requirements.
-
-## 11. Required verification
-
-Run new tests through public application/CLI boundaries with fake GPU/process probes, a controllable HTTP backend and isolated resource/job roots. Test the actual Python admission middleware with a lightweight HTTP application as well as Rust-side adapters; a mocked ComfyUI client alone does not prove the drain race is closed.
-
-Required regression groups:
-
-| Group | Required cases |
-| --- | --- |
-| Ownership | Concurrent acquisition; wrong/stale owner release; partial acquisition; malformed/legacy records; independent job roots sharing one physical-resource authority |
-| Placement | Missing/duplicate/wrong UUID; development-resource overlap; foreign process; no commands affecting protected services |
-| Lifecycle | Startup failure; CLI/browser exit; drain race with in-flight POST; drain/stop timeout; supervisor/backend restart; PID reuse; persistence failure; verified release and repeat activation |
-| Managed jobs | Validation failure; idempotent/concurrent replay; changed-payload conflict; lost POST acknowledgement; absent/evicted history; backend restart; terminal error/partial output; cancellation versus late success |
-| Artifacts | Missing/invalid image; traversal/symlink escape; stale file; size/count limits; persistence failure before terminalization |
-| Compatibility | Existing development configuration without media; v1/v2 workspace behavior; updated queue ownership/cleanup/backoff; existing status/lease readers |
-
-The current `tests/rack_resource_admission_smoke.sh` directly deletes/writes the repository's `gpu-2060` lease and invokes the coder. **Do not run it unchanged against live state.** Refactor the affected smoke fixture to temporary roots/fake workers or use an isolated equivalent that tests the real production CLI. Audit applicable older smoke scripts before execution. No automated test may delete a live lease or unintentionally invoke a real model.
-
-Required baseline: `cargo fmt --check`, `cargo test --workspace --offline`, targeted Rust/Python/CLI tests, and `git diff --check`. If a justified new dependency must first be fetched, report that separately; do not disguise a missing offline cache as a passing offline run. Preserve safety tests and review the final diff once the implementation is complete.
-
-### Live acceptance, separate from fixture success
-
-When authorized access and prerequisites are available, retain evidence for:
-
-1. Existing 2060/4060 Ti service identity, GPU placement and health before activation.
-2. Correctly reserved 4080; real ComfyUI UI reachable through the documented access path.
-3. A real local GPU image workflow executed successfully; image verified.
-4. A managed request producing a verified artifact/manifest; identical replay causes no second render.
-5. Release/drain/stop and confirmed GPU reclamation; second activation works.
-6. Existing development service identities/configuration remain unchanged and healthy afterward.
-
-Use fakes for dangerous conflict/crash cases that would otherwise interrupt development. Do not claim an actual browser interaction, live model run, recovery test or unchanged process identity without its evidence.
-
-If rack access, permissions, a model or a usable environment is missing, complete code, fixtures and runbook, and report the exact remaining live gate with commands. Do not fabricate qualification, silently broaden privileges or stop all implementation work at the first environment blocker. Code completion and live qualification are separate report fields.
-
-## 12. Upstream reference snapshot
-
-Protocol reviewed against Comfy-Org/ComfyUI `9113c08c2e14f1ca6c0ccab64920777fd01e1bb9` (`server.py`, `execution.py`, `main.py`). This is a research snapshot, not a claim that it is installed or qualified on gpurack. Pin the actual tested runtime and verify any supported alternative explicitly.
-
-Primary references:
-
-- https://docs.comfy.org/development/comfyui-server/comms_routes
-- https://github.com/Comfy-Org/ComfyUI/blob/9113c08c2e14f1ca6c0ccab64920777fd01e1bb9/server.py
-- https://github.com/Comfy-Org/ComfyUI/blob/9113c08c2e14f1ca6c0ccab64920777fd01e1bb9/execution.py
-- https://github.com/Comfy-Org/ComfyUI/blob/9113c08c2e14f1ca6c0ccab64920777fd01e1bb9/main.py
-- https://docs.nvidia.com/cuda/cuda-programming-guide/05-appendices/environment-variables.html
-
-No production code, live service, GPU assignment or model installation is changed by this documentation revision. Do not merge without explicit operator instruction.
+This documentation revision changes no production code, credentials, models or running services.
