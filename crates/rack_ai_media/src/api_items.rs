@@ -49,6 +49,7 @@ pub fn dispatch(
             Ok((StatusCode::OK, session_view(app, session)?))
         }
         (Method::POST, ["sessions", id, "release"]) => {
+            let _operation = crate::operation::lock(&app.store.root)?;
             let session = app.store.update(|s| {
                 let active = s.service.session.clone();
                 let session = s

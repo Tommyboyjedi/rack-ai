@@ -6,6 +6,10 @@ import os
 from pathlib import Path
 import sys
 from aiohttp import web
+if len(sys.argv) > 1 and sys.argv[1] == "--process-generation-fixture":
+    import time
+    time.sleep(180)
+    sys.exit(0)
 from PIL import Image
 
 root = Path(sys.argv[1])
@@ -19,6 +23,13 @@ history, pending = {}, {}
 dispatches = []
 invocation = ""
 fault = {"mode": "normal", "delay": 0.1}
+original_gate_status = authority.status
+def fixture_gate_status():
+    value = original_gate_status()
+    value["pid"] = json.loads((root / "machine.json").read_text())["pid"]
+    value.update(fault.get("gate_override", {}))
+    return value
+authority.status = fixture_gate_status
 
 
 @web.middleware
@@ -28,6 +39,8 @@ async def startup(request, handler):
         return await handler(request)
     machine = json.loads((root / "machine.json").read_text())
     if not machine["active"]:
+        raise web.HTTPServiceUnavailable()
+    if request.path == "/rack-gate/status" and fault.get("gate_unavailable"):
         raise web.HTTPServiceUnavailable()
     if invocation != machine["invocation"]:
         invocation = machine["invocation"]
@@ -145,5 +158,5 @@ app.router.add_post("/rack-gate/barrier", queue)
 app.router.add_get("/", native)
 app.router.add_get("/ws", websocket)
 app.router.add_get("/assets/{name}", asset)
-(root / "machine.json").write_text(json.dumps({"active": False, "pid": os.getpid(), "invocation": ""}))
+(root / "machine.json").write_text(json.dumps({"active": False, "pid": os.getpid(), "controller_pid": os.getpid(), "invocation": ""}))
 web.run_app(app, host="127.0.0.1", port=int(sys.argv[2]), print=None)

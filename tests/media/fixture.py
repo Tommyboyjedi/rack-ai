@@ -60,6 +60,8 @@ def receiver(root, configure=None):
         "min_memory_mb": 1, "min_disk_mb": 1,
         "principals": [{"id": "operator", "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest(), "ceiling": "paramount", "operator": True},
                        {"id": "director", "token_sha256": hashlib.sha256(CLIENT.encode()).hexdigest(), "ceiling": "medium", "operator": False}]}
+    config["runtime"] = {"python": sys.executable, "script": str(REPO / "tests/media/fake_comfy.py"),
+                         "directory": str(Path.cwd())}
     if configure:
         configure(config)
     (root / "config.json").write_text(json.dumps(config))
@@ -70,7 +72,10 @@ def receiver(root, configure=None):
         os.chmod(path, 0o700)
     environment = dict(os.environ, RACK_MEDIA_FIXTURE=str(root), PATH=str(root / "bin") + ":" + os.environ["PATH"])
     with (root / "comfy.log").open("w") as comfy_log, (root / "receiver.log").open("w") as receiver_log:
-        comfy = subprocess.Popen([sys.executable, str(REPO / "tests/media/fake_comfy.py"), str(root), str(ports[0])], stdout=comfy_log, stderr=subprocess.STDOUT)
+        comfy_environment = dict(environment, CUDA_VISIBLE_DEVICES=config["media_uuid"],
+            RACK_MEDIA_AUTHORITY_FILE=config["authority_file"], RACK_MEDIA_CONTROL_SECRET_FILE=config["control_secret_file"])
+        comfy = subprocess.Popen([sys.executable, str(REPO / "tests/media/fake_comfy.py"), str(root), str(ports[0])],
+            stdout=comfy_log, stderr=subprocess.STDOUT, env=comfy_environment)
         process = None
         children = [comfy]
         try:
@@ -91,6 +96,16 @@ def receiver(root, configure=None):
             yield {"root": root, "api": api, "native": native, "backend": backend, "process": process,
                    "config": config, "headers": headers, "environment": environment, "restart": restart}
         finally:
+            machine = json.loads((root / "machine.json").read_text())
+            pid = machine.get("pid")
+            if pid in machine.get("spawned_pids", []):
+                try:
+                    binding = ("RACK_MEDIA_FIXTURE=" + str(root)).encode()
+                    if binding in Path(f"/proc/{pid}/environ").read_bytes().split(bytes([0])):
+                        import signal
+                        os.kill(pid, signal.SIGTERM)
+                except (ProcessLookupError, FileNotFoundError):
+                    pass
             for child in reversed(children):
                 if child and child.poll() is None:
                     child.terminate()

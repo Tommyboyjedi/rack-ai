@@ -26,11 +26,14 @@ pub fn run(runtime: Runtime) -> Result<(), String> {
             }
             Ok(())
         })?;
-        let result = Lifecycle { runtime: &runtime }
-            .tick()
-            .and_then(|_| ImageExecution { runtime: &runtime }.tick());
-        if let Err(error) = result {
-            quarantine(&runtime, &error)?;
+        {
+            let _operation = crate::operation::lock(&runtime.store.root)?;
+            let result = Lifecycle { runtime: &runtime }
+                .tick()
+                .and_then(|_| ImageExecution { runtime: &runtime }.tick());
+            if let Err(error) = result {
+                quarantine(&runtime, &error)?;
+            }
         }
         runtime.store.update(|s| {
             s.service.heartbeat = now();
@@ -77,6 +80,15 @@ pub fn recover(runtime: &Runtime) -> Result<(), String> {
     let mut closed = state.service.clone();
     closed.mode = Mode::Closed;
     Lifecycle { runtime }.authority(&closed)?;
+    if state.service.state == ServiceState::Restarting {
+        runtime
+            .reservations
+            .verify(state.service.lease.as_ref().ok_or("restart lost lease")?)?;
+        if state.service.mode != Mode::Interactive || state.service.restart.is_none() {
+            return quarantine(runtime, "invalid durable restart intent");
+        }
+        return Ok(());
+    }
     if runtime.systemd.gone()?
         && (GpuProbe {
             config: &runtime.config,

@@ -15,9 +15,22 @@ impl Lifecycle<'_> {
             }
             ServiceState::Starting => crate::startup::StartupObservation { runtime: r }.observe(),
             ServiceState::Ready => self.ready(&state),
+            ServiceState::Restarting => {
+                crate::restart_lifecycle::InteractiveRestart { runtime: r }.tick(&state)
+            }
             ServiceState::Draining => crate::shutdown::Shutdown { runtime: r }.drain(service),
             ServiceState::Stopping => crate::shutdown::Shutdown { runtime: r }.stopping(service),
-            ServiceState::RecoveryRequired => Ok(()),
+            ServiceState::RecoveryRequired => {
+                if service.mode == Mode::Interactive
+                    && state
+                        .sessions
+                        .iter()
+                        .any(|s| Some(&s.id) == service.session.as_ref() && s.release_requested)
+                {
+                    return crate::shutdown::Shutdown { runtime: r }.drain(service);
+                }
+                Ok(())
+            }
         }
     }
     fn begin(&self, state: &MediaState) -> Result<(), String> {
@@ -69,6 +82,9 @@ impl Lifecycle<'_> {
         let observed = r.systemd.observe()?;
         if service.invocation.as_ref() != Some(&observed.invocation) {
             return Err("backend invocation changed".into());
+        }
+        if let Some(generation) = &service.generation {
+            generation.verify(&observed)?;
         }
         GpuProbe { config: &r.config }.owned(&observed)?;
         let gate = r.backend.gate()?;

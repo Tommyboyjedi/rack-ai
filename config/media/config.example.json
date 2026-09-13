@@ -55,5 +55,10 @@
       "ceiling": "medium",
       "operator": false
     }
-  ]
+  ],
+  "runtime": {
+    "python": "/srv/comfyui/venv/bin/python",
+    "script": "/srv/comfyui/ComfyUI/main.py",
+    "directory": "/srv/comfyui/ComfyUI"
+  }
 }

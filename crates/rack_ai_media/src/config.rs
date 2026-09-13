@@ -22,6 +22,8 @@ pub struct Config {
     pub authority_file: PathBuf,
     pub control_secret_file: PathBuf,
     pub unit: String,
+    #[serde(default)]
+    pub runtime: crate::process_identity::RuntimePaths,
     pub backend: String,
     pub media_uuid: String,
     pub protected: Vec<ProtectedWorker>,
@@ -80,6 +82,9 @@ impl Config {
             &self.output_root,
             &self.authority_file,
             &self.control_secret_file,
+            &self.runtime.python,
+            &self.runtime.script,
+            &self.runtime.directory,
         ] {
             if !root.is_absolute() {
                 return Err("absolute administrator paths required".into());

@@ -105,6 +105,7 @@ pub enum ServiceState {
     Reserving,
     Starting,
     Ready,
+    Restarting,
     Draining,
     Stopping,
     Waiting,
@@ -124,6 +125,10 @@ pub struct Service {
     pub mode: Mode,
     pub activation: String,
     pub invocation: Option<String>,
+    #[serde(default)]
+    pub generation: Option<crate::backend_generation::BackendGeneration>,
+    #[serde(default)]
+    pub restart: Option<crate::restart_state::RestartIntent>,
     pub lease: Option<LeaseHandle>,
     pub since: u64,
     pub heartbeat: u64,
@@ -138,6 +143,8 @@ impl Default for Service {
             mode: Mode::Closed,
             activation: String::new(),
             invocation: None,
+            generation: None,
+            restart: None,
             lease: None,
             since: 0,
             heartbeat: 0,

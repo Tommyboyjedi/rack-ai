@@ -93,6 +93,15 @@ impl Backend {
         }
         serde_json::from_slice(&data).map_err(|_| "invalid backend response".into())
     }
+    pub fn probe_gate(&self) -> Result<crate::gate_probe::GateObservation, String> {
+        crate::gate_probe::GateProbe {
+            request: self
+                .client
+                .get(format!("{}/rack-gate/status", self.base))
+                .header("X-Rack-Control", &self.secret),
+        }
+        .observe()
+    }
     pub fn gate(&self) -> Result<GateStatus, String> {
         self.read("/rack-gate/status")
     }

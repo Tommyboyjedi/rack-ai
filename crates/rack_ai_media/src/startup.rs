@@ -27,6 +27,9 @@ impl StartupObservation<'_> {
                 GpuProbe { config: &r.config }.owned(&observed)?;
                 r.store.update(|s| {
                     s.service.invocation = Some(observed.invocation.clone());
+                    s.service.generation = Some(
+                        crate::backend_generation::BackendGeneration::capture(1, &observed)?,
+                    );
                     Ok(())
                 })?;
             }
