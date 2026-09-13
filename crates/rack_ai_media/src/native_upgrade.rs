@@ -12,6 +12,20 @@ pub async fn handle(app: WebState, input: AuthorizedNative) -> Response {
     let Ok(permit) = app.sockets.clone().try_acquire_owned() else {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     };
+    let browser_session = if request
+        .headers()
+        .contains_key(axum::http::header::AUTHORIZATION)
+    {
+        None
+    } else {
+        let Ok(digest) = crate::browser_sessions::cookie_digest(request.headers()) else {
+            return StatusCode::UNAUTHORIZED.into_response();
+        };
+        Some(crate::browser_socket::BrowserSocket {
+            app: app.clone(),
+            digest,
+        })
+    };
     let (mut parts, _) = request.into_parts();
     let path = parts
         .uri
@@ -40,6 +54,7 @@ pub async fn handle(app: WebState, input: AuthorizedNative) -> Response {
                     ),
                     secret,
                     permit,
+                    browser_session,
                 },
             )
         })

@@ -4,6 +4,7 @@
   "public_origin": "https://gpurack.duckdns.org",
   "native_origin": "https://gpurack.tailc214fc.ts.net:8444",
   "backend": "http://127.0.0.1:8190",
+  "browser_auth_file": "/srv/rack-ai-media/secrets/browser-auth.json",
   "state_root": "/srv/rack-ai-media/state",
   "resource_root": "/srv/rack-ai/state/resources",
   "output_root": "/srv/comfyui/output",

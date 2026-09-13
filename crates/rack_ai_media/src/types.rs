@@ -155,6 +155,8 @@ impl Default for Service {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BrowserSession {
+    #[serde(default)]
+    pub auth_generation: String,
     pub digest: String,
     pub owner: String,
     pub expires: u64,

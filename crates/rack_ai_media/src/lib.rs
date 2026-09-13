@@ -41,3 +41,18 @@ pub mod systemd;
 pub mod types;
 pub mod unit_definition;
 pub mod web_state;
+
+pub mod browser_access;
+pub mod browser_account;
+pub mod browser_attempt;
+pub mod browser_login;
+pub mod browser_pages;
+pub mod browser_sessions;
+pub mod human_store;
+pub mod login_throttle;
+pub mod password_kdf;
+
+#[cfg(test)]
+mod password_tests;
+
+pub mod browser_socket;

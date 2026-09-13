@@ -22,11 +22,13 @@ The model store remains `/srv/fast/comfyui-models-pr24` on SATA. The selected as
 
 ## Private access and CLI
 
+Human password setup, change/logout, 30-day browser persistence and shell recovery are described in [browser password operations](pr24-browser-passwords.md).
+
 Current HTTPS routing, automatic renewal and hostname rollback are described in [private HTTPS operations](pr24-private-https.md).
 
 Raw ComfyUI is `127.0.0.1:8190`. The authenticated receiver and native HTTP/WebSocket proxy listen separately on `127.0.0.1:8191` and `127.0.0.1:8192`. Dedicated nginx on the Tailscale IPv4:443 routes to the receiver, and Tailscale Serve 8444 routes to the native adapter. The launcher is https://gpurack.duckdns.org/ and native UI remains https://gpurack.tailc214fc.ts.net:8444/. Port 8443 is disabled. The old .ts.net launcher on 443 is a tested restore-only rollback route. Preserve all other Serve configuration; do not enable Funnel. The native UI lives at the root of its own origin.
 
-Open the launcher, sign in with the operator credential, then Start → Open ComfyUI. The retained native domain has its own host-only cookie and may require the same operator credential there; see the HTTPS runbook. Bookmarking, prefetching, status and profile reads do not start the GPU. Finish closes admission, drains accepted work, verifies process-tree exit and absence of GPU allocations, then releases the reservation. The deployment uses a four-hour interactive session expiry that drains normally, and 30 seconds of managed idle retention. Closing the browser does not cancel work or release its session.
+Open the launcher, sign in with your personal password, then Start → Open ComfyUI. Before a personal password exists, use the existing operator credential once and choose Change password. The retained native domain has its own host-only cookie and may require the same personal password there; see the browser password runbook. Bookmarking, prefetching, status and profile reads do not start the GPU. Finish closes admission, drains accepted work, verifies process-tree exit and absence of GPU allocations, then releases the reservation. The deployment uses a four-hour interactive session expiry that drains normally, and 30 seconds of managed idle retention. Closing the browser does not cancel work or release its session.
 
 The browser holds a random HttpOnly, SameSite=Strict session cookie (Secure over HTTPS), never the bearer/control secret in a URL, JavaScript storage or rendered native content. Cookies authenticate unsafe requests only with an exact allowed Origin. Native HTTP and WebSockets require the requesting operator's active session. Reopening the launcher resumes its durable session.
 

@@ -39,7 +39,9 @@ async fn serve(config: Config) -> Result<(), String> {
             "/",
             get(|| async { axum::response::Html(include_str!("../web/launcher.html")) }),
         )
-        .route("/login", any(rack_ai_media::auth::login))
+        .route("/login", any(rack_ai_media::browser_login::handle))
+        .route("/account", any(rack_ai_media::browser_account::account))
+        .route("/logout", any(rack_ai_media::browser_account::logout))
         .route(
             "/api/media/v1/jobs/{job}/artifacts/{artifact}",
             get(rack_ai_media::download::handle),
@@ -51,7 +53,9 @@ async fn serve(config: Config) -> Result<(), String> {
         ))
         .with_state(app.clone());
     let native = Router::new()
-        .route("/login", any(rack_ai_media::auth::login))
+        .route("/login", any(rack_ai_media::browser_login::handle))
+        .route("/account", any(rack_ai_media::browser_account::account))
+        .route("/logout", any(rack_ai_media::browser_account::logout))
         .fallback(rack_ai_media::native::handle)
         .layer(middleware::from_fn_with_state(
             app.clone(),

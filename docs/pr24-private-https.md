@@ -15,9 +15,9 @@ The former Tailscale Serve 443 listener is disabled while nginx serves DuckDNS. 
 
 Rack configuration changes only `public_origin` to `https://gpurack.duckdns.org`. `native_origin`, credentials, gate, resource authority, ComfyUI unit and restart implementation remain unchanged.
 
-The existing operator credential remains at `/srv/rack-ai-media/secrets/operator`; its value was not changed or published.
+Human browser authentication now uses the dedicated password and 30-day sessions described in [browser password operations](pr24-browser-passwords.md). The existing API operator credential remains at `/srv/rack-ai-media/secrets/operator`; its value was not changed or published.
 
-The two hostnames are different browser cookie domains. A fresh browser signs in at the DuckDNS launcher, then signs in with the same operator credential when Open ComfyUI reaches the retained native domain. The browser uses separate host-only HttpOnly/Secure/SameSite=Strict cookies. No credential is placed in a URL, shared across domains, or injected by nginx. Subsequent cross-site navigation may ask for native sign-in again; keep the native tab open during a session.
+The two hostnames are different browser cookie domains. A fresh browser signs in at the DuckDNS launcher, then signs in with the same personal password when Open ComfyUI reaches the retained native domain. The browser uses separate host-only HttpOnly/Secure/SameSite=Strict cookies. No credential is placed in a URL, shared across domains, or injected by nginx. Subsequent cross-site navigation may ask for native sign-in again; keep the native tab open during a session.
 
 Start → Ready → Open, normal Extensions → Restart → Confirm, generation verification, same interactive session/lease and Finish remain Rack lifecycle operations. TLS renewal never restarts Rack AI or ComfyUI.
 

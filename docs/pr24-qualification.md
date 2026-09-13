@@ -1,5 +1,7 @@
 # PR24 permanent deployment qualification — 2026-09-13
 
+Current browser authentication is described in [human password operations](pr24-browser-passwords.md). That change supersedes older credential-login details retained in this historical proof.
+
 Current launcher: **https://gpurack.duckdns.org/**. [Private HTTPS qualification](pr24-private-https-qualification.md) supersedes the hostname/routing details below; the prior proof is retained as historical evidence.
 
 The permanent gpurack deployment passed the complete interactive and managed image journeys. PR24 and companion Music Director PR33 remain unmerged. This record supersedes earlier deployment paths; [the restart qualification](pr24-restart-qualification.md) retains the original acceptance evidence.

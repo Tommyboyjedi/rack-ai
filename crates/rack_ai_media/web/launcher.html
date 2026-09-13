@@ -1,6 +1,7 @@
 <!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
 <title>Rack AI · ComfyUI</title><style>[hidden]{display:none!important}body{font:18px system-ui;max-width:48rem;margin:8vh auto;padding:2rem;background:#101923;color:#e5f2ff}button,a{font:inherit;padding:.7rem 1rem;margin:.3rem;border-radius:.4rem}button{cursor:pointer}a{display:inline-block;color:#96d6ff}button:disabled{opacity:.5}#state{font-size:1.4rem}#error{color:#ffc19b}</style>
-<h1>ComfyUI on the rack</h1><p id="state" role="status">Connecting…</p><p id="error" role="alert"></p>
+<h1>ComfyUI on the rack</h1>
+<nav aria-label="Account" style="display:flex;align-items:center;font-size:.9rem"><a href="/account">Change password</a><form method="post" action="/logout"><button>Log out</button></form></nav><p id="state" role="status">Connecting…</p><p id="error" role="alert"></p>
 <button id="start" disabled>Start ComfyUI</button><a id="open" hidden target="_blank" rel="noopener">Open ComfyUI</a><button id="finish" disabled>Finish session</button>
 <p>Finish closes admission and lets accepted work drain before releasing the GPU. Closing this page leaves your session running.</p>
 <script>

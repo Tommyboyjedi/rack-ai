@@ -9,10 +9,14 @@ pub const SOCKET_CONCURRENCY: usize = 16;
 pub const ACTIVE_JOBS: usize = 128;
 pub const RETAINED_RECORDS: usize = 2048;
 pub const BROWSER_SESSIONS: usize = 64;
-pub const COOKIE_SECONDS: u64 = 43200;
+pub const COOKIE_SECONDS: u64 = 30 * 24 * 60 * 60;
 pub const SOCKET_SECONDS: u64 = 3600;
 pub const AUTHORITY_SECONDS: u64 = 20;
 pub const HEARTBEAT_SECONDS: u64 = 2;
 pub const IMAGE_MAX_EDGE: u32 = 1024;
 pub const NATIVE_WAITERS: usize = 128;
 pub const NATIVE_WAIT_SECONDS: u64 = 5;
+
+pub const ACCOUNT_BODY_BYTES: usize = 16 * 1024;
+
+pub const BROWSER_SOCKET_AUTH_SECONDS: u64 = 2;

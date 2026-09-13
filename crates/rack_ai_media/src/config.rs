@@ -17,6 +17,8 @@ pub struct Config {
     pub public_origin: String,
     pub native_origin: String,
     pub state_root: PathBuf,
+    #[serde(default)]
+    pub browser_auth_file: Option<PathBuf>,
     pub resource_root: PathBuf,
     pub output_root: PathBuf,
     pub authority_file: PathBuf,
@@ -89,6 +91,13 @@ impl Config {
             if !root.is_absolute() {
                 return Err("absolute administrator paths required".into());
             }
+        }
+        if self
+            .browser_auth_file
+            .as_ref()
+            .is_some_and(|p| !p.is_absolute())
+        {
+            return Err("absolute browser authentication path required".into());
         }
         let backend = reqwest::Url::parse(&self.backend).map_err(|e| e.to_string())?;
         if backend.scheme() != "http"

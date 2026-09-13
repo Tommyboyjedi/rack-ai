@@ -5,6 +5,9 @@ pub struct WebState {
     pub config: Arc<Config>,
     pub store: Store,
     pub client: reqwest::Client,
+    pub human: crate::human_store::HumanStore,
+    pub password_gate: Arc<tokio::sync::Semaphore>,
+    pub login_throttle: Arc<std::sync::Mutex<crate::login_throttle::LoginThrottle>>,
     pub connections: Arc<tokio::sync::Semaphore>,
     pub sockets: Arc<tokio::sync::Semaphore>,
     pub native_connections: Arc<tokio::sync::Semaphore>,
@@ -12,7 +15,13 @@ pub struct WebState {
 }
 impl WebState {
     pub fn new(config: Config) -> Result<Self, String> {
+        let human = crate::human_store::HumanStore::new(&config)?;
         Ok(Self {
+            human,
+            password_gate: Arc::new(tokio::sync::Semaphore::new(1)),
+            login_throttle: Arc::new(std::sync::Mutex::new(
+                crate::login_throttle::LoginThrottle::default(),
+            )),
             store: Store::new(config.state_root.clone()),
             config: Arc::new(config),
             client: reqwest::Client::builder()

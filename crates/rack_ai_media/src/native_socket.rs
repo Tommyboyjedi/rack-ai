@@ -4,6 +4,7 @@ use tokio_tungstenite::tungstenite::{Message as Upstream, client::IntoClientRequ
 pub struct SocketTarget {
     pub url: String,
     pub secret: String,
+    pub browser_session: Option<crate::browser_socket::BrowserSocket>,
     pub permit: tokio::sync::OwnedSemaphorePermit,
 }
 pub async fn proxy(mut browser: WebSocket, target: SocketTarget) {
@@ -24,15 +25,19 @@ pub async fn proxy(mut browser: WebSocket, target: SocketTarget) {
     };
     // One outer deadline also bounds stalled socket writes.
     let _permit = target.permit;
+    let browser_session = target.browser_session;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(crate::limits::SOCKET_SECONDS), async {
     let deadline = tokio::time::sleep(std::time::Duration::from_secs(crate::limits::SOCKET_SECONDS));
     tokio::pin!(deadline);
+    let mut authentication = tokio::time::interval(std::time::Duration::from_secs(
+        crate::limits::BROWSER_SOCKET_AUTH_SECONDS));
     loop {
         tokio::select! {
+            _=authentication.tick()=>{if !crate::browser_socket::valid(&browser_session).await {break;}},
             _=&mut deadline=>break,
             message=browser.next()=>match message{
-                Some(Ok(Message::Text(s)))=>{if upstream.send(Upstream::Text(s.to_string().into())).await.is_err(){break;}},
-                Some(Ok(Message::Binary(b)))=>{if upstream.send(Upstream::Binary(b)).await.is_err(){break;}},
+                Some(Ok(Message::Text(s)))=>{if !crate::browser_socket::valid(&browser_session).await{break;}if upstream.send(Upstream::Text(s.to_string().into())).await.is_err(){break;}},
+                Some(Ok(Message::Binary(b)))=>{if !crate::browser_socket::valid(&browser_session).await{break;}if upstream.send(Upstream::Binary(b)).await.is_err(){break;}},
                 Some(Ok(Message::Ping(_)|Message::Pong(_)))=>{},
                 _=>break,
             },

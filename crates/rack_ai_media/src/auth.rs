@@ -1,6 +1,6 @@
 use crate::{
     config::Principal,
-    types::{BrowserSession, digest, identity, now},
+    types::digest,
     web_state::{WebState, blocking},
 };
 use axum::{
@@ -24,32 +24,11 @@ pub fn authorized(
             .ok_or("unauthorized")?;
         return token_principal(app, token).map(|p| (p, false));
     }
-    let cookie = headers
-        .get(header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-    let value = cookie
-        .split(';')
-        .filter_map(|c| c.trim().split_once('='))
-        .find(|(k, _)| *k == "rack_session")
-        .map(|(_, v)| v)
-        .ok_or("unauthorized")?;
-    let hash = digest(value.as_bytes());
-    let state = app.store.read()?;
-    let session = state
-        .browsers
-        .iter()
-        .find(|s| s.expires > now() && bool::from(s.digest.as_bytes().ct_eq(hash.as_bytes())))
-        .ok_or("unauthorized")?;
-    app.config
-        .principals
-        .iter()
-        .find(|p| p.id == session.owner && p.operator)
-        .cloned()
-        .map(|p| (p, true))
-        .ok_or("unauthorized".into())
+    let hash = crate::browser_sessions::cookie_digest(headers)?;
+    crate::browser_sessions::principal(app, &hash).map(|p| (p, true))
 }
-fn token_principal(app: &WebState, token: &str) -> Result<Principal, String> {
+
+pub(crate) fn token_principal(app: &WebState, token: &str) -> Result<Principal, String> {
     let hash = digest(token.as_bytes());
     app.config
         .principals
@@ -142,61 +121,4 @@ pub async fn guard(State(app): State<WebState>, mut request: Request, next: Next
         header::HeaderValue::from_static("nosniff"),
     );
     response
-}
-#[derive(serde::Deserialize)]
-struct Login {
-    credential: String,
-}
-pub async fn login(State(app): State<WebState>, request: Request) -> Response {
-    if request.method() == axum::http::Method::GET {
-        return axum::response::Html(include_str!("../web/login.html")).into_response();
-    }
-    if request.method() != axum::http::Method::POST || !origin_allowed(request.headers(), &app) {
-        return StatusCode::FORBIDDEN.into_response();
-    }
-    let bytes =
-        match axum::body::to_bytes(request.into_body(), crate::limits::LOGIN_BODY_BYTES).await {
-            Ok(v) => v,
-            Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
-        };
-    let input: Login = match serde_urlencoded::from_bytes(&bytes) {
-        Ok(v) => v,
-        Err(_) => return StatusCode::BAD_REQUEST.into_response(),
-    };
-    let result = blocking(move || {
-        let principal = token_principal(&app, &input.credential)?;
-        if !principal.operator {
-            return Err("operator credential required".into());
-        }
-        let token = identity() + &identity();
-        let secure = app.config.public_origin.starts_with("https:");
-        app.store.update(|s| {
-            s.browsers.retain(|b| b.expires > now());
-            if s.browsers.len() >= crate::limits::BROWSER_SESSIONS {
-                return Err("browser session limit reached".into());
-            }
-            s.browsers.push(BrowserSession {
-                digest: digest(token.as_bytes()),
-                owner: principal.id,
-                expires: now() + crate::limits::COOKIE_SECONDS,
-            });
-            Ok(())
-        })?;
-        Ok(format!(
-            "rack_session={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200{}",
-            if secure { "; Secure" } else { "" }
-        ))
-    })
-    .await;
-    match result {
-        Ok(cookie) => (
-            [(header::SET_COOKIE, cookie), (header::LOCATION, "/".into())],
-            StatusCode::SEE_OTHER,
-        )
-            .into_response(),
-        Err(_) => {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
-            StatusCode::UNAUTHORIZED.into_response()
-        }
-    }
 }

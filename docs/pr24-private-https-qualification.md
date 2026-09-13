@@ -1,5 +1,7 @@
 # PR24 private HTTPS qualification — 2026-09-13
 
+Current browser authentication is described in [human password operations](pr24-browser-passwords.md). That change supersedes older credential-login details retained in this historical proof.
+
 **Launcher: https://gpurack.duckdns.org/**. Native UI remains **https://gpurack.tailc214fc.ts.net:8444/**.
 
 All acceptance checks below passed against the permanent deployment on gpurack. PR24 remains unmerged. This task adds private DNS/TLS operations and changes the launcher origin; Rack application source, authentication, resource ownership, workflow definitions, ComfyUI and Music Director source remain unchanged. The accepted restart intent at `a0212bca6be8c45e6812a1f55b86754510234074` is preserved.

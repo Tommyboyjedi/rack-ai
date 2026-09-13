@@ -88,7 +88,7 @@ def test_launcher_native_assets_websocket_and_csrf(tmp_path):
         context = browser.new_context()
         page = context.new_page()
         page.goto(env["api"])
-        page.get_by_label("Operator credential").fill(TOKEN)
+        page.get_by_label("Password", exact=True).fill(TOKEN)
         page.get_by_role("button", name="Sign in").click()
         page.wait_for_url(env["api"] + "/")
         page.wait_for_function("document.querySelector('#state').textContent === 'stopped'")
