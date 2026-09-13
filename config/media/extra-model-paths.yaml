@@ -1,0 +1,8 @@
+rack_pr24:
+  base_path: /srv/fast/comfyui-models-pr24
+  checkpoints: checkpoints
+  diffusion_models: unet
+  text_encoders: text_encoders
+  vae: vae
+  loras: loras
+  latent_upscale_models: latent_upscale_models

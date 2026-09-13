@@ -84,7 +84,7 @@ def test_admission_security_and_cancel_before_dispatch(tmp_path):
 def test_launcher_native_assets_websocket_and_csrf(tmp_path):
     from playwright.sync_api import sync_playwright
     with receiver(tmp_path / "machine") as env, sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True, chromium_sandbox=True, executable_path=os.environ.get('RACK_MEDIA_BROWSER'))
+        browser = playwright.chromium.launch(headless=True, chromium_sandbox=True, args=['--disable-gpu', '--use-angle=swiftshader'], executable_path=os.environ.get('RACK_MEDIA_BROWSER'))
         context = browser.new_context()
         page = context.new_page()
         page.goto(env["api"])

@@ -55,7 +55,7 @@ def receiver(root, configure=None):
                       {"container": "primary", "uuid": "GPU-042e18f2-bf9f-c8f6-6975-6f25b15ac71c"}],
         "profile": {"id": "local-image", "version": 1, "checkpoint": str(checkpoint),
             "checkpoint_sha256": hashlib.sha256(checkpoint.read_bytes()).hexdigest(),
-            "runtime_revision": "9113c08c2e14f1ca6c0ccab64920777fd01e1bb9", "available": True},
+            "runtime_revision": "d43a5fa20c8547ff42d13232f589a06536c42b97", "available": True},
         "start_timeout": 20, "drain_timeout": 10, "stop_timeout": 10, "idle_seconds": 3, "session_seconds": 3600,
         "min_memory_mb": 1, "min_disk_mb": 1,
         "principals": [{"id": "operator", "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest(), "ceiling": "paramount", "operator": True},

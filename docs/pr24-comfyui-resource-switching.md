@@ -1,6 +1,8 @@
 # PR24 — ComfyUI access, remote media API and Music Director integration
 
-Revision: 2026-09-12, **v2 — complete user journey**. Status: implementation contract; code and live qualification are not yet complete.
+Current permanent deployment and ComfyUI revision are recorded in [PR24 qualification](pr24-qualification.md). Historical source snapshot references below are review provenance, not installation instructions.
+
+Revision: 2026-09-12, **v2 — complete user journey**. Status: implementation contract; implemented and qualified. Current deployment and measured results are in [PR24 qualification](pr24-qualification.md).
 
 This revision replaces the CLI-only scope. A thin authenticated HTTP interface, a small browser launcher and the companion Music Director connector are REQUIRED, not deferred. All resource, execution and evidence safeguards from v1 remain required. The source review in `docs/pr24-code-review.md` remains historical evidence; this contract defines the revised deliverable.
 

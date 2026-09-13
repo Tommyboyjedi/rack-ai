@@ -1,10 +1,10 @@
 [Unit]
-Description=Rack AI PR24 authenticated candidate receiver
+Description=Rack AI PR24 authenticated media receiver
 After=network-online.target
 [Service]
 Type=simple
-WorkingDirectory=/srv/rack-ai-media-candidate
-ExecStart=/srv/rack-ai-media-candidate/current/rack_ai_media /srv/rack-ai-media-candidate/config.json
+WorkingDirectory=/srv/rack-ai-media
+ExecStart=/srv/rack-ai-media/current/rack_ai_media /srv/rack-ai-media/config.json
 Environment=PATH=/usr/bin:/bin
 Restart=on-failure
 RestartSec=10

@@ -3,10 +3,10 @@ Description=Rack AI PR24 isolated ComfyUI (receiver owns activation)
 [Service]
 Type=simple
 WorkingDirectory=/srv/comfyui/ComfyUI
-ExecStart=/srv/comfyui/venv/bin/python /srv/comfyui/ComfyUI/main.py --listen 127.0.0.1 --port 8190 --disable-auto-launch --disable-api-nodes --enable-manager --extra-model-paths-config /srv/rack-ai-media-candidate/extra-model-paths.yaml --output-directory /srv/comfyui/output --input-directory /srv/comfyui/input --temp-directory /srv/comfyui/temp --user-directory /srv/comfyui/user
+ExecStart=/srv/comfyui/venv/bin/python /srv/comfyui/ComfyUI/main.py --listen 127.0.0.1 --port 8190 --disable-auto-launch --enable-manager --enable-manager-legacy-ui --disable-api-nodes  --extra-model-paths-config /srv/rack-ai-media/extra-model-paths.yaml --output-directory /srv/comfyui/output --input-directory /srv/comfyui/input --temp-directory /srv/comfyui/temp --user-directory /srv/comfyui/user
 Environment=CUDA_VISIBLE_DEVICES=REPLACE_WITH_VERIFIED_FULL_4080_SUPER_UUID
-Environment=RACK_MEDIA_AUTHORITY_FILE=/srv/rack-ai-media-candidate/authority.json
-Environment=RACK_MEDIA_CONTROL_SECRET_FILE=/srv/rack-ai-media-candidate/secrets/control
+Environment=RACK_MEDIA_AUTHORITY_FILE=/srv/rack-ai-media/authority.json
+Environment=RACK_MEDIA_CONTROL_SECRET_FILE=/srv/rack-ai-media/secrets/control
 Environment=HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 PYTHONDONTWRITEBYTECODE=1
 Environment=HF_HOME=/srv/comfyui/hf-cache
 Environment=PATH=/usr/bin:/bin

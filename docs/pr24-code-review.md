@@ -1,5 +1,7 @@
 # PR24 source review — 2026-09-12
 
+Current permanent deployment and ComfyUI revision are recorded in [PR24 qualification](pr24-qualification.md). Historical source snapshot references below are review provenance, not installation instructions.
+
 ## Scope and evidence limits
 
 This is a static integration review of Rack AI's current execution, routing, GPU resource, state, CLI and deployment surfaces, with relevant test inspection and an upstream ComfyUI protocol review. It is not a blanket security certification of every legacy campaign/planning module.
