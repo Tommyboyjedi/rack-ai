@@ -25,7 +25,7 @@
   "profile": {
     "id": "local-image",
     "version": 1,
-    "checkpoint": "/srv/fast/comfyui-models-pr24/checkpoints/Juggernaut_Ragnarok.safetensors",
+    "checkpoint": "/srv/fast/comfyui-models/checkpoints/Juggernaut_Ragnarok.safetensors",
     "checkpoint_sha256": "REPLACE_WITH_LOCALLY_VERIFIED_SHA256",
     "runtime_revision": "d43a5fa20c8547ff42d13232f589a06536c42b97",
     "available": true
