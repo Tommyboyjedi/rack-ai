@@ -153,7 +153,13 @@ fn execute() -> Result<i32, String> {
         return sandbox_tcp_bridge::run_from_args(&arguments[2..]);
     }
     let roots = current_roots(&arguments)?;
-    let paths = RepositoryPaths::new(roots.state_root.clone());
+    let authority = std::env::var_os("RACK_AI_RESOURCE_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/srv/rack-ai/state/resources"));
+    if !authority.is_absolute() {
+        return Err("RACK_AI_RESOURCE_ROOT must be absolute".into());
+    }
+    let paths = RepositoryPaths::new(roots.state_root.clone()).with_resource_root(authority);
     if command == "submit" {
         let spec_path = arguments.get(2).ok_or("expected spec path")?;
         submit(
@@ -364,6 +370,10 @@ fn run_runner(paths: RepositoryPaths, repo_root: PathBuf, once: bool) -> Result<
     loop {
         let outcome = run_next_once(paths.clone(), repo_root.clone())?;
         let stop = matches!(outcome, RunNextOutcome::NoQueuedTasks);
+        if matches!(outcome, RunNextOutcome::NoAdmissibleTasks) {
+            const RESOURCE_BACKOFF: std::time::Duration = std::time::Duration::from_secs(2);
+            std::thread::sleep(RESOURCE_BACKOFF);
+        }
         print_run_next(outcome)?;
         if stop {
             return Ok(0);

@@ -1,0 +1,198 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "rack-ai/media/v1"
+    },
+    "id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "location": {
+      "type": "string"
+    },
+    "work_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "submission_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "state": {
+      "enum": [
+        "waiting",
+        "starting",
+        "dispatching",
+        "running",
+        "submission_uncertain",
+        "completed",
+        "failed",
+        "cancelled",
+        "interrupted"
+      ]
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "profile_version": {
+      "const": 1
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4096
+        },
+        "negative_prompt": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9223372036854775807
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 1024,
+          "multipleOf": 64
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 64,
+          "maximum": 1024,
+          "multipleOf": 64
+        },
+        "steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        }
+      },
+      "required": [
+        "prompt",
+        "negative_prompt",
+        "seed",
+        "width",
+        "height",
+        "steps"
+      ]
+    },
+    "prompt_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "activation": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "workflow_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "model_identity": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "created_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "updated_at": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "cancel_requested": {
+      "type": "boolean"
+    },
+    "artifacts": {
+      "type": "array",
+      "maxItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "filename": {
+            "const": "image.png"
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-f0-9]{64}$"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16777216
+          },
+          "content_type": {
+            "const": "image/png"
+          },
+          "width": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 1024,
+            "multipleOf": 64
+          },
+          "height": {
+            "type": "integer",
+            "minimum": 64,
+            "maximum": 1024,
+            "multipleOf": 64
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "sha256",
+          "bytes",
+          "content_type",
+          "width",
+          "height"
+        ]
+      }
+    },
+    "error": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "id",
+    "location",
+    "work_id",
+    "submission_id",
+    "state",
+    "profile",
+    "profile_version",
+    "parameters",
+    "prompt_id",
+    "activation",
+    "workflow_sha256",
+    "model_identity",
+    "created_at",
+    "updated_at",
+    "cancel_requested",
+    "artifacts",
+    "error"
+  ]
+}

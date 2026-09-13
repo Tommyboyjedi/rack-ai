@@ -23,12 +23,22 @@
     {
       "id": "future-3090-slot",
       "type": "gpu-slot",
-      "label": "Planned RTX 3090 24 GB",
+      "label": "Retired planned RTX 3090 slot",
       "vram_gb": 24,
       "device_hint": "future-high-vram-worker",
       "max_concurrent_tasks": 1,
       "owner": null,
-      "status": "planned"
+      "status": "retired"
+    },
+    {
+      "id": "gpu-4080-super",
+      "type": "gpu",
+      "label": "RTX 4080 SUPER 16 GB",
+      "vram_gb": 16,
+      "device_hint": "administrator-verified-full-uuid",
+      "max_concurrent_tasks": 1,
+      "owner": "rack-ai-media",
+      "status": "active"
     }
   ]
 }

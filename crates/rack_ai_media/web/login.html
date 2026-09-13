@@ -1,0 +1,9 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Rack AI sign in</title><style>body{font:18px system-ui;max-width:38rem;margin:10vh auto;padding:2rem;background:#101923;color:#e5f2ff}input,button{font:inherit;padding:.7rem;margin:.5rem 0;box-sizing:border-box;border-radius:.4rem}input{width:100%}button{cursor:pointer}#error{color:#ffc19b}small{display:block;color:#b8cadb}</style>
+<h1>Rack AI media</h1><p>Sign in to ComfyUI on the rack.</p><p>{{bootstrap_note}}</p>
+<form method="post" action="/login"><label>Password<input type="password" name="password" autocomplete="current-password" maxlength="1024" required autofocus></label><small>Stay signed in on this browser for 30 days.</small><button>Sign in</button></form>
+<p id="error" role="alert"></p>
+<script>
+const form=document.querySelector('form'),error=document.querySelector('#error'),button=form.querySelector('button');
+form.onsubmit=async event=>{event.preventDefault();button.disabled=true;error.textContent='';try{const response=await fetch(form.action,{method:'POST',body:new URLSearchParams(new FormData(form)),redirect:'manual'});if(response.type==='opaqueredirect'){location.assign('/');return;}error.textContent=await response.text()||'Sign-in failed. Please try again.';}catch{error.textContent='Could not connect. Please try again.';}finally{button.disabled=false;}};
+</script></html>

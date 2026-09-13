@@ -1,0 +1,65 @@
+{
+  "listen": "127.0.0.1:8191",
+  "native_listen": "127.0.0.1:8192",
+  "public_origin": "https://gpurack.duckdns.org",
+  "native_origin": "https://gpurack.tailc214fc.ts.net:8444",
+  "backend": "http://127.0.0.1:8190",
+  "browser_auth_file": "/srv/rack-ai-media/secrets/browser-auth.json",
+  "state_root": "/srv/rack-ai-media/state",
+  "resource_root": "/srv/rack-ai/state/resources",
+  "output_root": "/srv/comfyui/output",
+  "authority_file": "/srv/rack-ai-media/authority.json",
+  "control_secret_file": "/srv/rack-ai-media/secrets/control",
+  "unit": "rack-ai-comfyui-pr24.service",
+  "media_uuid": "REPLACE_WITH_VERIFIED_FULL_4080_SUPER_UUID",
+  "protected": [
+    {
+      "container": "vllm-coder",
+      "uuid": "REPLACE_WITH_VERIFIED_FULL_PROTECTED_UUID"
+    },
+    {
+      "container": "vllm-primary",
+      "uuid": "REPLACE_WITH_VERIFIED_FULL_PROTECTED_UUID"
+    }
+  ],
+  "profile": {
+    "id": "local-image",
+    "version": 1,
+    "checkpoint": "/srv/fast/comfyui-models-pr24/checkpoints/Juggernaut_Ragnarok.safetensors",
+    "checkpoint_sha256": "REPLACE_WITH_LOCALLY_VERIFIED_SHA256",
+    "runtime_revision": "d43a5fa20c8547ff42d13232f589a06536c42b97",
+    "available": true
+  },
+  "start_timeout": 180,
+  "drain_timeout": 900,
+  "stop_timeout": 90,
+  "idle_seconds": 30,
+  "session_seconds": 14400,
+  "min_memory_mb": 20000,
+  "min_disk_mb": 10000,
+  "principals": [
+    {
+      "id": "operator",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_RANDOM_OPERATOR_CREDENTIAL",
+      "ceiling": "paramount",
+      "operator": true
+    },
+    {
+      "id": "music-director",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_DIRECTOR_CREDENTIAL",
+      "ceiling": "medium",
+      "operator": false
+    },
+    {
+      "id": "athba",
+      "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_ATHBA_CREDENTIAL",
+      "ceiling": "medium",
+      "operator": false
+    }
+  ],
+  "runtime": {
+    "python": "/srv/comfyui/venv/bin/python",
+    "script": "/srv/comfyui/ComfyUI/main.py",
+    "directory": "/srv/comfyui/ComfyUI"
+  }
+}

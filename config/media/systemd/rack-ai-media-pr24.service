@@ -1,0 +1,20 @@
+[Unit]
+Description=Rack AI PR24 authenticated media receiver
+After=network-online.target
+[Service]
+Type=simple
+WorkingDirectory=/srv/rack-ai-media
+ExecStart=/srv/rack-ai-media/current/rack_ai_media /srv/rack-ai-media/config.json
+Environment=PATH=/usr/bin:/bin
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=20
+MemoryMax=768M
+CPUQuota=200%
+UMask=0077
+NoNewPrivileges=yes
+KillMode=control-group
+TasksMax=256
+LimitNOFILE=4096
+[Install]
+WantedBy=default.target

@@ -24,6 +24,34 @@ pub fn atomic_write(path: &Path, contents: &str) -> Result<(), String> {
     sync_directory(parent)
 }
 
+/// Secret material uses the same flush/rename/directory-sync sequence, with
+/// restrictive permissions from creation and no overwrite of a temporary link.
+#[cfg(unix)]
+pub fn atomic_write_private(path: &Path, contents: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let parent = path
+        .parent()
+        .ok_or("private file requires a parent directory")?;
+    let tmp = temporary_path(path);
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .mode(0o600)
+        .open(&tmp)
+        .map_err(|e| e.to_string())?;
+    let result = (|| {
+        file.write_all(contents.as_bytes())
+            .map_err(|e| e.to_string())?;
+        file.sync_all().map_err(|e| e.to_string())?;
+        fs::rename(&tmp, path).map_err(|e| e.to_string())?;
+        sync_directory(parent)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp);
+    }
+    result
+}
+
 pub fn append_line(path: &Path, line: &str) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|error| error.to_string())?;

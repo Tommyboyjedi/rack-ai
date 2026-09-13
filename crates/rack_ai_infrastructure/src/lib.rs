@@ -100,3 +100,5 @@ pub use wall_clock_wait::WaitOutcome;
 pub use wall_clock_wait::WallClockWait;
 pub use worker_record::WorkerRecord;
 pub use workers_document::WorkersDocument;
+
+pub mod resource_reservations;

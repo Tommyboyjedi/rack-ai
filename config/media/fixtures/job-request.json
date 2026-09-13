@@ -1,0 +1,1 @@
+{"schema":"rack-ai/media/v1","work_id":"synthetic-project-image","submission_id":"fixture-submission-1","idempotency_key":"fixture-idempotency-1","profile":"local-image","profile_version":1,"parameters":{"prompt":"A blue ceramic cup on a wooden table in soft daylight","negative_prompt":"","seed":42,"width":512,"height":512,"steps":20},"timeout_seconds":90,"priority":"medium"}
