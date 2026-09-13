@@ -1,6 +1,6 @@
 # PR24 private HTTPS qualification — 2026-09-13
 
-Current browser authentication is described in [human password operations](pr24-browser-passwords.md). That change supersedes older credential-login details retained in this historical proof.
+Current browser authentication and the deployed receiver release are recorded in [password qualification](pr24-password-qualification.md) and [human password operations](pr24-browser-passwords.md). Those records supersede the older authentication and receiver-version details retained in this historical proof.
 
 **Launcher: https://gpurack.duckdns.org/**. Native UI remains **https://gpurack.tailc214fc.ts.net:8444/**.
 
