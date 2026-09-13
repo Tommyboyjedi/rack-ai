@@ -1,5 +1,7 @@
 # PR24 v2 qualification — 2026-09-13
 
+Latest follow-up: [normal interactive ComfyUI Restart qualification](pr24-restart-qualification.md) records the 2026-09-13 acceptance fix and newer isolated receiver release.
+
 The complete dedicated-media service, managed image execution, authenticated remote API, native launcher and Music Director image import are implemented and qualified on isolated gpurack candidates. Neither PR is merged. The companion is [Music Director PR33](https://github.com/Tommyboyjedi/musicvideo-director/pull/33), not Rack AI's heavyweight-inference PR33.
 
 ## Qualification state
