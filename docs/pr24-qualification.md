@@ -1,5 +1,7 @@
 # PR24 permanent deployment qualification — 2026-09-13
 
+Current launcher: **https://gpurack.duckdns.org/**. [Private HTTPS qualification](pr24-private-https-qualification.md) supersedes the hostname/routing details below; the prior proof is retained as historical evidence.
+
 The permanent gpurack deployment passed the complete interactive and managed image journeys. PR24 and companion Music Director PR33 remain unmerged. This record supersedes earlier deployment paths; [the restart qualification](pr24-restart-qualification.md) retains the original acceptance evidence.
 
 The restart implementation accepted at `a0212bca6be8c45e6812a1f55b86754510234074` is unchanged. The deployed receiver binary still comes from `872c3e8624e1387208b0cdae6c2d4991c39bd642` (binary SHA-256 `51beeb92a2644e776971812c45897fad8c78d4db55998f772a247ef2a3df28c4`). This finalization changes deployment assets, documentation and test-browser software rendering only. Final branch/publication SHAs are recorded in the PR and private `publication.json`; they do not imply a different deployed application binary.

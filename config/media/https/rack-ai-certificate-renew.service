@@ -1,0 +1,18 @@
+[Unit]
+Description=Renew Rack AI DNS-01 certificate and reload only private HTTPS
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+User=tomp
+Group=tomp
+ExecStart=/usr/bin/certbot renew --non-interactive --quiet --config-dir /srv/rack-ai-media/https/acme/certbot --work-dir /srv/rack-ai-media/https/acme/work --logs-dir /srv/rack-ai-media/https/acme/logs
+TimeoutStartSec=20min
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/srv/rack-ai-media/https
+MemoryMax=256M
+TasksMax=32

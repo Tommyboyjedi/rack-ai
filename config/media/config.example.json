@@ -1,7 +1,7 @@
 {
   "listen": "127.0.0.1:8191",
   "native_listen": "127.0.0.1:8192",
-  "public_origin": "https://gpurack.tailc214fc.ts.net",
+  "public_origin": "https://gpurack.duckdns.org",
   "native_origin": "https://gpurack.tailc214fc.ts.net:8444",
   "backend": "http://127.0.0.1:8190",
   "state_root": "/srv/rack-ai-media/state",

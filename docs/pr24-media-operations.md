@@ -22,15 +22,17 @@ The model store remains `/srv/fast/comfyui-models-pr24` on SATA. The selected as
 
 ## Private access and CLI
 
-Raw ComfyUI is `127.0.0.1:8190`. The authenticated receiver and native HTTP/WebSocket proxy listen separately on `127.0.0.1:8191` and `127.0.0.1:8192`. Tailscale Serve HTTPS 443 routes to the receiver, and 8444 routes to the native adapter. The launcher is https://gpurack.tailc214fc.ts.net/ and native UI is https://gpurack.tailc214fc.ts.net:8444/. Port 8443 is intentionally disabled. Preserve all other Serve configuration; do not enable Funnel. The native UI lives at the root of its own origin.
+Current HTTPS routing, automatic renewal and hostname rollback are described in [private HTTPS operations](pr24-private-https.md).
 
-Open the launcher, sign in with the operator credential, then Start → Open ComfyUI. Bookmarking, prefetching, status and profile reads do not start the GPU. Finish closes admission, drains accepted work, verifies process-tree exit and absence of GPU allocations, then releases the reservation. The deployment uses a four-hour interactive session expiry that drains normally, and 30 seconds of managed idle retention. Closing the browser does not cancel work or release its session.
+Raw ComfyUI is `127.0.0.1:8190`. The authenticated receiver and native HTTP/WebSocket proxy listen separately on `127.0.0.1:8191` and `127.0.0.1:8192`. Dedicated nginx on the Tailscale IPv4:443 routes to the receiver, and Tailscale Serve 8444 routes to the native adapter. The launcher is https://gpurack.duckdns.org/ and native UI remains https://gpurack.tailc214fc.ts.net:8444/. Port 8443 is disabled. The old .ts.net launcher on 443 is a tested restore-only rollback route. Preserve all other Serve configuration; do not enable Funnel. The native UI lives at the root of its own origin.
+
+Open the launcher, sign in with the operator credential, then Start → Open ComfyUI. The retained native domain has its own host-only cookie and may require the same operator credential there; see the HTTPS runbook. Bookmarking, prefetching, status and profile reads do not start the GPU. Finish closes admission, drains accepted work, verifies process-tree exit and absence of GPU allocations, then releases the reservation. The deployment uses a four-hour interactive session expiry that drains normally, and 30 seconds of managed idle retention. Closing the browser does not cancel work or release its session.
 
 The browser holds a random HttpOnly, SameSite=Strict session cookie (Secure over HTTPS), never the bearer/control secret in a URL, JavaScript storage or rendered native content. Cookies authenticate unsafe requests only with an exact allowed Origin. Native HTTP and WebSockets require the requesting operator's active session. Reopening the launcher resumes its durable session.
 
 The `rack_ai_media_client` binary uses the same HTTP use cases:
 ```sh
-export RACK_AI_ENDPOINT=https://gpurack.tailc214fc.ts.net
+export RACK_AI_ENDPOINT=https://gpurack.duckdns.org
 export RACK_AI_CREDENTIAL_FILE=/path/to/mode-0600-client-credential
 rack_ai_media_client status
 rack_ai_media_client profiles

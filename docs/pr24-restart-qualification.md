@@ -1,5 +1,7 @@
 # Normal ComfyUI Restart qualification — 2026-09-13
 
+Current launcher: **https://gpurack.duckdns.org/**. [Private HTTPS qualification](pr24-private-https-qualification.md) supersedes the hostname/routing details below; the prior proof is retained as historical evidence.
+
 The acceptance defect is implemented and deployed in isolated Rack receiver release `872c3e8624e1387208b0cdae6c2d4991c39bd642`. The subsequent qualification commit changes documentation only. PR24 remains open; Music Director, the live Rack checkout, model contents, workflows, ComfyUI source/unit and receiver configuration were not changed.
 
 The normal Manager action is mediated as one bounded Rack-controlled stop/start, preserving the activation/session/lease. See [operations and recovery](pr24-media-operations.md#normal-comfyui-restart) for the typed phase model, process verification, Finish cancellation and strict managed-mode boundary.
