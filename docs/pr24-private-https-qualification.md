@@ -18,7 +18,7 @@ All acceptance checks below passed against the permanent deployment on gpurack. 
 | ComfyUI / venv | `/srv/comfyui/ComfyUI` / `/srv/comfyui/venv` |
 | ComfyUI core revision | `d43a5fa20c8547ff42d13232f589a06536c42b97` |
 | Manager | Official `manager_requirements.txt`, 4.2.2; `--enable-manager --enable-manager-legacy-ui` retained |
-| Model / resource roots | `/srv/fast/comfyui-models-pr24` / `/srv/rack-ai/state/resources` |
+| Current model / resource roots | `/srv/fast/comfyui-models` ([subsequent path update](comfyui-model-library-qualification.md)) / `/srv/rack-ai/state/resources` |
 | nginx / Certbot | Ubuntu packages 1.28.3-2ubuntu1.10 / 4.0.0; no package upgrades |
 | Companion PR33 head | `bb5cd3262b82f784ed0c300ececc9f9615a09e41`, unchanged |
 | Disposable Director application | `1e7fa41f0ad1424b10c82a84dec1e7bc5be188ed`, unchanged |

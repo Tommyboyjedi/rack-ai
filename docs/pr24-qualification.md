@@ -20,7 +20,7 @@ The restart implementation accepted at `a0212bca6be8c45e6812a1f55b86754510234074
 | ComfyUI-GGUF revision | `6ea2651e7df66d7585f6ffee804b20e92fb38b8a` |
 | Manager | Official `manager_requirements.txt`, installed 4.2.2, classic UI PASS |
 | Shared resource authority | `/srv/rack-ai/state/resources`, unchanged |
-| Model store | `/srv/fast/comfyui-models-pr24`, unchanged |
+| Current model store | `/srv/fast/comfyui-models`; see [model-library qualification](comfyui-model-library-qualification.md) |
 | Managed checkpoint | Juggernaut Ragnarok, approved profile/workflow unchanged |
 | Disposable Director | `/srv/rack-ai-media/director-test`; app release `1e7fa41f0ad1424b10c82a84dec1e7bc5be188ed` |
 | Existing production Director client | NOT_DEPLOYED; its database/media were not modified |
