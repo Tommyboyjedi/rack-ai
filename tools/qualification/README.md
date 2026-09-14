@@ -1,9 +1,12 @@
 # Single-model qualification tools
 
 These are administrator-operated RackAI tools for a separately authorized live
-window. They are **not live-qualified**. The September 14 GPT-OSS experiment
-stopped at preflight because both original vLLM model-cache bind sources were
-missing. Do not run a window until original model restartability is proven.
+window. They are **not live-qualified**. The earlier cache-preflight blocker
+was repaired by the operator before the first actual managed GPT-OSS launch.
+That launch exposed the memory-signal and transient-cleanup findings documented
+in [the PR35 correction handoff](../../docs/pr35-memory-cleanup-handoff.md).
+No new launch was performed to verify these corrections. A new window still
+requires separate authorization and proof of original model restartability.
 
 `cases.py` fixes checkable answers before model output: dependency timing,
 closed-interval merging, Bayes counts and uncertainty handling. Three distinct
@@ -33,7 +36,7 @@ qualification permission. No ordinary application principal is provisioned.
 `window.py` assumes backend port 8096 for read-only metrics collection and a
 4K acquisition; changing those requires reviewing this bounded recipe.
 
-The proposed first profile (never launched) uses all three UUIDs, in this order:
+The historical initial proposal (not the later launched configuration) uses all three UUIDs, in this order:
 
 - 4080 SUPER: `GPU-f9435bc0-a243-ad20-8b8b-166ab076e80b`, 15000 MiB budget.
 - 2060: `GPU-357ef569-8fac-7c7d-ee1c-51677efb174f`, 5000 MiB budget.
@@ -52,9 +55,17 @@ Limits: host 45056 MiB, CPU quota 400%, zero cgroup swap; artifact verification
 transition worker. Output cap 1024 tokens / retained response bound 256 KiB.
 Pin the completed executable digest before configuration validation or launch.
 
-Monitor aborts on less than 6 GiB available host RAM, swap growth above 256 MiB,
+Monitor aborts on less than 6 GiB available host RAM, owned-cgroup swap/OOM,
+changed memory/swap limits, missing or ambiguous workload safety evidence,
 GPU temperature at least 85 C, actual CPU **Tdie** at least 68 C, lost monitoring,
 or ten successive inference samples exceeding 256 MiB/s page-in activity.
+Global swap totals and changes are logged; global growth alone does not establish
+managed-workload exhaustion. Required cgroup v2 memory/swap counters are pinned
+to the managed process and systemd invocation before Ready. Missing process
+registration after effect_started is bounded to 10 seconds; missing evidence
+from an established workload aborts immediately. Cgroup MemoryMax must match the
+profile, and MemorySwapMax must remain zero. Explicit retirement is observed until
+the matching durable cleanup receipt; it never permits the monitor to clear claims.
 Loading and artifact hashing are distinguished from inference disk activity.
 Signals and ordinary errors enter managed cancellation/cleanup. Claims or
 uncertain cleanup prevent original GPU consumers from restarting; the receiver
@@ -87,5 +98,6 @@ python3 -m unittest discover -s tools/qualification -p 'test_*.py'
 
 Raw evidence, credentials, builds, model files and private configs stay outside
 Git. This experiment permits at most three documented launch configurations;
-this blocked attempt consumed **zero**. It authorizes no additional model,
+the historical preflight consumed zero, and the later first managed launch
+consumed one. Configuration #2 remains NOT_RUN. It authorizes no additional model,
 competing-priority live scenario, application integration or production rollout.

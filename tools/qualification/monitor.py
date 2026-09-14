@@ -1,15 +1,16 @@
 """Read-only hardware evidence with explicit conservative abort signals."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 import json
 import subprocess
 import threading
 import time
+from workload_watch import WorkloadLimits, WorkloadWatch, memory_failure
 
 @dataclass(frozen=True)
 class MonitorLimits:
     minimum_available_mib: int = 6144
-    maximum_swap_growth_mib: int = 256
+    workload: WorkloadLimits = field(default_factory=WorkloadLimits)
     maximum_gpu_celsius: int = 85
     maximum_cpu_celsius: int = 68
     maximum_read_mib_per_second: int = 256
@@ -43,48 +44,58 @@ class Monitor:
         self.finished = threading.Event()
         self.failure = None
         self.phase = 'loading'
+        self.workload = WorkloadWatch(limits.workload)
         self.initial = snapshot()
         self.thread = threading.Thread(target=self.run, daemon=True)
 
     def run(self):
+        try:
+            with (self.directory / 'hardware.jsonl').open('x') as output:
+                self.record(output)
+        except Exception as error:
+            self.failure = 'monitor failed: ' + str(error)
+        if self.failure:
+            try:
+                (self.directory / 'ABORT').write_text(self.failure)
+            except OSError as error:
+                self.failure += '; abort evidence write failed: ' + str(error)
+
+    def record(self, output):
         previous = self.initial
         pressure_samples = 0
-        with (self.directory / 'hardware.jsonl').open('x') as output:
-            while not self.finished.is_set():
-                try:
-                    value = snapshot()
-                    read_rate = (value['pgpgin'] - previous['pgpgin']) / 1024 / max(.001, value['time'] - previous['time'])
-                    pressure_samples = pressure_samples + 1 if self.phase == 'inference' and read_rate > self.limits.maximum_read_mib_per_second else 0
-                    value['phase'] = self.phase
-                    value['read_mib_per_second'] = read_rate
-                    previous = value
-                    if pressure_samples >= self.limits.thrash_samples:
-                        self.failure = 'sustained inference page-in pressure'
-                    output.write(json.dumps(value) + '\n')
-                    output.flush()
-                    if value['available_mib'] < self.limits.minimum_available_mib:
-                        self.failure = 'host memory reserve below 6 GiB'
-                    if value['swap_mib'] - self.initial['swap_mib'] > self.limits.maximum_swap_growth_mib:
-                        self.failure = 'swap growth exceeds 256 MiB'
-                    if any(float(line.split(',')[3]) >= self.limits.maximum_gpu_celsius
-                           for line in value['gpus'].splitlines()):
-                        self.failure = 'GPU temperature threshold'
-                    if any(t >= self.limits.maximum_cpu_celsius for name,t in value['temperatures'].items()
-                           if name.startswith('k10temp:Tdie:')):
-                        self.failure = 'CPU or board temperature threshold'
-                    if self.failure:
-                        (self.directory / 'ABORT').write_text(self.failure)
-                        return
-                except Exception as error:
-                    self.failure = 'monitor failed: ' + str(error)
-                    (self.directory / 'ABORT').write_text(self.failure)
-                    return
-                self.finished.wait(2)
+        while not self.finished.is_set():
+            value = snapshot()
+            value['workload'] = self.workload.sample()
+            read_rate = (value['pgpgin']-previous['pgpgin']) / 1024 / max(.001,value['time']-previous['time'])
+            pressure_samples = pressure_samples+1 if self.phase=='inference' and read_rate>self.limits.maximum_read_mib_per_second else 0
+            value.update(phase=self.phase,read_mib_per_second=read_rate,
+                         global_swap_change_mib=value['swap_mib']-self.initial['swap_mib'])
+            previous = value
+            output.write(json.dumps(value) + '\n')
+            output.flush()
+            self.failure = memory_failure(value['workload'], self.limits.workload)
+            if pressure_samples >= self.limits.thrash_samples:
+                self.failure = 'sustained inference page-in pressure'
+            if value['available_mib'] < self.limits.minimum_available_mib:
+                self.failure = f'host memory reserve below {self.limits.minimum_available_mib} MiB'
+            if any(float(line.split(',')[3]) >= self.limits.maximum_gpu_celsius
+                   for line in value['gpus'].splitlines()):
+                self.failure = 'GPU temperature threshold'
+            if any(t >= self.limits.maximum_cpu_celsius for name,t in value['temperatures'].items()
+                   if name.startswith('k10temp:Tdie:')):
+                self.failure = 'CPU or board temperature threshold'
+            if self.failure:
+                return
+            self.finished.wait(2)
 
     def check(self):
+        if self.thread.ident is not None and not self.thread.is_alive() and not self.finished.is_set() and not self.failure:
+            self.failure = 'monitor thread stopped unexpectedly'
         if self.failure:
             raise RuntimeError(self.failure)
 
     def close(self):
         self.finished.set()
         self.thread.join(timeout=10)
+        if self.thread.is_alive():
+            self.failure = self.failure or 'monitor did not stop within deadline'

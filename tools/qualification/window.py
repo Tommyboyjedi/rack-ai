@@ -15,7 +15,8 @@ from benchmark import run_trial
 from cases import CASES
 from client import Client, Connection, save
 from lifecycle import Lifecycle
-from monitor import Monitor
+from monitor import Monitor, MonitorLimits
+from workload_watch import WorkloadLimits
 from services import Services, ROOT
 
 
@@ -62,7 +63,9 @@ def main():
     subprocess.run([str(executable),'validate',str(args.config)],check=True,timeout=10)
     services = Services(args.output)
     client = Client(Connection(**json.loads(args.connection.read_text())))
-    monitor = Monitor(args.output)
+    monitor = Monitor(args.output, MonitorLimits(workload=WorkloadLimits(
+        memory_max_bytes=config['profiles'][0]['host_mib']*1024*1024)))
+    client.safety_check = monitor.check
     os.environ['RACK_QUALIFICATION_ABORT'] = str((args.output/'ABORT').resolve())
     receiver = None
     try:
@@ -93,6 +96,7 @@ def main():
         if receiver is not None:
             receiver.terminate()
             receiver.wait(timeout=10)
+        monitor.check()
 
 if __name__ == '__main__':
     main()

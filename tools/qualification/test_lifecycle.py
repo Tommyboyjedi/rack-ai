@@ -8,6 +8,21 @@ from client import save
 from services import Services
 
 class LifecycleTests(unittest.TestCase):
+    def test_workload_observation_starts_at_acquisition_and_before_ready(self):
+        with tempfile.TemporaryDirectory() as root:
+            accepted=dict(id='owned',generation='gen',state='preparing',
+                          preflight_done=False,process=None,effect_started=False)
+            starting=dict(accepted,preflight_done=True,effect_started=True)
+            registered=dict(starting,process={'pid':42})
+            ready=dict(registered,state='ready')
+            monitor=Mock()
+            client=Mock()
+            client.call.side_effect=[accepted,starting,registered,ready]
+            with patch('lifecycle.time.sleep'):
+                self.assertEqual(Lifecycle(client,Path(root)).acquire(monitor),ready)
+            observations=[call.args[0] for call in monitor.workload.observe.call_args_list]
+            self.assertEqual(observations,[accepted,starting,registered,ready])
+
     def test_lost_acquisition_reuses_exact_identity_before_release(self):
         with tempfile.TemporaryDirectory() as root:
             path = Path(root)

@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 root=Path(os.environ['RACK_HOST_FIXTURE'])
 name=Path(sys.argv[0]).name
@@ -24,6 +25,7 @@ def launch(command,activation):
     s.update(pid=child.pid,activation=activation,invocation=activation)
 
 def stop():
+    s.setdefault('stop_issued', time.monotonic())
     if alive():
         env=Path(f'/proc/{s["pid"]}/environ').read_bytes()
         assert f'RACK_RUNTIME_ACTIVATION={s["activation"]}'.encode() in env.split(b'\0')
@@ -50,7 +52,21 @@ elif name=='systemctl':
     if 'show' in args:
         active=alive()
         cgroup=Path(f'/proc/{s["pid"]}/cgroup').read_text().split('::',1)[1].strip() if active else ''
-        print(f'Id={s.get("unit","")}\nJob=\nInvocationID={s.get("invocation","") if active else ""}\nMainPID={s["pid"] if active else 0}\nControlGroup={cgroup}\nActiveState={"active" if active else "inactive"}')
+        tearing_down = not active and 'stop_issued' in s and time.monotonic() - s['stop_issued'] < faults.get('teardown_seconds', 0)
+        invocation = s.get('invocation', '') if active or tearing_down else ''
+        if tearing_down and faults.get('teardown_cgroup'):
+            cgroup = '/user.slice'
+        pending = tearing_down and not faults.get('teardown_cgroup')
+        if 'stop_issued' in s and faults.get('persistent_cgroup'):
+            cgroup = '/user.slice'
+        if 'stop_issued' in s and faults.get('unknown_invocation'):
+            invocation = ''
+            pending = True
+        if 'stop_issued' in s and faults.get('changed_invocation'):
+            invocation = 'different-invocation'
+        if 'stop_issued' in s and faults.get('observe_failure'):
+            sys.exit(7)
+        print(f'Id={s.get("unit","")}\nJob={"42" if pending else ""}\nInvocationID={invocation}\nMainPID={s["pid"] if active else 0}\nControlGroup={cgroup}\nActiveState={"active" if active else "deactivating" if pending else "inactive"}')
     elif 'stop' in args: stop()
     else: sys.exit(4)
 elif name=='docker':

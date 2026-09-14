@@ -27,3 +27,5 @@ pub mod workers;
 
 pub mod workspace_scope;
 pub mod workspace_scope_api;
+
+mod teardown;

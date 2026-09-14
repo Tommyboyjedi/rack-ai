@@ -110,39 +110,35 @@ impl HostedCleanup<'_> {
         let Some(process) = &d.process else {
             return Ok(());
         };
+        if process.activation != d.generation {
+            return Err("activation_mismatch".into());
+        }
         if process::gone(process)? {
             return self.released(d);
         }
         process::verify(process, &d.profile)?;
         if let Some(unit) = &process.unit {
+            if unit != &format!("rack-runtime-{}.service", d.generation) {
+                return Err("systemd_activation_changed".into());
+            }
             let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;
-            if process.invocation.as_ref() != Some(&observed.invocation) {
+            if process.invocation.as_deref().is_none_or(str::is_empty)
+                || process.invocation.as_ref() != Some(&observed.invocation)
+            {
                 return Err("systemd_invocation_changed".into());
+            }
+            if observed.pid != process.pid {
+                return Err("systemd_process_changed".into());
             }
             run("systemctl", &["--user", "stop", "--no-block", unit])?;
         } else {
             run("/bin/kill", &["-TERM", &process.pid.to_string()])?;
         }
-        let deadline =
-            std::time::Instant::now() + std::time::Duration::from_secs(d.profile.stop_seconds);
-        while !process::gone(process)? {
-            if std::time::Instant::now() >= deadline {
-                return Err("stop_deadline_cleanup_unproven".into());
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
         self.released(d)
     }
     pub fn released(&self, d: &Demand) -> Result<(), String> {
-        if let Some(p) = &d.process {
-            if !process::gone(p)? {
-                return Err("process_still_alive".into());
-            }
-            if let Some(unit) = &p.unit
-                && !(rack_ai_media::systemd::Systemd { unit: unit.clone() }).gone()?
-            {
-                return Err("cgroup_still_populated".into());
-            }
+        if d.process.is_some() {
+            crate::teardown::Teardown::wait(d)?;
         }
         crate::preflight::Preflight {
             config: self.config,

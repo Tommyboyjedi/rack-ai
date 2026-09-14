@@ -16,6 +16,7 @@ class Client:
         if not connection.url.startswith('http://127.0.0.1:'):
             raise ValueError('qualification requires a loopback managed receiver')
         self.connection = connection
+        self.safety_check = None
         self.http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
     def call(self, packet):
@@ -31,10 +32,14 @@ class Client:
         operation, field, expected = identity
         deadline = time.monotonic() + bound
         while time.monotonic() < deadline:
+            if self.safety_check:
+                self.safety_check()
             abort = os.environ.get('RACK_QUALIFICATION_ABORT')
             if abort and Path(abort).exists():
                 raise RuntimeError('qualification aborted: ' + Path(abort).read_text())
             value = self.call(dict(operation=operation, **field))
+            if self.safety_check:
+                self.safety_check()
             if value['state'] == expected:
                 return value
             if value['state'] in ('uncertain', 'cancelled', 'expired',

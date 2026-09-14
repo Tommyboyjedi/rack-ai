@@ -12,6 +12,7 @@ class Lifecycle:
         self.client = client
         self.directory = directory
         self.demand = None
+        self.monitor = None
 
     def acquire(self, monitor):
         request = dict(schema='rack-ai/runtime/v1', source_system='gptoss-qualification',
@@ -19,15 +20,18 @@ class Lifecycle:
             tag='big-brain', priority='medium', capabilities=['reasoning','coding'],
             context_tokens=4096, ttl_seconds=1800, qualification=True)
         save(self.directory / 'acquisition-request.json', request)
+        self.monitor = monitor
         monitor.phase = 'loading'
         start = time.monotonic()
         self.demand = self.client.call(dict(operation='acquire', request=request))
         save(self.directory / 'acquisition-response.json', self.demand)
+        monitor.workload.observe(self.demand)
         deadline = start + 780
         phases = []
         while time.monotonic() < deadline:
             monitor.check()
             self.demand = self.client.call(dict(operation='inspect', reservation_id=self.demand['id']))
+            monitor.workload.observe(self.demand)
             phase = (self.demand['state'], self.demand['preflight_done'], self.demand['process'] is not None)
             if not phases or phases[-1]['phase'] != phase:
                 phases.append(dict(phase=phase, seconds=time.monotonic()-start))
@@ -61,12 +65,16 @@ class Lifecycle:
                     (self.directory/'backend-metrics.txt').write_bytes(response.read())
             except OSError as error:
                 (self.directory/'backend-metrics-error.txt').write_text(str(error))
+        if self.monitor:
+            self.monitor.workload.retire()
         self.client.call(dict(operation='control', reservation_id=current['id'],
             request=dict(generation=current['generation'], action=dict(kind='cancel'))))
         deadline = time.monotonic() + 330
         while time.monotonic() < deadline:
             current = self.client.call(dict(operation='inspect', reservation_id=current['id']))
             if current['state'] in ('released','cancelled','expired') and current['process'] is None:
+                if self.monitor:
+                    self.monitor.workload.clear(current)
                 save(self.directory / 'released.json', current)
                 return
             if current['state'] == 'recovery_required':

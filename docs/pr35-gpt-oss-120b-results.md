@@ -1,4 +1,22 @@
-# GPT-OSS-120B single-model experiment - BLOCKED
+# GPT-OSS-120B qualification history
+
+## Current handoff: first managed launch and safety corrections
+
+After the earlier preflight recorded below, the operator repaired the resident
+models onto `/srv/models/huggingface` and performed the first managed launch.
+That launch aborted on +289 MiB global swap movement despite 58166 MiB minimum
+MemAvailable and MemorySwapMax=0. Its initial cleanup encountered transient
+cgroup teardown; a later valid cancel completed cleanup without deleting state.
+
+See [the memory and cleanup correction handoff](pr35-memory-cleanup-handoff.md)
+for exact evidence, deterministic reproductions, fixes, verification and limits.
+No additional GPT-OSS launch or service change occurred in this correction task.
+Configuration #2 remains NOT_RUN; model qualification remains unestablished.
+
+## Historical preflight report, before the operator's repair
+
+The following records the earlier blocked attempt and its then-current state.
+It does not describe the later repaired services or the later actual launch.
 
 On 2026-09-14, the user authorized a bounded single-model experiment from PR35
 head `1f4c1bd3963049f8998903b1781c0cc88d9c3507`, including temporary model-service
