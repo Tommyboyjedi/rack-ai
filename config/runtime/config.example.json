@@ -1,0 +1,429 @@
+{
+  "schema": "rack-ai/runtime/v1",
+  "listen": "127.0.0.1:8095",
+  "authority_root": "/srv/rack-ai/state/resources",
+  "fixture_mode": false,
+  "max_ttl_seconds": 86400,
+  "devices": {
+    "gpu-4060ti": {
+      "uuid": "GPU-042e18f2-bf9f-c8f6-6975-6f25b15ac71c",
+      "capacity_mib": 16380
+    },
+    "gpu-2060": {
+      "uuid": "GPU-357ef569-8fac-7c7d-ee1c-51677efb174f",
+      "capacity_mib": 6144
+    },
+    "gpu-4080-super": {
+      "uuid": "GPU-f9435bc0-a243-ad20-8b8b-166ab076e80b",
+      "capacity_mib": 16376
+    }
+  },
+  "host_capacity_mib": 48000,
+  "sources": [
+    {
+      "source": "athba",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
+      "permitted": [
+        "low",
+        "medium"
+      ],
+      "default": "low",
+      "maximum": "medium",
+      "tags": [
+        "local-primary",
+        "local-coder",
+        "big-brain"
+      ],
+      "tag_priorities": {
+        "big-brain": [
+          "medium"
+        ]
+      },
+      "qualification": false
+    },
+    {
+      "source": "operator",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
+      "permitted": [
+        "paramount"
+      ],
+      "default": "paramount",
+      "maximum": "paramount",
+      "tags": [
+        "comfyui"
+      ],
+      "tag_priorities": {},
+      "qualification": false
+    },
+    {
+      "source": "music-director",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
+      "permitted": [
+        "paramount"
+      ],
+      "default": "paramount",
+      "maximum": "paramount",
+      "tags": [
+        "local-image"
+      ],
+      "tag_priorities": {},
+      "qualification": false
+    },
+    {
+      "source": "cb",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "permitted": [
+        "paramount"
+      ],
+      "default": "paramount",
+      "maximum": "paramount",
+      "tags": [
+        "local-fun-chat"
+      ],
+      "tag_priorities": {},
+      "qualification": false
+    },
+    {
+      "source": "other-authorized",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
+      "permitted": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "default": "low",
+      "maximum": "high",
+      "tags": [
+        "big-brain"
+      ],
+      "tag_priorities": {},
+      "qualification": false
+    },
+    {
+      "source": "qualification-operator",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000006",
+      "permitted": [
+        "low",
+        "medium",
+        "high",
+        "paramount"
+      ],
+      "default": "low",
+      "maximum": "paramount",
+      "tags": [
+        "local-primary",
+        "local-coder",
+        "local-fun-chat",
+        "big-brain",
+        "comfyui",
+        "local-image"
+      ],
+      "tag_priorities": {},
+      "qualification": true
+    }
+  ],
+  "profiles": [
+    {
+      "version": "candidate-1",
+      "backend": "vllm",
+      "driver": "docker",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "reasoning",
+        "coding"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions",
+        "responses"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/usr/bin/docker",
+      "executable_sha256": "dbf7fd0c0ae54d208314ee5c19a97a12d966dab039b7d94872ca91cbe490373c",
+      "artifact": null,
+      "artifact_sha256": null,
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {
+        "/srv/fast/huggingface": "/root/.cache/huggingface"
+      },
+      "tag": "local-primary",
+      "model": "local-primary",
+      "resources": [
+        "gpu-4060ti"
+      ],
+      "device_mib": {
+        "gpu-4060ti": 15000
+      },
+      "endpoint": "http://127.0.0.1:8017",
+      "container_image": "sha256:8bd082c274fae025b7079498fe1da65182ba1d4c2188c0f5a68c1042c38c3695",
+      "args": [
+        "cyankiwi/gemma-4-12B-it-AWQ-INT4",
+        "--served-model-name",
+        "local-primary",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8017",
+        "--max-model-len",
+        "4096",
+        "--max-num-seqs",
+        "1"
+      ]
+    },
+    {
+      "version": "candidate-1",
+      "backend": "vllm",
+      "driver": "docker",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "reasoning",
+        "coding"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions",
+        "responses"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/usr/bin/docker",
+      "executable_sha256": "dbf7fd0c0ae54d208314ee5c19a97a12d966dab039b7d94872ca91cbe490373c",
+      "artifact": null,
+      "artifact_sha256": null,
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {
+        "/srv/fast/huggingface": "/root/.cache/huggingface",
+        "/srv/rack-ai/plugins": "/plugins"
+      },
+      "tag": "local-coder",
+      "model": "local-coder",
+      "resources": [
+        "gpu-2060"
+      ],
+      "device_mib": {
+        "gpu-2060": 5700
+      },
+      "endpoint": "http://127.0.0.1:8018",
+      "container_image": "sha256:0a51ea5b4ae2dc5d81890e5173f54203d2a3ae0cfffe51b8fd2afd4391bfd967",
+      "args": [
+        "NotaMG/eqaq-v2",
+        "--served-model-name",
+        "local-coder",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8018",
+        "--max-model-len",
+        "4096",
+        "--max-num-seqs",
+        "1"
+      ]
+    },
+    {
+      "version": "candidate-1",
+      "backend": "vllm",
+      "driver": "docker",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "reasoning",
+        "coding"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions",
+        "responses"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/usr/bin/docker",
+      "executable_sha256": "dbf7fd0c0ae54d208314ee5c19a97a12d966dab039b7d94872ca91cbe490373c",
+      "artifact": null,
+      "artifact_sha256": null,
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {
+        "/srv/fast/huggingface": "/root/.cache/huggingface"
+      },
+      "tag": "local-fun-chat",
+      "model": "UNCONFIGURED-SYNTHETIC-ONLY",
+      "resources": [
+        "gpu-4060ti"
+      ],
+      "device_mib": {
+        "gpu-4060ti": 15000
+      },
+      "endpoint": "http://127.0.0.1:8017",
+      "container_image": "sha256:8bd082c274fae025b7079498fe1da65182ba1d4c2188c0f5a68c1042c38c3695",
+      "args": [
+        "UNCONFIGURED-SYNTHETIC-ONLY"
+      ]
+    },
+    {
+      "version": "candidate-1",
+      "backend": "llama_cpp",
+      "driver": "systemd",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "reasoning",
+        "coding"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions"
+      ],
+      "streaming": false,
+      "host_mib": 44000,
+      "cpu_percent": 2400,
+      "executable": "/srv/rack-ai/runtimes/llama-cpp/llama-server",
+      "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifact": "/srv/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf",
+      "artifact_sha256": "582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d",
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {},
+      "tag": "big-brain",
+      "model": "big-brain",
+      "resources": [
+        "gpu-4060ti",
+        "gpu-2060",
+        "gpu-4080-super"
+      ],
+      "device_mib": {
+        "gpu-4060ti": 15000,
+        "gpu-2060": 5000,
+        "gpu-4080-super": 15000
+      },
+      "endpoint": "http://127.0.0.1:8019",
+      "args": [
+        "--model",
+        "/srv/models/gpt-oss-120b/gpt-oss-120b-MXFP4.gguf",
+        "--alias",
+        "big-brain",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8019",
+        "--ctx-size",
+        "4096",
+        "--parallel",
+        "1",
+        "--n-gpu-layers",
+        "16",
+        "--split-mode",
+        "layer",
+        "--tensor-split",
+        "15,5,15"
+      ]
+    },
+    {
+      "version": "candidate-1",
+      "backend": "comfyui",
+      "driver": "systemd",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "visual"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions",
+        "responses"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/srv/comfyui/venv/bin/python",
+      "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifact": null,
+      "artifact_sha256": null,
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {},
+      "tag": "comfyui",
+      "model": "REPLACE_WITH_QUALIFIED_CHECKPOINT_SHA256",
+      "resources": [
+        "gpu-4080-super"
+      ],
+      "device_mib": {
+        "gpu-4080-super": 15000
+      },
+      "endpoint": "http://127.0.0.1:8188",
+      "args": [],
+      "media_config": "/srv/rack-ai/config/media/runtime-managed.json",
+      "media_mode": "interactive",
+      "media_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "version": "candidate-1",
+      "backend": "comfyui",
+      "driver": "systemd",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "visual"
+      ],
+      "context_tokens": 4096,
+      "max_output_tokens": 512,
+      "protocols": [
+        "chat_completions",
+        "responses"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/srv/comfyui/venv/bin/python",
+      "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifact": null,
+      "artifact_sha256": null,
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 600,
+      "drain_seconds": 120,
+      "stop_seconds": 60,
+      "inference_seconds": 120,
+      "container_mounts": {},
+      "tag": "local-image",
+      "model": "REPLACE_WITH_QUALIFIED_CHECKPOINT_SHA256",
+      "resources": [
+        "gpu-4080-super"
+      ],
+      "device_mib": {
+        "gpu-4080-super": 15000
+      },
+      "endpoint": "http://127.0.0.1:8188",
+      "args": [],
+      "media_config": "/srv/rack-ai/config/media/runtime-managed.json",
+      "media_mode": "managed",
+      "media_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

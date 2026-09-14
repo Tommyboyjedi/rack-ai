@@ -50,6 +50,7 @@ impl LocalPrimaryReviewer {
 
         let agent = config.new_agent();
 
+        let _dispatch = crate::endpoint_fence::EndpointFence::local(&self.endpoint)?;
         let mut response = agent
             .post(&self.endpoint)
             .send_json(&payload)
@@ -101,6 +102,18 @@ fn normalize_endpoint(endpoint: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::LocalPrimaryReviewer;
+
+    #[test]
+    fn managed_dispatch_is_fenced_before_http() {
+        crate::managed_dispatch_test_fixture::exercise(
+            "local_primary_reviewer::tests::managed_dispatch_is_fenced_before_http",
+            |endpoint| {
+                let client = LocalPrimaryReviewer::new(endpoint, "local-primary".into());
+                let error = client.call_api("must never dispatch", 1).unwrap_err();
+                assert!(error.contains("managed endpoint requires a scoped reservation"));
+            },
+        );
+    }
 
     #[test]
     fn local_default_targets_primary_endpoint() {

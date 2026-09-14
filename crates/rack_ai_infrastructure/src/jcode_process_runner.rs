@@ -158,6 +158,14 @@ fn run_with_root(
     root: &Path,
     allowed_paths: Option<&AllowedPaths>,
 ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+    let _direct_dispatch = if network_disabled {
+        None
+    } else {
+        Some(
+            crate::endpoint_fence::EndpointFence::local(runtime.endpoint())
+                .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?,
+        )
+    };
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
     let mut prepared = build_command(
@@ -443,6 +451,8 @@ impl Drop for NetworkIsolationGuard {
 }
 
 fn bridge_unix_to_tcp(stream: UnixStream, target_port: u16) -> Result<(), String> {
+    let _dispatch =
+        crate::endpoint_fence::EndpointFence::local(&format!("http://127.0.0.1:{target_port}"))?;
     let upstream =
         TcpStream::connect(("127.0.0.1", target_port)).map_err(|error| error.to_string())?;
     let mut stream_read = stream.try_clone().map_err(|error| error.to_string())?;
@@ -754,6 +764,27 @@ mod tests {
     use rack_ai_domain::AllowedPaths;
 
     use super::JCodeProcessRunner;
+
+    #[test]
+    fn managed_dispatch_is_fenced_before_jcode_start() {
+        crate::managed_dispatch_test_fixture::exercise(
+            "jcode_process_runner::tests::managed_dispatch_is_fenced_before_jcode_start",
+            |endpoint| {
+                let root = temp_root();
+                fs::create_dir_all(&root).unwrap();
+                let script = root.join("forbidden-jcode.sh");
+                let marker = root.join("started");
+                write_script(
+                    &script,
+                    &format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+                );
+                let runtime = coder_runtime(&script, &endpoint);
+                assert!(JCodeProcessRunner::run(&runtime, "never run", &root, 2, false).is_err());
+                assert!(!marker.exists());
+                fs::remove_dir_all(root).unwrap();
+            },
+        );
+    }
 
     #[test]
     fn passes_expected_arguments_and_collects_trace_output() {

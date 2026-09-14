@@ -47,7 +47,7 @@
     {
       "id": "music-director",
       "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_DIRECTOR_CREDENTIAL",
-      "ceiling": "medium",
+      "ceiling": "paramount",
       "operator": false
     },
     {

@@ -273,3 +273,15 @@ Consequences:
 - do not move language/framework or software-engineering knowledge into Rack AI.
 
 This document is the authoritative ATHBA-specific application of `docs/generic-bounded-workspace-execution.md`.
+
+## PR35 boundary amendment
+
+RackAI-published logical tags and bounded pure inference are authorized alongside existing
+broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
+qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
+whole-request denial; already accepted held work is distinct from a denied acquisition.
+ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
+Implementation scope is RackAI only. Companion integrations and production cutover are
+deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths
+relative to the repository root). Existing workspace, evidence and review protections remain.

@@ -1,0 +1,17 @@
+{
+  "operation": "acquire",
+  "request": {
+    "schema": "rack-ai/runtime/v1",
+    "source_system": "athba",
+    "work_id": "synthetic-work",
+    "acquisition_id": "large-1",
+    "tag": "big-brain",
+    "priority": "medium",
+    "capabilities": [
+      "reasoning"
+    ],
+    "context_tokens": 4096,
+    "ttl_seconds": 1800,
+    "qualification": false
+  }
+}

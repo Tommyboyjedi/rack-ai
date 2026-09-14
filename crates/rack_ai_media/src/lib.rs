@@ -56,3 +56,8 @@ pub mod password_kdf;
 mod password_tests;
 
 pub mod browser_socket;
+
+pub mod ready_lifecycle;
+pub mod shared_activation;
+pub mod shared_job;
+pub mod shared_placement;

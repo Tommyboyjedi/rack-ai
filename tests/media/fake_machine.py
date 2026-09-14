@@ -22,6 +22,9 @@ if program == "systemctl":
         print(f'ExecStart={{ path={runtime["python"]} ; argv[]={runtime["python"]} {script} fixture ; }}')
         print(f'WorkingDirectory={runtime["directory"]}')
         print(f'Environment=CUDA_VISIBLE_DEVICES={config["media_uuid"]} RACK_MEDIA_AUTHORITY_FILE={config["authority_file"]} RACK_MEDIA_CONTROL_SECRET_FILE={config["control_secret_file"]}')
+        print("MemoryMax=" + str(state.get("memory_limit", 32 * 1024 * 1024)))
+        print("MemorySwapMax=0")
+        print("CPUQuotaPerSecUSec=" + state.get("cpu_quota", "1s"))
         print("Type=simple")
         print("Restart=no")
         print("KillMode=control-group")
@@ -58,7 +61,9 @@ if program == "systemctl":
     else:
         sys.exit(2)
 elif program == "nvidia-smi":
-    if any("query-gpu" in a for a in args):
+    if any("query-gpu=memory." in a for a in args):
+        print(state.get("memory_mib",16384))
+    elif any("query-gpu" in a for a in args):
         print(f"{media}, NVIDIA GeForce RTX 4080 SUPER\n{protected[0]}, NVIDIA GeForce RTX 2060\n{protected[1]}, NVIDIA GeForce RTX 4060 Ti")
     elif "-x" in args:
         pid = 1 if state.get("foreign") else state["pid"] if state["active"] else None

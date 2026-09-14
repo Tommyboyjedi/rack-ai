@@ -135,3 +135,15 @@ Do not introduce an exception to these rules without explicit user approval and 
 - Report residual risk and incomplete behavior clearly.
 
 Any boundary or harness change must demonstrate that it restores or extends a documented generic Rack AI contract rather than merely moving one client fixture one step farther.
+
+## PR35 boundary amendment
+
+RackAI-published logical tags and bounded pure inference are authorized alongside existing
+broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
+qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
+whole-request denial; already accepted held work is distinct from a denied acquisition.
+ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
+Implementation scope is RackAI only. Companion integrations and production cutover are
+deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths
+relative to the repository root). Existing workspace, evidence and review protections remain.

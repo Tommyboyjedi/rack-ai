@@ -1,0 +1,559 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rack-ai/runtime/v1/response",
+  "$defs": {
+    "acquire": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "rack-ai/runtime/v1"
+        },
+        "source_system": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "acquisition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "tag": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "priority": {
+          "anyOf": [
+            {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "enum": [
+              "reasoning",
+              "coding",
+              "visual",
+              "audio"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "qualification": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "schema",
+        "source_system",
+        "work_id",
+        "acquisition_id",
+        "tag",
+        "capabilities",
+        "context_tokens",
+        "ttl_seconds",
+        "qualification"
+      ]
+    },
+    "inference": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "rack-ai/runtime/v1"
+        },
+        "submission_id": {
+          "type": "string"
+        },
+        "reservation_id": {
+          "type": "string"
+        },
+        "generation": {
+          "type": "string"
+        },
+        "profile_hash": {
+          "type": "string"
+        },
+        "prompt": {
+          "type": "string"
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "payload": {
+          "$ref": "#/$defs/payload"
+        }
+      },
+      "required": [
+        "schema",
+        "submission_id",
+        "reservation_id",
+        "generation",
+        "profile_hash",
+        "prompt",
+        "max_tokens",
+        "timeout_seconds"
+      ]
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "enum": [
+            "chat_completions",
+            "responses"
+          ]
+        },
+        "body": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "protocol",
+        "body"
+      ]
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "generation": {
+          "type": "string"
+        },
+        "action": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "renew"
+                },
+                "ttl_seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "kind",
+                "ttl_seconds"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "release"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "cancel"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "generation",
+        "action"
+      ]
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "rack-ai/runtime/v1"
+    },
+    "result": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/acquire"
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            },
+            "profile_hash": {
+              "type": "string"
+            },
+            "state": {
+              "enum": [
+                "denied",
+                "preparing",
+                "ready",
+                "draining",
+                "held",
+                "releasing",
+                "released",
+                "cancelled",
+                "expired",
+                "recovery_required"
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "generation": {
+              "type": "string"
+            },
+            "created": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "order": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "transition_deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "victims": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "process": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "pid": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "boot": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "activation": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "container": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "invocation": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pid",
+                    "boot",
+                    "start",
+                    "activation",
+                    "unit",
+                    "container",
+                    "invocation"
+                  ]
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "effect_started": {
+              "type": "boolean"
+            },
+            "preflight_done": {
+              "type": "boolean"
+            },
+            "released": {
+              "type": "boolean"
+            },
+            "gateway_path": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "profile_version": {
+              "type": "string"
+            },
+            "resources": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "owner",
+            "request",
+            "priority",
+            "profile_hash",
+            "state",
+            "reason",
+            "generation",
+            "created",
+            "order",
+            "deadline",
+            "transition_deadline",
+            "victims",
+            "process",
+            "effect_started",
+            "preflight_done",
+            "released",
+            "gateway_path",
+            "model",
+            "profile_version",
+            "resources"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "owner": {
+              "type": "string"
+            },
+            "request": {
+              "$ref": "#/$defs/inference"
+            },
+            "state": {
+              "enum": [
+                "accepted",
+                "started",
+                "completed",
+                "cancelled",
+                "expired",
+                "uncertain"
+              ]
+            },
+            "deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "started": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "activation": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {},
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "id",
+            "owner",
+            "request",
+            "state",
+            "deadline",
+            "started",
+            "activation",
+            "result",
+            "error"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "tag": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "qualified": {
+                    "type": "boolean"
+                  },
+                  "capabilities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "context_tokens": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "tag",
+                  "version",
+                  "qualified",
+                  "capabilities",
+                  "context_tokens"
+                ]
+              }
+            },
+            "permitted_priorities": {
+              "type": "array",
+              "items": {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "paramount"
+                ]
+              }
+            },
+            "default_priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            },
+            "maximum_priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            }
+          },
+          "required": [
+            "tags",
+            "permitted_priorities",
+            "default_priority",
+            "maximum_priority"
+          ]
+        }
+      ]
+    }
+  },
+  "required": [
+    "schema",
+    "result"
+  ]
+}

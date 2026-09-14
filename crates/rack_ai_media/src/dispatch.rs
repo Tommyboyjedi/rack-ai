@@ -30,6 +30,14 @@ impl ImageDispatch<'_> {
         let Some(prepared) = prepared else {
             return Ok(());
         };
+        let service = r.store.read()?.service;
+        crate::lifecycle::Lifecycle { runtime: r }.verify(&service)?;
+        if let Some(handle) = &service.lease {
+            rack_ai_infrastructure::managed_lease::ManagedLease {
+                resources: &r.reservations,
+            }
+            .verify(handle, true)?;
+        }
         let result = r.backend.submit(&prepared);
         r.store.update(|s| {
             let j = s

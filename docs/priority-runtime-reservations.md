@@ -1,6 +1,10 @@
 # Priority-aware runtime reservations and managed inference
 
-Date: 2026-09-13. Status: **implementation contract; documentation only at creation**.
+Date: 2026-09-14. Status: **RackAI-only implementation and isolated qualification; production rollout deferred**.
+
+The current user scope supersedes companion implementation instructions in this document.
+Only RackAI code, configuration examples, synthetic clients, tests and PR35 are in scope.
+ATHBA, Music Director and CB integrations are deferred follow-on work.
 
 ## 1. User outcome and scope
 
@@ -157,7 +161,7 @@ This is meaningful lifecycle/contract work, not merely adding a field to a lease
 
 1. Build deterministic authority/state/adapter tests first, using disposable roots and fake backend processes. Freeze cross-repository fixtures.
 2. Implement managed vLLM/ComfyUI/llama.cpp adapters and gate all supported paths. Preserve existing deployments by default until explicit migration.
-3. Implement companion adapters in their own branches/worktrees. Verify real transport integration against the candidate authority with fake GPUs/models and disposable application state.
+3. Exercise RackAI-owned synthetic clients through real transport against controllable backend processes and disposable state. Companion adapters are a later task after RackAI review/acceptance.
 4. Prepare a read-only inventory and written migration/rollback plan: deployed SHAs, service/container identities, verified full GPU UUIDs, actual caller endpoints, in-flight work, all relevant state roots, resident memory and restart policies. Inspect service configuration without printing secrets. Checked-in Compose is not proof of live configuration.
 5. **Do not enable production preemption or stop existing vLLM/media services until the migration plan has been reported and the operator explicitly authorizes the disruptive live window.** Requesting these planning PRs does not itself grant that window. Build/test completion must not be blocked by this approval gate.
 6. Under that later authorization, drain active work, install/pin the isolated new runtime without replacing NVIDIA drivers or vLLM dependencies, import/reconcile managed service ownership and reservation state, switch supported clients/gates, then qualify. Never run whole-stack Compose down/up, delete lease files, force-reset live checkouts or adopt a foreign process by port alone.
@@ -204,6 +208,6 @@ Use public-interface tests plus actual HTTP/CLI transport with controllable fake
 
 ## 13. Delivery and reporting
 
-This PR begins as a contract, not completed implementation. Codex implementation should stay on this branch and use the linked companion branches separately. No merge, force push, production migration or unrestricted cross-repository repair is authorized.
+This PR begins as a contract, not completed implementation. Implementation stays exclusively on this RackAI branch. Linked companion branches are deferred references only. No merge, force push, production migration or unrestricted cross-repository repair is authorized.
 
-Report independently: `CONTRACTS_FROZEN`, `CODE_COMPLETE`, `FIXTURE_E2E_PASSED`, `CLIENT_ADAPTERS_COMPLETE`, `CLIENTS_CUT_OVER`, `LIVE_PREEMPTION_QUALIFIED`, `BIG_BRAIN_BOOTED`, `BIG_BRAIN_QUALIFIED`, and `PRODUCTION_DEPLOYED`. State NOT_RUN/BLOCKED with exact reason where relevant. Include PRs/SHAs, tests, schema versions, evidence, benchmark results, rollback and remaining approval gates. Do not label a planning document or a running process a qualified system.
+Report independently: `RACKAI_CODE_COMPLETE`, `PRIORITY_SCENARIO_PASSED`, `RECOVERY_AND_RACE_TESTS_PASSED`, `RACKAI_LIVE_QUALIFIED`, `BIG_BRAIN_BOOTED`, `BIG_BRAIN_QUALIFIED`, and `PRODUCTION_ROLLOUT_STATUS`. State NOT_RUN/BLOCKED with exact reason where relevant. Include PRs/SHAs, tests, schema versions, evidence, benchmark results, rollback and remaining approval gates. Do not label a planning document or a running process a qualified system.

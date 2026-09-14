@@ -1,0 +1,10 @@
+{
+  "operation": "control",
+  "reservation_id": "REPLACE_WITH_ACQUIRED_ID",
+  "request": {
+    "generation": "REPLACE_WITH_CURRENT_GENERATION",
+    "action": {
+      "kind": "release"
+    }
+  }
+}

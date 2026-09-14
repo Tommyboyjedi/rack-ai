@@ -1088,6 +1088,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "rack_ai_runtime"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "rack_ai_application",
+ "rack_ai_infrastructure",
+ "rack_ai_media",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
+]
+
+[[package]]
 name = "rand"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
