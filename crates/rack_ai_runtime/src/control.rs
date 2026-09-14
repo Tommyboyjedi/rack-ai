@@ -59,9 +59,11 @@ impl ReservationControl<'_> {
                         .into(),
                     );
                     for i in s.data.invocations.values_mut().filter(|i| {
-                        i.request.reservation_id == c.id && i.state == InvocationState::Accepted
+                        i.request.reservation_id == c.id
+                            && (i.state == InvocationState::Accepted
+                                || matches!(c.request.action, Action::Cancel))
                     }) {
-                        i.state = InvocationState::Cancelled;
+                        i.cancel();
                     }
                 }
             }
@@ -76,12 +78,7 @@ impl ReservationControl<'_> {
                 .get_mut(id)
                 .filter(|i| i.owner == owner)
                 .ok_or("not_found")?;
-            if i.state == InvocationState::Accepted {
-                i.state = InvocationState::Cancelled;
-            } else if i.state == InvocationState::Started {
-                i.error =
-                    Some("cancellation_requested_after_start; bounded drain continues".into());
-            }
+            i.cancel();
             Ok(i.clone())
         })
     }

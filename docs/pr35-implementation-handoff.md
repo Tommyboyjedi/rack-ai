@@ -1,5 +1,7 @@
 # PR35 RackAI implementation and verification handoff
 
+The reviewed-base results below are historical. The [correctness follow-up](pr35-correctness-handoff.md) records the new cancellation, deadline, identity, capacity and positive workspace corrections and their separate verification.
+
 Scope: RackAI only, branch `design/priority-runtime-reservations`. No companion
 application code/configuration/tests/PRs were changed. No merge, deployment, model
 inference against production, or disruptive service window was performed.
@@ -113,8 +115,7 @@ Legacy raw callers and their existing reservations require an approved quiescent
 migration. No foreign process is adopted by port alone. Source credentials, private
 ingress, pinned binaries/media config and actual hardware fit must be provisioned and
 qualified before use. Streaming is buffered, not first-token delivery. The managed
-evidence document has a 32 MiB retention bound and fails closed when full; sustained
-production use needs an explicit quiescent archive/migration, never silent deletion.
+evidence document retains its 32 MiB hard bound. The correctness follow-up adds conservative admission headroom for accepted results and cleanup, with precise capacity refusal. Sustained use follows the published quiescent retention procedure; there is no silent deletion or empty-authority reset.
 Unknown in-flight outcomes require evidence/operator reconciliation, not an automatic retry.
 
 | Marker | Status |

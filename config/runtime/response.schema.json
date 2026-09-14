@@ -117,6 +117,14 @@
         },
         "payload": {
           "$ref": "#/$defs/payload"
+        },
+        "wait_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 86400
         }
       },
       "required": [
@@ -426,10 +434,6 @@
                 "uncertain"
               ]
             },
-            "deadline": {
-              "type": "integer",
-              "minimum": 0
-            },
             "started": {
               "anyOf": [
                 {
@@ -461,18 +465,58 @@
                   "type": "null"
                 }
               ]
-            }
+            },
+            "waiting_deadline": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "execution_deadline": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            },
+            "response_bytes": {
+              "type": "integer",
+              "minimum": 1024
+            },
+            "cancellation": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "requested_at"
+                  ],
+                  "properties": {
+                    "requested_at": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              ]
+            },
+            "late_result": {}
           },
           "required": [
             "id",
             "owner",
             "request",
             "state",
-            "deadline",
+            "waiting_deadline",
             "started",
             "activation",
             "result",
-            "error"
+            "error",
+            "execution_deadline",
+            "response_bytes",
+            "cancellation",
+            "late_result"
           ]
         },
         {

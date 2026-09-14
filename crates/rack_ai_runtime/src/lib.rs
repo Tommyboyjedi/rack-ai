@@ -21,3 +21,6 @@ pub mod types;
 pub mod validation;
 
 pub mod media_limits;
+
+pub mod capacity;
+pub mod workers;

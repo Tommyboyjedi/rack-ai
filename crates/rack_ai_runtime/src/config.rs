@@ -87,6 +87,8 @@ pub struct Config {
     pub authority_root: PathBuf,
     pub fixture_mode: bool,
     pub max_ttl_seconds: u64,
+    #[serde(default)]
+    pub limits: crate::capacity::Limits,
     pub devices: BTreeMap<String, Device>,
     pub host_capacity_mib: u64,
     pub sources: Vec<Source>,

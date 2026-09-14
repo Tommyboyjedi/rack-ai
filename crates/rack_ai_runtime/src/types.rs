@@ -77,6 +77,8 @@ pub struct Inference {
     pub payload: Option<crate::protocol::Payload>,
     pub max_tokens: u32,
     pub timeout_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wait_seconds: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -89,12 +91,25 @@ pub enum InvocationState {
     Uncertain,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CancellationIntent {
+    pub requested_at: u64,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Invocation {
     pub id: String,
     pub owner: String,
     pub request: Inference,
     pub state: InvocationState,
-    pub deadline: u64,
+    #[serde(alias = "deadline")]
+    pub waiting_deadline: u64,
+    #[serde(default)]
+    pub execution_deadline: Option<u64>,
+    #[serde(default = "legacy_response_bound")]
+    pub response_bytes: u64,
+    #[serde(default)]
+    pub cancellation: Option<CancellationIntent>,
+    #[serde(default)]
+    pub late_result: Option<serde_json::Value>,
     pub started: Option<u64>,
     pub activation: Option<String>,
     pub result: Option<serde_json::Value>,
@@ -129,4 +144,23 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+}
+
+fn legacy_response_bound() -> u64 {
+    4 * 1024 * 1024
+}
+impl Invocation {
+    pub fn cancel(&mut self) {
+        if matches!(
+            self.state,
+            InvocationState::Accepted | InvocationState::Started | InvocationState::Uncertain
+        ) {
+            self.cancellation.get_or_insert(CancellationIntent {
+                requested_at: now(),
+            });
+            if self.state == InvocationState::Accepted {
+                self.state = InvocationState::Cancelled;
+            }
+        }
+    }
 }

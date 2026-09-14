@@ -71,6 +71,7 @@ impl Admission<'_> {
                 crate::planner::fence(s, &mut demand)?;
             }
             s.data.demands.insert(demand.id.clone(), demand.clone());
+            crate::capacity::retention(s, &service.config.limits)?;
             Ok(demand)
         })
     }

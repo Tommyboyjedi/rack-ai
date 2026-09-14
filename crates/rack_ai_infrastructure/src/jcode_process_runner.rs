@@ -168,6 +168,9 @@ fn run_with_root(
     };
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
+    execution_config
+        .scope_call((workdir, task), runtime.endpoint())
+        .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?;
     let mut prepared = build_command(
         runtime,
         task,

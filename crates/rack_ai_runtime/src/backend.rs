@@ -27,6 +27,7 @@ impl BackendAccess<'_> {
                     d.profile.endpoint.trim_end_matches('/')
                 ))
                 .send(),
+            MAX_RESPONSE,
         )?;
         let ids: Vec<_> = body
             .get("data")
@@ -43,8 +44,12 @@ impl BackendAccess<'_> {
     pub fn infer(&self, d: &Demand, invocation: &Invocation) -> Result<Value, String> {
         // The caller persisted Started and revalidated the generation before entering.
         // No automatic retry is allowed after this boundary.
-        self.ready(d)?;
+        process::endpoint_owned(
+            d.process.as_ref().ok_or("activation_process_missing")?,
+            &d.profile,
+        )?;
         let request = &invocation.request;
+        let bound = invocation.response_bytes;
         if let Some(payload) = &request.payload {
             let response = client(request.timeout_seconds)?
                 .post(format!(
@@ -60,10 +65,10 @@ impl BackendAccess<'_> {
             }
             let mut bytes = Vec::new();
             response
-                .take(MAX_RESPONSE + 1)
+                .take(bound + 1)
                 .read_to_end(&mut bytes)
                 .map_err(|_| "backend_read_uncertain")?;
-            if bytes.len() as u64 > MAX_RESPONSE {
+            if bytes.len() as u64 > bound {
                 return Err("backend_response_oversized".into());
             }
             return crate::protocol::raw_result(
@@ -73,7 +78,7 @@ impl BackendAccess<'_> {
         }
         decode(client(request.timeout_seconds)?.post(format!("{}/v1/chat/completions", d.profile.endpoint.trim_end_matches('/')))
             .json(&json!({"model": d.profile.model, "messages": [{"role":"user","content":request.prompt}],
-                "max_tokens":request.max_tokens,"stream":false})).send())
+                "max_tokens":request.max_tokens,"stream":false})).send(), bound)
     }
 }
 fn client(seconds: u64) -> Result<Client, String> {
@@ -85,17 +90,20 @@ fn client(seconds: u64) -> Result<Client, String> {
         .build()
         .map_err(|e| e.to_string())
 }
-fn decode(response: Result<reqwest::blocking::Response, reqwest::Error>) -> Result<Value, String> {
+fn decode(
+    response: Result<reqwest::blocking::Response, reqwest::Error>,
+    bound: u64,
+) -> Result<Value, String> {
     let response = response.map_err(|_| "backend_transport_uncertain")?;
     if !response.status().is_success() {
         return Err(format!("backend_http_{}", response.status()));
     }
     let mut bytes = Vec::new();
     response
-        .take(MAX_RESPONSE + 1)
+        .take(bound + 1)
         .read_to_end(&mut bytes)
         .map_err(|_| "backend_read_uncertain")?;
-    if bytes.len() as u64 > MAX_RESPONSE {
+    if bytes.len() as u64 > bound {
         return Err("backend_response_oversized".into());
     }
     serde_json::from_slice(&bytes).map_err(|_| "backend_protocol_uncertain".into())

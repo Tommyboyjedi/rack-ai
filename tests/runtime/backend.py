@@ -58,7 +58,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = body.encode()
             self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.send_header('Content-Length',str(len(data))); self.end_headers()
             self.wfile.write(data); event('complete'); return
-        self.reply({'id':activation, 'model':model, 'choices':[{'message':{'role':'assistant','content':'fixture response'}}],
+        self.reply({'id':activation, 'model':model, 'choices':[{'message':{'role':'assistant','content':control().get('content','fixture response')}}],
                     'usage':{'prompt_tokens':1,'completion_tokens':2}})
         event('complete')
 

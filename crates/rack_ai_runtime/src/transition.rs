@@ -22,7 +22,7 @@ impl Transition<'_> {
         }
         self.boundary(d)?;
         if !d.preflight_done {
-            let victims = r.authority.update(|s| {
+            let victims = r.authority.read(|s| {
                 Ok(d.victims
                     .iter()
                     .filter_map(|v| s.data.demands.get(v))
@@ -74,7 +74,7 @@ impl Transition<'_> {
         ReadinessCommit { service: r }.advance(d)
     }
     fn boundary(&self, d: &Demand) -> Result<(), String> {
-        self.service.authority.update(|s| {
+        self.service.authority.read(|s| {
             let saved = s.data.demands.get(&d.id).ok_or("missing_transition")?;
             if saved.generation != d.generation
                 || saved.state != DemandState::Preparing
@@ -102,7 +102,7 @@ impl VictimDrain<'_> {
     fn advance(&self, d: &Demand) -> Result<bool, String> {
         let r = self.service;
         for id in &d.victims {
-            let victim = r.authority.update(|s| {
+            let victim = r.authority.read(|s| {
                 let victim = s.data.demands.get(id).ok_or("missing_victim")?.clone();
                 if inflight(s, id) {
                     if now() >= victim.transition_deadline {

@@ -8,7 +8,7 @@ pub struct Dispatch<'a> {
 }
 impl Dispatch<'_> {
     pub fn run(&self, id: &str) -> Result<(), String> {
-        let candidate = self.service.authority.update(|s| {
+        let candidate = self.service.authority.read(|s| {
             let i = s.data.invocations.get(id).ok_or("missing_invocation")?;
             let d = s
                 .data
@@ -41,7 +41,7 @@ impl Dispatch<'_> {
             if i.state != InvocationState::Accepted {
                 return Ok(None);
             }
-            if i.deadline <= now() || !active(&d) {
+            if i.waiting_deadline <= now() || !active(&d) {
                 s.data
                     .invocations
                     .get_mut(id)
@@ -59,6 +59,7 @@ impl Dispatch<'_> {
             let i = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
             i.state = InvocationState::Started;
             i.started = Some(now());
+            i.execution_deadline = i.started.map(|started| started + i.request.timeout_seconds);
             i.activation = Some(d.generation.clone());
             Ok(Some((i.clone(), d)))
         })?;
@@ -108,8 +109,14 @@ impl Completion<'_> {
                                 .is_some_and(|tokens| {
                                     tokens <= invocation.request.max_tokens as u64
                                 });
-                    i.result = Some(value);
-                    i.state = if valid {
+                    if i.cancellation.is_some() {
+                        i.late_result = Some(value);
+                    } else {
+                        i.result = Some(value);
+                    }
+                    i.state = if valid && i.cancellation.is_some() {
+                        InvocationState::Cancelled
+                    } else if valid {
                         InvocationState::Completed
                     } else {
                         InvocationState::Uncertain
@@ -119,7 +126,7 @@ impl Completion<'_> {
                     }
                 }
                 Err(e) => {
-                    i.error = Some(e);
+                    i.error = Some(crate::capacity::diagnostic(e));
                     i.state = InvocationState::Uncertain;
                 }
             }

@@ -10,7 +10,7 @@ pub struct Retirement<'a> {
 impl Retirement<'_> {
     pub fn run(&self, d: &Demand) -> Result<(), String> {
         let r = self.service;
-        if r.authority.update(|s| Ok(inflight(s, &d.id)))? {
+        if r.authority.read(|s| Ok(inflight(s, &d.id)))? {
             return if now() >= d.transition_deadline {
                 Err("drain_deadline_invocation_uncertain".into())
             } else {

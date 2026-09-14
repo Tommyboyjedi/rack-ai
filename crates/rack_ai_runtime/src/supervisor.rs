@@ -2,12 +2,19 @@ use crate::{
     service::{Service, active},
     types::*,
 };
-use std::{fs::OpenOptions, sync::Arc};
+use std::sync::Arc;
 struct Reconsideration<'a> {
     service: &'a Service,
 }
 impl Reconsideration<'_> {
     pub fn reconsider(&self) -> Result<(), String> {
+        if !self
+            .service
+            .authority
+            .read(|s| Ok(pending_changes(self.service, s)))?
+        {
+            return Ok(());
+        }
         self.service.authority.update(|s| {
             for d in s.data.demands.values_mut() {
                 let receipt = self
@@ -40,7 +47,14 @@ impl Reconsideration<'_> {
                 }
             }
             for i in s.data.invocations.values_mut() {
-                if i.state == InvocationState::Accepted && i.deadline <= now() {
+                if i.state == InvocationState::Accepted
+                    && (i.waiting_deadline <= now()
+                        || !s
+                            .data
+                            .demands
+                            .get(&i.request.reservation_id)
+                            .is_some_and(active))
+                {
                     i.state = InvocationState::Expired;
                 }
             }
@@ -76,7 +90,8 @@ impl Supervisor {
             service: &self.service,
         }
         .reconsider()?;
-        let (demands, invocations) = self.service.authority.update(|s| {
+        let (mut demands, invocations) = self.service.authority.read(|s| {
+            let mut reservations = std::collections::BTreeSet::new();
             Ok((
                 s.data
                     .demands
@@ -94,17 +109,30 @@ impl Supervisor {
                 s.data
                     .invocations
                     .values()
-                    .filter(|i| i.state == InvocationState::Accepted)
+                    .filter(|i| crate::workers::eligible(s, i))
+                    .filter(|i| reservations.insert(i.request.reservation_id.clone()))
                     .map(|i| i.id.clone())
                     .collect::<Vec<_>>(),
             ))
         })?;
+        demands.sort_by_key(|d| {
+            (
+                d.state != DemandState::Releasing,
+                d.state == DemandState::Ready,
+            )
+        });
         for d in demands {
-            let Some(lock) = self.worker_lock(&d.id)? else {
+            let Some(permit) =
+                crate::workers::permit(&self.service, crate::workers::Pool::Transition)?
+            else {
+                break;
+            };
+            let Some(lock) = crate::workers::record_lock(&self.service, &d.id)? else {
                 continue;
             };
             let r = Arc::clone(&self.service);
             std::thread::spawn(move || {
+                let _permit = permit;
                 let _lock = lock;
                 let fresh = match r.inspect(&d.owner, &d.id) {
                     Ok(d) => d,
@@ -126,7 +154,7 @@ impl Supervisor {
                             return Ok(());
                         }
                         current.state = DemandState::RecoveryRequired;
-                        current.reason = Some(error);
+                        current.reason = Some(crate::capacity::diagnostic(error));
                         Ok(())
                     });
                     if let Err(e) = saved {
@@ -136,11 +164,17 @@ impl Supervisor {
             });
         }
         for id in invocations {
-            let Some(lock) = self.worker_lock(&id)? else {
+            let Some(permit) =
+                crate::workers::permit(&self.service, crate::workers::Pool::Dispatch)?
+            else {
+                break;
+            };
+            let Some(lock) = crate::workers::record_lock(&self.service, &id)? else {
                 continue;
             };
             let r = Arc::clone(&self.service);
             std::thread::spawn(move || {
+                let _permit = permit;
                 let _lock = lock;
                 if let Err(e) = (crate::dispatch::Dispatch { service: &r }).run(&id) {
                     eprintln!("dispatch blocked: {e}");
@@ -149,20 +183,39 @@ impl Supervisor {
         }
         Ok(())
     }
-    fn worker_lock(&self, id: &str) -> Result<Option<std::fs::File>, String> {
-        let root = self.service.config.authority_root.join("workers");
-        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        let file = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(root.join(id))
-            .map_err(|e| e.to_string())?;
-        match file.try_lock() {
-            Ok(()) => Ok(Some(file)),
-            Err(std::fs::TryLockError::WouldBlock) => Ok(None),
-            Err(e) => Err(e.to_string()),
-        }
-    }
+}
+
+// This read-only hint avoids locking/serializing stable retained history every tick.
+// Every mutation and priority/ownership decision is rechecked under update's lock.
+fn pending_changes(service: &Service, s: &Document) -> bool {
+    s.data.invocations.values().any(|i| {
+        i.state == InvocationState::Accepted
+            && (i.waiting_deadline <= now()
+                || !s
+                    .data
+                    .demands
+                    .get(&i.request.reservation_id)
+                    .is_some_and(active))
+    }) || s.data.demands.values().any(|d| {
+        (!d.released
+            && service
+                .config
+                .authority_root
+                .join("managed-releases")
+                .join(format!("{}.json", d.generation))
+                .exists())
+            || (!active(d)
+                && matches!(
+                    d.state,
+                    DemandState::Held
+                        | DemandState::Ready
+                        | DemandState::Preparing
+                        | DemandState::Draining
+                ))
+            || (d.state == DemandState::Held
+                && active(d)
+                && (crate::planner::Planner { service })
+                    .refusal(s, d)
+                    .is_none())
+    })
 }

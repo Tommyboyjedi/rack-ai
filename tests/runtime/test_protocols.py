@@ -48,5 +48,35 @@ class ProtocolTests(unittest.TestCase):
             finally:
                 r.close()
 
+    def test_gateway_waiters_are_bounded_and_control_remains_responsive(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import time
+        with tempfile.TemporaryDirectory(prefix='rack-pr35-gateway-pressure-') as root:
+            r=Rack(root,configure=lambda c:c.update(limits=dict(max_gateway_waiters=1)))
+            try:
+                p=r.wait(r.acquire('athba','local-primary','low'));chat=r.wait(r.acquire('cb','local-fun-chat','paramount'))
+                p=r.wait(p,'held');url=f'http://{r.address}'+p['gateway_path']+'/chat/completions'
+                body=dict(model='local-primary',messages=[dict(role='user',content='held')],max_tokens=16)
+                def call(key):
+                    req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Idempotency-Key':key})
+                    try:response=urllib.request.urlopen(req,timeout=10)
+                    except urllib.error.HTTPError as error:response=error
+                    with response:return response.status,json.loads(response.read())
+                with ThreadPoolExecutor(max_workers=1) as pool:
+                    first=pool.submit(call,'one');deadline=time.monotonic()+3
+                    invocations={}
+                    while time.monotonic()<deadline:
+                        invocations=json.loads((Path(root)/'authority/managed.json').read_text())['data']['invocations']
+                        if invocations:break
+                        time.sleep(.02)
+                    self.assertEqual(len(invocations),1)
+                    status,error=call('two');self.assertEqual(status,429);self.assertEqual(error['error'],'capacity_gateway_waiters')
+                    started=time.monotonic();r.inspect(p)
+                    r.call('athba','cancel',invocation_id=next(iter(invocations)))
+                    r.release(chat);self.assertLess(time.monotonic()-started,2)
+                    status,error=first.result(timeout=3);self.assertEqual(status,409);self.assertIn('Cancelled',error['error'])
+                self.assertEqual(r.counts('dispatch')['local-primary'],0)
+            finally:r.close()
+
 if __name__=='__main__':
     unittest.main(verbosity=2)

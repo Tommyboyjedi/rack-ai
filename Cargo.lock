@@ -1058,6 +1058,7 @@ dependencies = [
  "rack_ai_domain",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 

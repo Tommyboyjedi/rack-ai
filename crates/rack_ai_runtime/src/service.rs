@@ -2,20 +2,28 @@ use crate::{config::Config, types::*};
 use rack_ai_infrastructure::managed_authority::ManagedAuthority;
 pub struct Service {
     pub config: Config,
+    pub gateway_waiters: std::sync::Arc<tokio::sync::Semaphore>,
+    pub admission_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    pub control_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub authority: ManagedAuthority<State>,
 }
 impl Service {
     pub fn new(config: Config) -> Self {
         Self {
+            gateway_waiters: std::sync::Arc::new(tokio::sync::Semaphore::new(
+                config.limits.max_gateway_waiters,
+            )),
+            admission_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
+            control_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
             authority: ManagedAuthority::new(config.authority_root.clone()),
             config,
         }
     }
     pub fn inspect(&self, owner: &str, id: &str) -> Result<Demand, String> {
-        self.authority.update(|s| owned(s, owner, id).cloned())
+        self.authority.read(|s| owned(s, owner, id).cloned())
     }
     pub fn result(&self, owner: &str, id: &str) -> Result<Invocation, String> {
-        self.authority.update(|s| {
+        self.authority.read(|s| {
             s.data
                 .invocations
                 .get(id)

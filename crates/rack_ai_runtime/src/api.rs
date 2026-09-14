@@ -80,11 +80,25 @@ async fn handle(
             );
         }
     };
+    let slots = if matches!(request, Request::Acquire { .. } | Request::Infer { .. }) {
+        &service.admission_slots
+    } else {
+        &service.control_slots
+    };
+    let Ok(_permit) = slots.clone().try_acquire_owned() else {
+        return (
+            StatusCode::TOO_MANY_REQUESTS,
+            Json(json!({"schema":VERSION,"error":"capacity_api_workers"})),
+        );
+    };
     let result = tokio::task::spawn_blocking(move || execute(&service, (&source, request))).await;
     match result {
         Ok(Ok(value)) => (StatusCode::OK, Json(value)),
         Ok(Err(error)) => {
             let status = match error.as_str() {
+                "capacity_pending_global"
+                | "capacity_pending_reservation"
+                | "capacity_retained_evidence" => StatusCode::TOO_MANY_REQUESTS,
                 "not_found" => StatusCode::NOT_FOUND,
                 "source_spoofing" | "source_policy_denied" => StatusCode::FORBIDDEN,
                 "identity_conflict"

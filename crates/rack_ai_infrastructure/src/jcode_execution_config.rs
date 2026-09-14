@@ -36,6 +36,27 @@ impl JCodeExecutionConfig {
         Ok(Self { home_dir })
     }
 
+    /// Namespace a logical workspace attempt; HTTP retries keep the same namespace.
+    pub fn scope_call(&self, context: (&Path, &str), endpoint: &str) -> Result<(), String> {
+        if !endpoint.contains("/scoped/") {
+            return Ok(());
+        }
+        use sha2::{Digest, Sha256};
+        let encoded = serde_json::to_vec(&(context.0, context.1)).map_err(|e| e.to_string())?;
+        let key = format!("{:x}", Sha256::digest(encoded));
+        let path = self.home_dir.join(".jcode/config.toml");
+        let config = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let scoped = format!("{}/calls/{key}", endpoint.trim_end_matches('/'));
+        fs::write(
+            path,
+            config.replace(
+                &format!("base_url = \"{endpoint}\""),
+                &format!("base_url = \"{scoped}\""),
+            ),
+        )
+        .map_err(|e| e.to_string())
+    }
+
     pub fn home_dir(&self) -> &Path {
         self.home_dir.as_path()
     }

@@ -45,10 +45,10 @@ and access capability. Read the current record before new dispatch.
 
 Invocation states are `accepted`, `started`, `completed`, `cancelled`, `expired`, and
 `uncertain`. Accepted requests may wait during hold or capacity contention, until their
-bounded deadline. Started is persisted before any possible backend call. Receiver death in
+`waiting_deadline`. Optional `wait_seconds` (default: administrator `limits.max_wait_seconds`, at most 86400) bounds admission/capacity/hold waiting independently of `timeout_seconds`. Reservation expiry and cancellation still win. `execution_deadline` is set only when dispatch begins, to `started + timeout_seconds`; readiness probing and hold time do not spend that execution budget. Started is persisted before any possible backend call. Receiver death in
 that interval is uncertain even if the backend might not have received the request. Unknown
 outcomes are never automatically replayed, including workspace tools. Cancellation after
-start is a durable request to drain, not a fabricated proof that computation stopped.
+start persists typed `cancellation: {requested_at}`. Repeated cancellation preserves that intent. A known late successful response becomes `cancelled`, with `result: null` and output in `late_result`. An unknown outcome remains `uncertain` with cancellation intent retained, including after receiver restart. Neither state claims the backend was stopped. A completed response that won the race before cancellation remains completed.
 
 ## Limits, protocols and errors
 
@@ -58,7 +58,7 @@ reservation immediately before dispatch. The basic request contains a prompt and
 output/time limits. `payload`, when present, carries a qualified Chat Completions or Responses
 body without dropping tool definitions, structured-output settings or conversation messages.
 Input uses a conservative UTF-8 byte bound against the qualified context envelope; outputs
-are explicitly bounded. HTTP request bodies are limited to 1 MiB, backend responses to 4 MiB.
+are explicitly bounded. HTTP request bodies are limited to 1 MiB. Each accepted invocation freezes its response byte bound (default 256 KiB; administrator maximum 4 MiB).
 Backend calls have connect and overall deadlines and no automatic retry.
 
 The owner also receives `gateway_path`: append `/chat/completions` or `/responses` to that
@@ -68,9 +68,11 @@ permits RackAI's existing JCode provider configuration to target a scoped endpoi
 keeping JCode inside the existing bounded workspace transaction. The Unix/TCP bridge carries
 that path unchanged. Direct review/recovery clients can use the same scoped base URL.
 The gateway enforces qualified protocols and output bounds. For existing JCode/review clients that omit an output bound, it supplies the frozen profile maximum before recording and dispatching the complete request; explicit bounds cannot exceed that maximum. An `Idempotency-Key`
-identifies a deliberate invocation. Without it, the complete protocol payload digest is the
-stable identity: identical payloads replay the same durable result rather than invoke twice.
-For a deliberate second identical request, supply a new key.
+identifies one logical invocation **within an owner and reservation**. Repeating the key and the same request reconciles its durable result; changed payload or bounds conflict. Distinct deliberate identical invocations use distinct explicit keys. The same explicit key on a restored reservation reconciles the original invocation after current-capability authentication; a fresh reservation has a distinct identity scope. Raw infer replay also verifies any supplied replacement generation against the current reservation.
+
+Headerless calls conservatively reconcile equal payloads within one activation. Their fallback identity includes generation; a restored activation cannot collide with a completed unrelated call. Headerless clients cannot distinguish two deliberate identical calls in one activation: they must provide an explicit identity or use the RackAI-owned compatibility scope. Never change an identity just because an HTTP attempt timed out. An uncertain invocation remains uncertain and is never redispatched.
+
+RackAI's JCode harness writes a `/calls/<logical-scope>` suffix into its private scoped provider configuration, derived from the workspace path and task. Within this scope the complete protocol payload identifies a model turn; retries preserve the scope, and distinct workspace transactions have distinct scopes even for identical payloads. Model turns with changed conversation/tool messages have distinct payload identities. Two deliberately identical turns within the same task require explicit distinct keys; they cannot be inferred from transport attempts. The direct reviewer supplies a stable explicit key derived from its full campaign/step/evidence prompt. No companion application changes are required. The sandbox bridge continues to carry the scoped path and raw JCode/review/recovery endpoints remain fenced.
 
 Qualified SSE is retained and returned as a bounded buffered event stream. Incremental
 first-token delivery is not claimed. Unqualified streaming/protocol requests fail closed.
@@ -79,7 +81,7 @@ the existing workspace executor, path controls, command evidence and semantic re
 
 HTTP 401 means authentication failure; 403 means source spoofing/policy failure; 404 means
 unknown or another owner's record; 409 means identity, generation or reservation-state
-conflict. Invalid typed requests use 400/422; oversized bodies use 413. Acquisition priority,
+conflict. HTTP 429 carries precise capacity codes: `capacity_pending_global`, `capacity_pending_reservation`, `capacity_retained_evidence`, `capacity_gateway_waiters`, or `capacity_api_workers`. Invalid typed requests use 400/422; oversized bodies use 413. Acquisition priority,
 qualification and resource denials are durable HTTP-200 decisions with `state:"denied"`.
 Transport/receiver errors are not evidence of a denial or a completed invocation: reconcile
 by replaying the exact acquisition/submission identity. `recovery_required` preserves claims;
@@ -120,12 +122,22 @@ A shared ComfyUI unit must have `MemoryMax` no greater than its reserved host bu
 `MemorySwapMax=0`, and a finite `CPUQuota` no greater than the profile limit. The adapter
 checks these administrator-owned settings and the frozen `media_config_sha256`/Python executable binding; it does not rewrite the permanent unit.
 
-`response.schema.json` defines all public success records; `error.schema.json` defines
-versioned errors, including typed JSON rejection details. The canonical managed document
-is bounded to 32 MiB. Reaching that retained-evidence bound refuses further mutations;
-there is no automatic deletion of decisions or uncertain work. Plan an explicit quiescent
-archive/migration before sustained production use. Raw backend output remains bounded;
-reported token usage exceeding the request limit is uncertain, not successful execution.
+`response.schema.json` defines all public success records; `error.schema.json` defines versioned errors. Status/result inspection reads an atomic snapshot and never rewrites the authority file. Mutations retain the shared authority lock and compare one encoding against the retained bytes; unchanged mutations skip the durable write. The supervisor first uses a read-only wakeup check, so stable retained history does not take the mutation lock each tick. All resulting ownership and priority decisions are rechecked under that lock.
+
+Validated `limits` bound pending invocations (Accepted plus Started), per-reservation pending work, active dispatch workers, lifecycle workers, gateway waiters, waiting time, response bytes and admission storage. Defaults are published in `config.example.json`. Dispatch workers are considered only for active Ready reservations that own every resource and have no Started/Uncertain invocation; file permits are obtained before spawning. Held work creates no dispatch workers. Admission and control HTTP work have separate bounded slots; gateway waiting is asynchronous.
+
+The canonical document remains bounded to 32 MiB. New acquisition decisions and invocations are refused **before** exhausting that bound: default admission ceiling 30 MiB, including retained bytes plus reserved future output/cleanup capacity. Each pending invocation reserves six times its frozen response bound (worst-case JSON escaping) plus 16 KiB for envelope, cancellation and diagnostics. Each reservation reserves 64 KiB plus profile and victim/claim growth. This intentionally conservative allowance may refuse work well below 30 MiB; terminal records and denied acquisitions consume retained capacity too. Idempotent replay is still available at capacity. Previously accepted completion/cancel/release transitions do not pass through new-work admission and retain their reserved headroom. Nothing is automatically deleted, and ownership checks are unchanged. Legacy on-disk `deadline` fields load as bounded waiting deadlines; legacy response bounds remain 4 MiB rather than silently shrinking accepted output allowances.
+
+Actual I/O failure is separate from a capacity refusal. Failed writes do not commit partial state; a lost completion leaves Started durable, and restart makes it Uncertain. Claims stay fenced until the existing ownership/recovery path proves cleanup. An unavailable disk cannot promise successful terminal persistence merely because logical capacity was reserved.
+
+### Retention operational procedure
+
+1. Monitor retained authority size and `capacity_retained_evidence`; stop new submissions when the ceiling refuses admission. Continue authenticated inspect/reconcile, cancel eligible pending work, and release each owner's reservations. Permit bounded Started work to finish. Do not retry uncertain work under new identities.
+2. Verify all accepted work has terminal durable evidence, no unresolved Started/Uncertain operations remain, all affected owned processes have proven cleanup, and the canonical claims map is empty. If any check fails, keep the authority fenced and use its recovery procedure; a timeout is not proof of release.
+3. After quiescence, stop this receiver and take a permission-preserving, checksum-verified copy of the entire authority directory, including release receipts and ownership evidence, to operator-controlled immutable storage. Retain the original canonical document and identity history. Do not truncate `managed.json`, discard invocations, clear claims, or start an empty authority behind the same credentials.
+4. This PR provides safe admission stopping, not automatic compaction or a new archive lookup protocol. At the ceiling, leave new-work admission stopped until a separately reviewed migration preserves owner-scoped acquisition/invocation reconciliation and proves no unresolved effects. The finite-capacity service can still finish and release already accepted work. A preexisting authority from an older implementation without reserved headroom must be quiesced and capacity-reviewed before upgrade; no production upgrade is performed by this PR.
+
+The near-capacity integration test lowers the same admission threshold to 512 KiB, fills it through real bounded backend results, then proves original held work completes and all claims release after precise refusal. A separate 32 MiB authority test exercises the hard storage boundary without evidence deletion. Filesystem permission failure is injected separately; it is not mislabeled as logical capacity pressure.
 
 Definitive acquisition denial reasons use these stable codes/prefixes:
 

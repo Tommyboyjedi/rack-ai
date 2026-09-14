@@ -4,6 +4,7 @@ fn unique<T: Ord>(items: impl Iterator<Item = T>, count: usize) -> bool {
     items.collect::<BTreeSet<_>>().len() == count
 }
 pub fn validate(c: &Config) -> Result<(), String> {
+    c.limits.validate()?;
     let address: std::net::SocketAddr = c.listen.parse().map_err(|_| "invalid listen address")?;
     if c.schema != VERSION
         || !address.ip().is_loopback()
