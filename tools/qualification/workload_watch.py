@@ -62,7 +62,9 @@ class WorkloadWatch:
                     raise RuntimeError('managed workload registration evidence unavailable')
                 return dict(status='awaiting_registration')
             sample = self.probe.read(self.target, self.retiring)
-            if sample['status'] in ('active','retiring'):
+            if self.fingerprint is not None and sample.get('cgroup',self.fingerprint[0])!=self.fingerprint[0]:
+                raise RuntimeError('managed cgroup replaced')
+            if 'cgroup_identity' in sample:
                 fingerprint = (sample['cgroup'],tuple(sample['cgroup_identity']))
                 if self.fingerprint is not None and self.fingerprint != fingerprint:
                     raise RuntimeError('managed cgroup replaced')

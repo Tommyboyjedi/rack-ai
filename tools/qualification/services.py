@@ -42,6 +42,21 @@ def validate_mounts(containers):
                 raise RuntimeError('restoration blocked: missing bind source for '
                                    + name + ': ' + mount['Source'])
 
+
+def mount_configuration(mounts):
+    required={'Type','Source','Destination','Mode','RW','Propagation'}
+    if not isinstance(mounts,list):
+        raise ValueError('invalid Docker Mounts evidence')
+    normalized=[]
+    for mount in mounts:
+        if (not isinstance(mount,dict) or not required<=mount.keys()
+                or type(mount['RW']) is not bool
+                or any(not isinstance(mount[key],str) for key in required-{'RW'})):
+            raise ValueError('incomplete Docker Mounts evidence')
+        # Keep every field and duplicate count; only list ordering is irrelevant.
+        normalized.append(json.dumps(mount,sort_keys=True,separators=(',',':')))
+    return sorted(normalized)
+
 class Services:
     def __init__(self, directory):
         self.directory = directory
@@ -93,7 +108,10 @@ class Services:
             original = self.containers[name]
             current = json.loads(command(['docker','inspect',original['Id']]))[0]
             for field in ('Id','Image','Config','HostConfig','Mounts'):
-                if current[field] != original[field]:
+                actual, expected = current[field], original[field]
+                if field=='Mounts':
+                    actual, expected = mount_configuration(actual), mount_configuration(expected)
+                if actual != expected:
                     raise RuntimeError('container configuration changed: ' + name + ' ' + field)
             command(['docker','start',original['Id']])
         deadline = time.monotonic() + 600

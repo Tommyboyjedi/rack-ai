@@ -5,7 +5,10 @@ window. They are **not live-qualified**. The earlier cache-preflight blocker
 was repaired by the operator before the first actual managed GPT-OSS launch.
 That launch exposed the memory-signal and transient-cleanup findings documented
 in [the PR35 correction handoff](../../docs/pr35-memory-cleanup-handoff.md).
-No new launch was performed to verify these corrections. A new window still
+Configuration #2 subsequently failed GPU placement and exposed two harness
+defects. [The config #2 handoff](../../docs/pr35-config2-harness-handoff.md)
+documents trusted owned-exit classification and order-independent mount
+comparison. No new launch was performed to verify these corrections. A new window still
 requires separate authorization and proof of original model restartability.
 
 `cases.py` fixes checkable answers before model output: dependency timing,
@@ -67,6 +70,11 @@ from an established workload aborts immediately. Cgroup MemoryMax must match the
 profile, and MemorySwapMax must remain zero. Explicit retirement is observed until
 the matching durable cleanup receipt; it never permits the monitor to clear claims.
 Loading and artifact hashing are distinguished from inference disk activity.
+Exact owned startup exits use trusted invocation-scoped systemd journal evidence
+and retain `backend-exit.json`; unexplained loss or identity changes still fail
+monitor integrity checks. A backend failure is terminal and does not prove cleanup.
+Restoration compares complete Docker mount records without depending on list order;
+all mount fields and the other container identity checks remain enforced.
 Signals and ordinary errors enter managed cancellation/cleanup. Claims or
 uncertain cleanup prevent original GPU consumers from restarting; the receiver
 is retained for reconciliation. SIGKILL or host loss cannot promise immediate
@@ -98,6 +106,6 @@ python3 -m unittest discover -s tools/qualification -p 'test_*.py'
 
 Raw evidence, credentials, builds, model files and private configs stay outside
 Git. This experiment permits at most three documented launch configurations;
-the historical preflight consumed zero, and the later first managed launch
-consumed one. Configuration #2 remains NOT_RUN. It authorizes no additional model,
+the historical preflight consumed zero, and configurations #1 and #2 have
+subsequently been attempted by the operator. Configuration #3 remains NOT_RUN. It authorizes no additional model,
 competing-priority live scenario, application integration or production rollout.

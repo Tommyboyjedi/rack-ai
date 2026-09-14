@@ -5,6 +5,7 @@ import json
 import subprocess
 import threading
 import time
+from client import save
 from workload_watch import WorkloadLimits, WorkloadWatch, memory_failure
 
 @dataclass(frozen=True)
@@ -43,6 +44,8 @@ class Monitor:
         self.limits = limits
         self.finished = threading.Event()
         self.failure = None
+        self.exit_lock = threading.Lock()
+        self.exit_recorded = False
         self.phase = 'loading'
         self.workload = WorkloadWatch(limits.workload)
         self.initial = snapshot()
@@ -73,7 +76,10 @@ class Monitor:
             previous = value
             output.write(json.dumps(value) + '\n')
             output.flush()
-            self.failure = memory_failure(value['workload'], self.limits.workload)
+            failure = memory_failure(value['workload'], self.limits.workload)
+            if failure:
+                self.failure = failure
+            self.backend_exit(value['workload'])
             if pressure_samples >= self.limits.thrash_samples:
                 self.failure = 'sustained inference page-in pressure'
             if value['available_mib'] < self.limits.minimum_available_mib:
@@ -87,6 +93,26 @@ class Monitor:
             if self.failure:
                 return
             self.finished.wait(2)
+
+    def backend_exit(self, sample):
+        if sample['status']!='exited':
+            return
+        with self.exit_lock:
+            phase='startup' if self.phase=='loading' else 'execution'
+            if not self.exit_recorded:
+                save(self.directory/'backend-exit.json',dict(sample,phase=phase))
+                self.exit_recorded=True
+            evidence=sample['exit_evidence']
+            self.failure=(f"managed backend {phase} failure: "
+                          f"{evidence['EXIT_CODE']} status={evidence['EXIT_STATUS']}")
+
+    def activation_failure(self):
+        # The authority may observe exit before the sampling thread does.
+        try:
+            self.backend_exit(self.workload.sample())
+        except Exception as error:
+            self.failure='monitor failed: '+str(error)
+        self.check()
 
     def check(self):
         if self.thread.ident is not None and not self.thread.is_alive() and not self.finished.is_set() and not self.failure:

@@ -1,6 +1,16 @@
 # GPT-OSS-120B qualification history
 
-## Current handoff: first managed launch and safety corrections
+## Current handoff: configuration #2 harness corrections
+
+The operator completed configuration #2. CUDA2 / RTX 2060 attempted a 7171.82
+MiB allocation and failed with CUDA out of memory; the exact managed process
+exited with status 1 during startup. That placement decision remains separate.
+See [the config #2 harness handoff](pr35-config2-harness-handoff.md) for corrected
+owned-exit classification, deterministic Docker mount restoration comparison,
+regressions and verification. No configuration #3 launch or live service change
+occurred in this correction task.
+
+## Configuration #1: first managed launch and safety corrections
 
 After the earlier preflight recorded below, the operator repaired the resident
 models onto `/srv/models/huggingface` and performed the first managed launch.

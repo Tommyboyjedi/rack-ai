@@ -42,6 +42,7 @@ class Lifecycle:
                 monitor.phase = 'inference'
                 return self.demand
             if self.demand['state'] in ('denied','recovery_required','released','expired'):
+                monitor.activation_failure()
                 raise RuntimeError('activation failed: ' + str(self.demand.get('reason')))
             time.sleep(1)
         raise TimeoutError('qualification startup deadline')
@@ -52,8 +53,9 @@ class Lifecycle:
             self.demand = self.client.call(dict(operation='acquire', request=request))
         current = self.client.call(dict(operation='inspect', reservation_id=self.demand['id']))
         process = current.get('process')
-        if process and process.get('unit'):
-            unit = process['unit']
+        target=self.monitor.workload.target if self.monitor else None
+        unit=process.get('unit') if process else target.unit if target else None
+        if unit:
             for filename, argv in (
                 ('backend-journal.txt', ['journalctl','--user','-u',unit,'--no-pager','-o','short-iso']),
                 ('runtime-limits.txt', ['systemctl','--user','show',unit,

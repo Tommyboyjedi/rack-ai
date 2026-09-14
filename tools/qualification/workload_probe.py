@@ -2,6 +2,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 import subprocess
+import time
+from backend_exit import (ExitEvidence, ProcessExited, ProcessStillRunning,
+                          JOURNAL_VISIBILITY_SECONDS, JOURNAL_POLL_SECONDS)
 
 @dataclass(frozen=True)
 class Workload:
@@ -58,15 +61,22 @@ class CgroupProbe:
         unit = checked_unit(target)
         if retiring and ending(unit) and not unit['ControlGroup']:
             return dict(status='tearing_down', unit=unit)
+        if not retiring and ending(unit):
+            return self.exited(target, unit)
         if (unit['InvocationID'] != target.invocation
                 or (unit['MainPID'] != str(target.pid) and not (retiring and ending(unit)))):
             raise ValueError('managed workload process unavailable or changed')
         try:
             return self.active(target, UnitObservation(unit, retiring))
-        except FileNotFoundError:
+        except (FileNotFoundError, ProcessExited) as missing:
             # Only explicit cancellation plus a verified ending unit explains
             # disappearing files. Permission failures and live-unit gaps fail.
             after = checked_unit(target)
+            if not retiring:
+                try:
+                    return self.exited(target, after)
+                except ProcessStillRunning:
+                    raise missing
             if retiring and ending(after) and not after['ControlGroup']:
                 return dict(status='tearing_down', unit=after)
             raise
@@ -96,6 +106,8 @@ class CgroupProbe:
             self.verify_process(target, str(relative))
         after = directory.stat()
         observed = checked_unit(target)
+        if not retiring and ending(observed):
+            return self.exited(target, observed)
         if ((identity.st_dev,identity.st_ino) != (after.st_dev,after.st_ino)
                 or (observed != unit and not (retiring and ending(observed)))):
             raise ValueError('managed cgroup changed during observation')
@@ -104,11 +116,36 @@ class CgroupProbe:
                       invocation=target.invocation,pid=target.pid)
         return values
 
+    def exited(self, target, unit):
+        evidence=ExitEvidence(self.roots)
+        evidence.process_exited(target)
+        unit=settled_exit_unit(target,unit)
+        value = evidence.read(target)
+        # A matching exit record never excuses a replaced unit or cgroup.
+        after = checked_unit(target)
+        if after != unit:
+            raise ValueError('managed unit changed during exit observation')
+        if unit['ControlGroup']:
+            relative=Path(unit['ControlGroup'])
+            if not relative.is_absolute() or relative==Path('/') or '..' in relative.parts:
+                raise ValueError('ambiguous managed cgroup path')
+            directory=(self.roots.cgroup/str(relative).lstrip('/')).resolve()
+            directory.relative_to(self.roots.cgroup.resolve())
+            value['cgroup']=str(relative)
+            try:
+                stat=directory.stat()
+                value['cgroup_identity']=[stat.st_dev,stat.st_ino]
+            except FileNotFoundError:
+                pass  # Exact exit is proven; physical cleanup remains a separate gate.
+        return value
+
     def verify_process(self, target, cgroup):
         root = self.roots.proc/str(target.pid)
         fields = (root/'stat').read_text().rsplit(') ',1)[1].split()
-        if fields[0]=='Z' or fields[19]!=target.start:
+        if fields[19]!=target.start:
             raise ValueError('managed process generation changed')
+        if fields[0]=='Z':
+            raise ProcessExited('managed process exited without classified evidence')
         if (self.roots.proc/'sys/kernel/random/boot_id').read_text().strip()!=target.boot:
             raise ValueError('managed process boot changed')
         if f'0::{cgroup}' not in (root/'cgroup').read_text().splitlines():
@@ -135,3 +172,13 @@ def checked_unit(target):
 
 def ending(unit):
     return unit['MainPID']=='0' and unit['ActiveState'] in ('deactivating','inactive','failed')
+
+
+def settled_exit_unit(target, unit):
+    deadline=time.monotonic()+JOURNAL_VISIBILITY_SECONDS
+    while not ending(unit):
+        if time.monotonic()>=deadline:
+            raise ValueError('owned process exited but managed unit state is ambiguous')
+        time.sleep(JOURNAL_POLL_SECONDS)
+        unit=checked_unit(target)
+    return unit
