@@ -154,3 +154,55 @@ Definitive acquisition denial reasons use these stable codes/prefixes:
 Transition `reason` and invocation `error` retain additional machine/protocol diagnostics.
 Clients must treat unknown diagnostics as blocked/uncertain and inspect the state;
 they must not parse arbitrary OS error prose as permission to retry or steal ownership.
+
+## Bounded workspace call lifetime
+
+The trusted RackAI JCode runner registers its workspace/task call namespace before
+starting the harness. `POST <gateway_path>/scopes/<namespace>` accepts typed
+`{"operation":"open","deadline_ms":<absolute Unix milliseconds>}` and
+`{"operation":"close"}` controls; success is HTTP 204. The deadline comes from the
+same workspace timeout budget as the runner's monotonic process deadline, captured
+before scope registration or harness setup. It does not replace either the per-call
+waiting deadline or execution budget. Its representation matches the existing
+workspace `TimeoutSeconds` range; zero/past and out-of-range deadlines are rejected.
+
+A scope is bound to one owner/reservation and retained durably. Repeating the same
+registration reconciles its original deadline and never extends or reopens it;
+changed registration data conflicts. JCode's private compatibility URL includes
+`/calls/<namespace>`. The gateway records the corresponding `workspace_scope` on
+inference and rejects missing, closed or expired scopes before admitting new work.
+This check and invocation admission share the authority transaction, so delayed
+HTTP submission cannot cross a committed closure. Existing invocation identities
+still reconcile; changing payload under one explicit identity still conflicts.
+
+On timeout or another runner exit, RackAI closes only that execution scope. Pending
+calls become Cancelled with typed intent. Scope expiry is independently enforced by
+supervisor reconciliation, dispatch eligibility and the final dispatch transaction.
+The Accepted-to-Started transaction is the dispatch boundary: closure winning that
+race prevents dispatch; a call already Started retains cancellation/drain/uncertainty
+evidence. A valid late backend response is retained as `late_result`, without an
+ordinary successful `result`. No model stop is claimed. Completion rechecks the scope
+fence. Calls belonging to other scopes and the shared reservation remain intact.
+
+The original capability can close only its registered scope after activation rotates;
+it cannot use that exception to register new scopes or invoke a stale model endpoint.
+A temporary HTTP disconnection does not close the scope or cancel accepted work.
+A valid, still-open workspace can therefore wait through preemption and execute once
+on restoration. Companion applications do not need to supply these controls.
+
+Scope controls use the bounded admission/control pools independently of gateway
+waiters. Scope registration applies retained-evidence admission and reserves 128
+additional bytes per retained scope for closure; no tombstone is deleted. Capacity
+refusal remains HTTP 429 `capacity_retained_evidence`. Read-only status/result calls
+remain read-only. Follow the existing retention procedure for the complete authority,
+including scope records.
+
+Registration must be acknowledged before JCode can start. A failed/unconfirmed close
+is an explicit workspace failure retained in the terminal packet. If storage is
+unwritable at timeout, the previously committed deadline still forbids late dispatch;
+the cancellation record is reconciled when durable storage recovers. Receiver restart
+does not reopen scopes or replay uncertain calls. An abruptly lost runner may leave
+its scope open until the registered deadline; transport loss itself is not authority
+to cancel. This change does not retroactively associate pre-upgrade unscoped calls
+with workspace executions; quiesce older runners before any separately authorized
+upgrade. No production upgrade or GPU qualification is performed here.

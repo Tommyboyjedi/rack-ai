@@ -1,5 +1,9 @@
 # PR35 correctness and robustness follow-up
 
+The subsequent [authoritative workspace timeout correction](pr35-workspace-timeout-handoff.md)
+reproduces and closes the remaining timeout propagation gap. The original counts below
+are historical and do not prove that additional case.
+
 Reviewed base: `b84db0f28b9cea10ba517d2907f83f006583ee84` on
 `design/priority-runtime-reservations`. All implementation, fixtures, builds and tests
 ran over SSH in `/srv/rack-ai/.worktrees/pr35`. No NUC code, companion applications,

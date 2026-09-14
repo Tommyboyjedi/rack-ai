@@ -26,6 +26,7 @@ impl Dispatch<'_> {
         })
         .ready(&candidate.1)?;
         let started = self.service.authority.update(|s| {
+            crate::workspace_scope::cancel_closed(s);
             let i = s
                 .data
                 .invocations
@@ -88,6 +89,7 @@ impl Completion<'_> {
         let (invocation, demand) = context;
         let id = &invocation.id;
         self.service.authority.update(|s| {
+            crate::workspace_scope::cancel_closed(s);
             let i = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
             if i.state != InvocationState::Started || i.activation != invocation.activation {
                 return Err("late_invocation_callback".into());

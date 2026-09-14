@@ -96,6 +96,8 @@ pub fn retention(s: &Document, limits: &Limits) -> Result<(), String> {
             .len() as u64;
         reserved = reserved.saturating_add(65536 + profile * 4 + s.data.demands.len() as u64 * 64);
     }
+    // Every retained scope reserves a bounded close timestamp, even without a submission.
+    reserved = reserved.saturating_add(s.data.workspace_scopes.len() as u64 * 128);
     if reserved > limits.retention_admission_bytes {
         return Err("capacity_retained_evidence".into());
     }

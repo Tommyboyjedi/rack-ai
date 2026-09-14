@@ -109,6 +109,60 @@ class ManagedWorkspace(unittest.TestCase):
         self.assertNotEqual(stale.get('acceptance_verdict'),'approved')
         self.assertEqual(r.counts('dispatch')['local-primary'],2)
 
+    def test_workspace_timeout_cancels_exact_pending_call_before_restoration(self):
+        r=self.rack;chat=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')
+        spec=self.spec('authoritative-timeout');spec['work_unit']['limits']['timeout_seconds']=3
+        child=self.launch(spec);pending=self.wait_pending()
+        self.assertEqual(pending['state'],'accepted');self.assertIsNone(pending['started'])
+        self.assertEqual(len(self.invocations()),1)
+        result=self.finish(child,False)
+        self.assertNotEqual(result.get('acceptance_verdict'),'approved')
+        self.assertIn('wall-clock timeout exceeded',Path(result['packet_path']).read_text())
+        self.assertGreater(pending['waiting_deadline'],time.time())
+        self.assertGreater(r.inspect(self.p)['deadline'],time.time())
+        r.release(chat);r.wait(self.p);time.sleep(2)
+        actual=self.invocations()[pending['id']]
+        print('timeout propagation evidence:',json.dumps(dict(invocation=actual,dispatches=r.counts('dispatch'))))
+        self.assertEqual(r.counts('dispatch')['local-primary'],0)
+        self.assertEqual(actual['state'],'cancelled');self.assertIsNone(actual['started'])
+        self.assertIsNotNone(actual['cancellation'])
+        self.assertFalse(r.inspect(self.p)['released'])
+        self.assert_proof(self.finish(self.launch(self.spec('unrelated-coder','coding'))),'local-coder')
+
+    def test_workspace_reports_cancellation_persistence_failure_without_late_dispatch(self):
+        r=self.rack;chat=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')
+        spec=self.spec('timeout-storage-failure');spec['work_unit']['limits']['timeout_seconds']=3
+        child=self.launch(spec);pending=self.wait_pending()
+        self.assertEqual(pending['state'],'accepted');self.assertIsNone(pending['started'])
+        authority=r.root/'authority';authority.chmod(0o500)
+        try:
+            result=self.finish(child,False)
+            packet=Path(result['packet_path']).read_text()
+            self.assertIn('wall-clock timeout exceeded',packet)
+            self.assertIn('workspace scope control persistence unconfirmed',packet)
+            self.assertEqual(self.invocations()[pending['id']]['state'],'accepted')
+        finally:authority.chmod(0o700)
+        r.release(chat);r.wait(self.p);time.sleep(1)
+        self.assertEqual(r.result(pending,'cancelled')['state'],'cancelled')
+        self.assertEqual(r.counts('dispatch')['local-primary'],0);self.assertFalse(r.inspect(self.p)['released'])
+
+    def test_workspace_timeout_during_actual_dispatch_retains_late_evidence(self):
+        # Delay only the disposable harness, then let a real backend finish after the workspace deadline.
+        (self.fixture/'src/harness-control.json').write_text(json.dumps(dict(pre_submit_delay=2.3)))
+        self.git('add','src/harness-control.json');self.git('commit','-m','delayed synthetic harness')
+        self.base=self.git('rev-parse','HEAD').strip()
+        self.rack.controls('local-primary',delay=.9,content='pub fn answer()->i32 { 42 }\n')
+        spec=self.spec('started-timeout');spec['work_unit']['limits']['timeout_seconds']=3
+        child=self.launch(spec);pending=self.wait_pending();deadline=time.monotonic()+2
+        while time.monotonic()<deadline and self.rack.counts('dispatch')['local-primary']!=1:time.sleep(.01)
+        self.assertEqual(self.rack.counts('dispatch')['local-primary'],1)
+        result=self.finish(child,False);self.assertIn('wall-clock timeout exceeded',Path(result['packet_path']).read_text())
+        actual=self.rack.result(pending,'cancelled')
+        self.assertIsNotNone(actual['started']);self.assertIsNotNone(actual['cancellation'])
+        self.assertIsNone(actual['result']);self.assertIsNotNone(actual['late_result'])
+        self.assertEqual(self.rack.counts('dispatch')['local-primary'],1)
+        self.assertFalse(self.rack.inspect(self.p)['released'])
+
     def test_identical_workspace_requests_have_distinct_invocations(self):
         one=self.finish(self.launch(self.spec('identical-one')));self.assert_proof(one,'local-primary')
         two=self.finish(self.launch(self.spec('identical-two')));self.assert_proof(two,'local-primary')
@@ -128,8 +182,7 @@ class ManagedWorkspace(unittest.TestCase):
         started=time.monotonic();result=self.finish(self.launch(timed),False)
         self.assertLess(time.monotonic()-started,8);self.assertNotEqual(result.get('acceptance_verdict'),'approved')
         self.assertEqual(self.rack.counts('dispatch')['local-primary'],1)
-        for i in self.invocations().values():
-            if i['state']=='accepted':self.rack.call('athba','cancel',invocation_id=i['id'])
-        self.rack.release(chat)
+        self.rack.release(chat);self.rack.wait(self.p);time.sleep(1)
+        self.assertEqual(self.rack.counts('dispatch')['local-primary'],1)
 
 if __name__=='__main__':unittest.main(verbosity=2)

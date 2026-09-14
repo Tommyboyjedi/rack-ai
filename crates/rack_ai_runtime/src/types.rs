@@ -79,6 +79,8 @@ pub struct Inference {
     pub timeout_seconds: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wait_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_scope: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -123,6 +125,8 @@ pub struct State {
     pub gateway_port: Option<u16>,
     pub demands: BTreeMap<String, Demand>,
     pub invocations: BTreeMap<String, Invocation>,
+    #[serde(default)]
+    pub workspace_scopes: BTreeMap<String, crate::workspace_scope::WorkspaceScope>,
 }
 pub type Document = rack_ai_infrastructure::managed_authority::AuthorityDocument<State>;
 pub fn now() -> u64 {

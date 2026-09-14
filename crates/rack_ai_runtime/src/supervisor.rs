@@ -16,6 +16,7 @@ impl Reconsideration<'_> {
             return Ok(());
         }
         self.service.authority.update(|s| {
+            crate::workspace_scope::cancel_closed(s);
             for d in s.data.demands.values_mut() {
                 let receipt = self
                     .service
@@ -189,13 +190,14 @@ impl Supervisor {
 // Every mutation and priority/ownership decision is rechecked under update's lock.
 fn pending_changes(service: &Service, s: &Document) -> bool {
     s.data.invocations.values().any(|i| {
-        i.state == InvocationState::Accepted
-            && (i.waiting_deadline <= now()
-                || !s
-                    .data
-                    .demands
-                    .get(&i.request.reservation_id)
-                    .is_some_and(active))
+        crate::workspace_scope::needs_cancel(s, i)
+            || i.state == InvocationState::Accepted
+                && (i.waiting_deadline <= now()
+                    || !s
+                        .data
+                        .demands
+                        .get(&i.request.reservation_id)
+                        .is_some_and(active))
     }) || s.data.demands.values().any(|d| {
         (!d.released
             && service

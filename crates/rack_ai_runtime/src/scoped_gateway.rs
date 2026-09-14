@@ -159,6 +159,10 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
             )
         )
     });
+    let workspace_scope = call
+        .namespace
+        .as_ref()
+        .map(|namespace| crate::workspace_scope::key(&d.id, namespace));
     (crate::inference::Submission { service }).submit(
         &d.owner,
         Inference {
@@ -171,11 +175,12 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
             max_tokens,
             timeout_seconds: d.profile.inference_seconds,
             wait_seconds: None,
+            workspace_scope,
             payload: Some(payload),
         },
     )
 }
-fn failure(error: String) -> axum::response::Response {
+pub(crate) fn failure(error: String) -> axum::response::Response {
     let status = if error.starts_with("capacity_") {
         StatusCode::TOO_MANY_REQUESTS
     } else {

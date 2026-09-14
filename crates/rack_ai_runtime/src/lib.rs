@@ -24,3 +24,6 @@ pub mod media_limits;
 
 pub mod capacity;
 pub mod workers;
+
+pub mod workspace_scope;
+pub mod workspace_scope_api;

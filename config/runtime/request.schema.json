@@ -125,6 +125,14 @@
           ],
           "minimum": 1,
           "maximum": 86400
+        },
+        "workspace_scope": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "RackAI registered workspace execution scope; closed or missing scopes cannot admit new work."
         }
       },
       "required": [

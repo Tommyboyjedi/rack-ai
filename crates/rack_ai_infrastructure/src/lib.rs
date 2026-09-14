@@ -109,3 +109,5 @@ pub mod managed_lease;
 
 #[cfg(test)]
 mod managed_dispatch_test_fixture;
+
+mod workspace_call_scope;

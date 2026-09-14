@@ -17,6 +17,7 @@ impl Submission<'_> {
                 }
                 return if i.request == retry { Ok(i.clone()) } else { Err("identity_conflict".into()) };
             }
+            if !crate::workspace_scope::permits(s, &request) { return Err("workspace_scope_closed_or_unknown".into()); }
             let d = owned(s, owner, &request.reservation_id)?;
             if d.profile.backend == crate::config::Backend::Comfyui { return Err("use_versioned_media_interface".into()); }
             if !active(d) || !matches!(d.state, DemandState::Ready | DemandState::Held | DemandState::Preparing | DemandState::Draining) { return Err("reservation_not_dispatchable".into()); }

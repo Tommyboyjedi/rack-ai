@@ -47,6 +47,10 @@ pub fn router(service: Arc<Service>) -> Router {
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
         )
+        .route(
+            "/scoped/{id}/{generation}/v1/scopes/{namespace}",
+            post(crate::workspace_scope_api::handle),
+        )
         .layer(DefaultBodyLimit::max(1024 * 1024))
         .with_state(service)
 }

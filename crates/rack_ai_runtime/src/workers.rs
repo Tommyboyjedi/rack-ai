@@ -10,6 +10,7 @@ use std::{
 pub fn eligible(s: &Document, i: &Invocation) -> bool {
     i.state == InvocationState::Accepted
         && i.waiting_deadline > now()
+        && crate::workspace_scope::permits(s, &i.request)
         && s.data
             .demands
             .get(&i.request.reservation_id)
