@@ -41,7 +41,10 @@ class HostingTests(unittest.TestCase):
                     r.wait(d,'recovery_required')
                     r.release(d);r.wait(d,'released')
                     return
-                if fault=='release':
+                if fault in ('release', 'uncertain-release'):
+                    if fault == 'uncertain-release':
+                        r.controls('local-primary', uncertain=True)
+                        r.result(r.infer(d), 'uncertain')
                     (root/'faults.json').write_text(json.dumps({'foreign_pid':os.getpid()}))
                     r.release(d); failed=r.wait(d,'recovery_required')
                     self.assertIn('gpu_cleanup',failed['reason'])
@@ -63,6 +66,7 @@ class HostingTests(unittest.TestCase):
     def test_per_device_memory_fails_before_effects(self):self.exercise('systemd','memory')
     def test_foreign_gpu_process_is_never_stopped(self):self.exercise('systemd','foreign')
     def test_uncertain_release_keeps_claims(self):self.exercise('systemd','release')
+    def test_uncertain_output_with_foreign_gpu_keeps_claims(self):self.exercise('systemd','uncertain-release')
 
     def test_already_exited_owned_container_can_be_released(self):self.exercise('docker','exited')
 

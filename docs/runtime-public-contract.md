@@ -206,3 +206,16 @@ its scope open until the registered deadline; transport loss itself is not autho
 to cancel. This change does not retroactively associate pre-upgrade unscoped calls
 with workspace executions; quiesce older runners before any separately authorized
 upgrade. No production upgrade or GPU qualification is performed here.
+
+### Bounded retirement after uncertain output
+
+An explicit release/cancel or reservation expiry bounds backend draining. After
+that drain deadline, RackAI may stop its verified owned backend, using the same
+process, cgroup and GPU cleanup checks. If a live dispatcher still owes a durable
+callback, claims remain until it records its late response or uncertain transport
+result. An already uncertain invocation stays uncertain, including its original
+submission identity and cancellation evidence; shutdown does not fabricate an
+answer or reduce its dispatch count. Proven process cleanup permits reservation
+release without resolving the unknown answer. Failed ownership/cleanup or storage
+proof retains the resource fence. This does not change competing-priority victim
+drain policy or permit replay of uncertain work.

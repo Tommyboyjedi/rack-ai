@@ -10,12 +10,23 @@ pub struct Retirement<'a> {
 impl Retirement<'_> {
     pub fn run(&self, d: &Demand) -> Result<(), String> {
         let r = self.service;
-        if r.authority.read(|s| Ok(inflight(s, &d.id)))? {
-            return if now() >= d.transition_deadline {
-                Err("drain_deadline_invocation_uncertain".into())
-            } else {
-                Ok(())
-            };
+        let (pending, started) = r.authority.read(|s| {
+            Ok((
+                inflight(s, &d.id),
+                s.data.invocations.values().any(|i| {
+                    i.request.reservation_id == d.id && i.state == InvocationState::Started
+                }),
+            ))
+        })?;
+        // An explicit retirement bounds draining, not the truth of the result.
+        // Stop only the verified owned backend; keep claims until the live
+        // dispatcher has recorded its late response or uncertain transport result.
+        if pending && now() < d.transition_deadline {
+            return Ok(());
+        }
+        if started {
+            Hosting { config: &r.config }.stop(d)?;
+            return Ok(());
         }
         if d.effect_started && d.process.is_none() {
             return Err("start_outcome_unknown".into());

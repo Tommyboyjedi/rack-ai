@@ -1,6 +1,11 @@
 # RackAI-only live qualification and rollback plan
 
-No disruptive window has been authorized. This plan does not enable production preemption
+The general competing-workload window below remains unauthorized. A separate
+2026-09-14 single-model GPT-OSS window was authorized but stopped before disruption
+because both original vLLM model-cache mounts were deleted; see
+[the single-model results](pr35-gpt-oss-120b-results.md). No candidate was loaded.
+
+The following is the earlier general plan. No disruptive competing-priority window has been authorized. This plan does not enable production preemption
 or cut over any application. All implementation evidence uses disposable synthetic clients,
 processes and machine-command fixtures. The qualification operator must use the same
 canonical reservation authority; no unmanaged llama-server or exclusive large-model mode.
