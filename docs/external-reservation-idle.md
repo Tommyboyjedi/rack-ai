@@ -316,3 +316,30 @@ The subsequent maintenance window enabled managed inference and corrected two li
 startup/ownership issues. See [the current cutover report](inference-reservation-cutover.md)
 for qualification, compatibility limits and rollback, and
 [the first deployment report](external-reservation-deployment.md) for media evidence.
+
+## PR36 focused reclamation correction
+
+Idle expiry still occurs after 1800 seconds without workload activity and enters
+Releasing before cleanup. Polling, renewal, heartbeats and model/VRAM residency do
+not extend it; active/uncertain in-flight work retains the existing safety fence.
+
+The systemd/Docker shutdown path now waits boundedly for GPU allocations to disappear
+after stopping the verified owned backend, rather than failing its first post-exit
+GPU probe. Process shutdown retains its existing stop bound; GPU cleanup gets one
+additional profile.stop_seconds window, polling every 100 ms. Claims remain held
+throughout. Persistent allocations produce gpu_cleanup_deadline and RecoveryRequired;
+GPU identity/probe errors still fail closed. No foreign process is terminated.
+
+Release no longer requires startup host-memory or free-VRAM headroom. Those checks
+remain mandatory before activation/restoration. Successful cleanup expires the idle
+reservation and lets the existing priority machinery restore valid held work.
+
+Tests use exact 1800-second timestamp expiry, resident systemd/Docker fixture processes,
+delayed GPU allocation release, low post-stop memory headroom, active inference, failed
+GPU cleanup and automatic restoration. No live recovery record is changed by this fix.
+
+Validation for this correction: 12 focused runtime tests and 2 subtests passed
+(including existing idle and foreign-ownership hosting regressions); all 366 offline
+workspace tests passed; strict runtime clippy and git diff --check passed.
+Independent read-only semantic review accepted the delta. Retained command logs
+are in evidence/idle-reclamation/ and are intentionally not committed.

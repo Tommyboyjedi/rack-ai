@@ -41,3 +41,5 @@ mod network;
 mod idle_tests;
 
 mod container_socket;
+
+mod gpu_cleanup;
