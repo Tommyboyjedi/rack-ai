@@ -14,7 +14,9 @@ impl Lifecycle<'_> {
                 Err("interrupted reservation intent requires reconciliation".into())
             }
             ServiceState::Starting => crate::startup::StartupObservation { runtime: r }.observe(),
-            ServiceState::Ready => self.ready(&state),
+            ServiceState::Ready => {
+                crate::ready_lifecycle::ReadyLifecycle { runtime: r }.tick(&state)
+            }
             ServiceState::Restarting => {
                 crate::restart_lifecycle::InteractiveRestart { runtime: r }.tick(&state)
             }
@@ -48,33 +50,6 @@ impl Lifecycle<'_> {
         };
         crate::activation::Activation { runtime: r }.begin(mode)
     }
-    fn ready(&self, state: &MediaState) -> Result<(), String> {
-        let r = self.runtime;
-        let s = &state.service;
-        self.verify(s)?;
-        self.authority(s)?;
-        let expired = state.sessions.iter().any(|x| {
-            Some(&x.id) == s.session.as_ref() && now() > x.created_at + r.config.session_seconds
-        });
-        let finish = if s.mode == Mode::Interactive {
-            !state
-                .sessions
-                .iter()
-                .any(|x| Some(&x.id) == s.session.as_ref() && !x.release_requested)
-                || expired
-        } else {
-            !state
-                .jobs
-                .iter()
-                .any(|j| !j.state.terminal() || j.cleanup_pending)
-                && now() >= s.last_busy + r.config.idle_seconds
-        };
-        if finish {
-            self.transition(ServiceState::Draining)?;
-        }
-        Ok(())
-    }
-
     pub fn verify(&self, service: &Service) -> Result<(), String> {
         let r = self.runtime;
         r.reservations

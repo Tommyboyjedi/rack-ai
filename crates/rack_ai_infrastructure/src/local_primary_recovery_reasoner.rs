@@ -50,6 +50,7 @@ impl LocalPrimaryRecoveryReasoner {
 
         let agent = config.new_agent();
 
+        let _dispatch = crate::endpoint_fence::EndpointFence::local(&self.endpoint)?;
         let mut response = agent
             .post(&self.endpoint)
             .send_json(&payload)
@@ -99,6 +100,18 @@ fn normalize_endpoint(endpoint: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::LocalPrimaryRecoveryReasoner;
+
+    #[test]
+    fn managed_dispatch_is_fenced_before_http() {
+        crate::managed_dispatch_test_fixture::exercise(
+            "local_primary_recovery_reasoner::tests::managed_dispatch_is_fenced_before_http",
+            |endpoint| {
+                let client = LocalPrimaryRecoveryReasoner::new(endpoint, "local-primary".into());
+                let error = client.call_api("must never dispatch", 1).unwrap_err();
+                assert!(error.contains("managed endpoint requires a scoped reservation"));
+            },
+        );
+    }
 
     #[test]
     fn local_default_targets_primary_endpoint() {

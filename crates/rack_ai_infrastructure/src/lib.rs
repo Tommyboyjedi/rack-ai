@@ -102,3 +102,12 @@ pub use worker_record::WorkerRecord;
 pub use workers_document::WorkersDocument;
 
 pub mod resource_reservations;
+
+pub mod endpoint_fence;
+pub mod managed_authority;
+pub mod managed_lease;
+
+#[cfg(test)]
+mod managed_dispatch_test_fixture;
+
+mod workspace_call_scope;

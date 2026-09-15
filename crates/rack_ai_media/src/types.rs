@@ -23,15 +23,10 @@ pub struct JobRequest {
     pub parameters: ImageParameters,
     pub timeout_seconds: u64,
     pub priority: Priority,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation: Option<crate::shared_job::MediaReservation>,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum Priority {
-    Low,
-    Medium,
-    High,
-    Paramount,
-}
+pub use rack_ai_application::GenericPriority as Priority;
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum JobState {
@@ -97,6 +92,8 @@ pub struct Session {
     pub created_at: u64,
     pub release_requested: bool,
     pub stopped: bool,
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

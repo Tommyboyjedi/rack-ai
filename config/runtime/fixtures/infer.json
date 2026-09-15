@@ -1,0 +1,13 @@
+{
+  "operation": "infer",
+  "request": {
+    "schema": "rack-ai/runtime/v1",
+    "submission_id": "synthetic-inference-1",
+    "reservation_id": "REPLACE_WITH_ACQUIRED_ID",
+    "generation": "REPLACE_WITH_CURRENT_GENERATION",
+    "profile_hash": "REPLACE_WITH_PROFILE_HASH",
+    "prompt": "Return a short fixture response.",
+    "max_tokens": 16,
+    "timeout_seconds": 5
+  }
+}

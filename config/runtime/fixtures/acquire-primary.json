@@ -1,0 +1,17 @@
+{
+  "operation": "acquire",
+  "request": {
+    "schema": "rack-ai/runtime/v1",
+    "source_system": "athba",
+    "work_id": "synthetic-work",
+    "acquisition_id": "primary-1",
+    "tag": "local-primary",
+    "priority": "low",
+    "capabilities": [
+      "reasoning"
+    ],
+    "context_tokens": 4096,
+    "ttl_seconds": 900,
+    "qualification": false
+  }
+}

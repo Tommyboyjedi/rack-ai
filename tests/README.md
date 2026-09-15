@@ -20,3 +20,8 @@ End-to-end and boundary tests for the rack integration live here.
 - `rack_campaign_live_model_smoke.sh`: opt-in (`RACK_AI_LIVE_SMOKE=1`) real two-step campaign proving `local-coder -> 8018/local-coder/minimal`, `local-primary -> 8017/local-primary`, JCode direct worker execution, and independent Rack AI Git/acceptance inspection. It retains its fixture, attempts, review packets, and transcripts and exits 2 when either local endpoint is unavailable.
 
 Python-only ad hoc harnesses were removed once the Rust-owned live path became the authoritative verification surface.
+
+PR35's `runtime/` suite adds RackAI-owned synthetic HTTP clients and controllable
+hosting processes for the production Rust authority. See `runtime/README.md` for
+isolated execution and `runtime/scenario.py` for A-F plus reverse takeover. It does
+not replace the existing Rust workspace/JCode transaction tests or qualify live GPUs.

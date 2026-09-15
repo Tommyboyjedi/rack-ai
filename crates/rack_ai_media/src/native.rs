@@ -67,6 +67,14 @@ pub async fn handle(State(app): State<WebState>, request: Request) -> Response {
         if let Some(message) = message {
             return Ok(Access::Temporary(message));
         }
+        let runtime = crate::runtime::Runtime::new((*read.config).clone())?;
+        crate::lifecycle::Lifecycle { runtime: &runtime }.verify(&state.service)?;
+        if let Some(handle) = &state.service.lease {
+            rack_ai_infrastructure::managed_lease::ManagedLease {
+                resources: &runtime.reservations,
+            }
+            .verify(handle, true)?;
+        }
         std::fs::read_to_string(&read.config.control_secret_file)
             .map(|s| Access::Ready(s.trim().to_string()))
             .map_err(|e| e.to_string())

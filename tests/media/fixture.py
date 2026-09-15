@@ -38,7 +38,15 @@ def wait_for(action, timeout=35):
 def receiver(root, configure=None):
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    ports = [port(), port(), port()]
+    # Hold all selections together so the kernel cannot return one port twice.
+    selected = [socket.socket() for _ in range(3)]
+    try:
+        for listener in selected:
+            listener.bind(("127.0.0.1", 0))
+        ports = [listener.getsockname()[1] for listener in selected]
+    finally:
+        for listener in selected:
+            listener.close()
     backend, api, native = [f"http://127.0.0.1:{p}" for p in ports]
     for name in ["output", "state", "resources", "bin"]:
         (root / name).mkdir()
@@ -92,7 +100,15 @@ def receiver(root, configure=None):
                 wait_for(lambda: requests.get(api + "/api/media/v1/status", headers={"Authorization": "Bearer " + CLIENT}, timeout=2).status_code == 200)
                 return replacement
             headers = {"Authorization": "Bearer " + CLIENT}
-            wait_for(lambda: requests.get(api + "/api/media/v1/status", headers=headers, timeout=2).status_code == 200)
+            def startup_ready():
+                if process.poll() is not None:
+                    raise AssertionError("Media receiver exited during fixture startup: " + (root / "receiver.log").read_text())
+                reply = requests.get(api + "/api/media/v1/status", headers=headers, timeout=2)
+                return reply.status_code == 200
+            try:
+                wait_for(startup_ready)
+            except Exception as error:
+                raise AssertionError(f"Media fixture startup failed: ports={ports}; receiver={(root / 'receiver.log').read_text()}; backend={(root / 'comfy.log').read_text()}") from error
             yield {"root": root, "api": api, "native": native, "backend": backend, "process": process,
                    "config": config, "headers": headers, "environment": environment, "restart": restart}
         finally:

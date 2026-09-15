@@ -158,18 +158,76 @@ fn run_with_root(
     root: &Path,
     allowed_paths: Option<&AllowedPaths>,
 ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+    let _direct_dispatch = if network_disabled {
+        None
+    } else {
+        Some(
+            crate::endpoint_fence::EndpointFence::local(runtime.endpoint())
+                .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?,
+        )
+    };
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
-    let mut prepared = build_command(
-        runtime,
-        task,
-        workdir,
-        root,
-        &execution_config,
-        network_disabled,
-        allowed_paths,
+    let deadline = crate::workspace_call_scope::WorkspaceDeadline::new(timeout_seconds)
+        .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?;
+    let scope = crate::workspace_call_scope::WorkspaceCallScope::open(
+        crate::workspace_call_scope::WorkspaceCallRequest {
+            endpoint: runtime.endpoint(),
+            workdir,
+            task,
+            deadline_ms: deadline.unix_ms,
+        },
     )
-    .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
+    .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?;
+    let result = (|| {
+        if let Some(scope) = &scope {
+            execution_config
+                .scope_call((runtime.endpoint(), scope.endpoint()))
+                .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?;
+        }
+        let prepared = build_command(
+            runtime,
+            task,
+            workdir,
+            root,
+            &execution_config,
+            network_disabled,
+            allowed_paths,
+        )
+        .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
+        run_prepared(
+            prepared,
+            ProcessContext {
+                deadline: deadline.instant,
+                worker_id: runtime.worker_id(),
+                network_disabled,
+            },
+        )
+    })();
+    if let Some(scope) = scope
+        && let Err(error) = scope.close()
+    {
+        return Err(match result {
+            Ok(output) => JCodeProcessFailure::new(error, output.stdout, output.stderr),
+            Err(failure) => JCodeProcessFailure::new(
+                format!("{}; {error}", failure.message),
+                failure.stdout,
+                failure.stderr,
+            ),
+        });
+    }
+    result
+}
+
+struct ProcessContext<'a> {
+    deadline: Instant,
+    worker_id: &'a str,
+    network_disabled: bool,
+}
+fn run_prepared(
+    mut prepared: PreparedCommand,
+    context: ProcessContext<'_>,
+) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
     prepared.command.process_group(0);
     let mut child = spawn_with_retry(&mut prepared.command).map_err(|error| {
         JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
@@ -190,9 +248,9 @@ fn run_with_root(
     })?);
     let status_result = wait_for_completion(
         &mut child,
-        timeout_seconds,
-        runtime.worker_id(),
-        network_disabled,
+        context.deadline,
+        context.worker_id,
+        context.network_disabled,
     );
     let stdout = collect_reader(stdout_handle);
     let stderr = collect_reader(stderr_handle);
@@ -203,7 +261,7 @@ fn run_with_root(
         return Err(JCodeProcessFailure::new(
             format!(
                 "jcode exited unsuccessfully for worker {}: {}",
-                runtime.worker_id(),
+                context.worker_id,
                 stderr.trim()
             ),
             stdout,
@@ -443,6 +501,8 @@ impl Drop for NetworkIsolationGuard {
 }
 
 fn bridge_unix_to_tcp(stream: UnixStream, target_port: u16) -> Result<(), String> {
+    let _dispatch =
+        crate::endpoint_fence::EndpointFence::local(&format!("http://127.0.0.1:{target_port}"))?;
     let upstream =
         TcpStream::connect(("127.0.0.1", target_port)).map_err(|error| error.to_string())?;
     let mut stream_read = stream.try_clone().map_err(|error| error.to_string())?;
@@ -567,22 +627,19 @@ fn write_executable(path: &Path, content: &str) -> Result<(), String> {
 
 fn wait_for_completion(
     child: &mut Child,
-    timeout_seconds: u32,
+    deadline: Instant,
     worker_id: &str,
     network_disabled: bool,
 ) -> Result<ExitStatus, String> {
-    let timeout_seconds = timeout_seconds.max(1);
-    let deadline = Instant::now() + Duration::from_secs(u64::from(timeout_seconds));
     loop {
-        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
-            return Ok(status);
-        }
         if Instant::now() >= deadline {
             terminate_execution(child, network_disabled)?;
             return Err(format!(
-                "jcode wall-clock timeout exceeded for worker {} after {} seconds",
-                worker_id, timeout_seconds
+                "jcode wall-clock timeout exceeded for worker {worker_id}"
             ));
+        }
+        if let Some(status) = child.try_wait().map_err(|error| error.to_string())? {
+            return Ok(status);
         }
         thread::sleep(Duration::from_millis(100));
     }
@@ -754,6 +811,27 @@ mod tests {
     use rack_ai_domain::AllowedPaths;
 
     use super::JCodeProcessRunner;
+
+    #[test]
+    fn managed_dispatch_is_fenced_before_jcode_start() {
+        crate::managed_dispatch_test_fixture::exercise(
+            "jcode_process_runner::tests::managed_dispatch_is_fenced_before_jcode_start",
+            |endpoint| {
+                let root = temp_root();
+                fs::create_dir_all(&root).unwrap();
+                let script = root.join("forbidden-jcode.sh");
+                let marker = root.join("started");
+                write_script(
+                    &script,
+                    &format!("#!/bin/sh\ntouch '{}'\n", marker.display()),
+                );
+                let runtime = coder_runtime(&script, &endpoint);
+                assert!(JCodeProcessRunner::run(&runtime, "never run", &root, 2, false).is_err());
+                assert!(!marker.exists());
+                fs::remove_dir_all(root).unwrap();
+            },
+        );
+    }
 
     #[test]
     fn passes_expected_arguments_and_collects_trace_output() {

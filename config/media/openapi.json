@@ -930,6 +930,24 @@
               "high",
               "paramount"
             ]
+          },
+          "reservation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "generation"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{32}$"
+              },
+              "generation": {
+                "type": "string",
+                "pattern": "^[a-f0-9]{32}$"
+              }
+            }
           }
         },
         "required": [

@@ -47,7 +47,7 @@
     {
       "id": "music-director",
       "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_DIRECTOR_CREDENTIAL",
-      "ceiling": "medium",
+      "ceiling": "paramount",
       "operator": false
     },
     {
@@ -55,11 +55,18 @@
       "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_ATHBA_CREDENTIAL",
       "ceiling": "medium",
       "operator": false
+    },
+    {
+      "id": "cb",
+      "token_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
+      "ceiling": "paramount",
+      "operator": false
     }
   ],
   "runtime": {
     "python": "/srv/comfyui/venv/bin/python",
     "script": "/srv/comfyui/ComfyUI/main.py",
     "directory": "/srv/comfyui/ComfyUI"
-  }
+  },
+  "reservation_idle_seconds": 1800
 }

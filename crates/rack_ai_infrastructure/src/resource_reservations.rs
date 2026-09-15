@@ -84,6 +84,19 @@ impl ResourceReservations {
         Ok(self.root.join("leases").join(format!("{id}.json")))
     }
     pub fn blocked(&self, resources: &[String]) -> Result<Vec<String>, String> {
+        let claims = crate::managed_authority::read_claims(&self.root)?;
+        let mut blocked = self.legacy_blocked(resources)?;
+        blocked.extend(
+            resources
+                .iter()
+                .filter(|id| claims.contains_key(*id))
+                .cloned(),
+        );
+        blocked.sort();
+        blocked.dedup();
+        Ok(blocked)
+    }
+    pub fn legacy_blocked(&self, resources: &[String]) -> Result<Vec<String>, String> {
         resources
             .iter()
             .filter_map(|id| match self.path(id) {
@@ -96,55 +109,26 @@ impl ResourceReservations {
             })
             .collect()
     }
+}
+
+impl ResourceReservations {
     pub fn acquire(&self, request: &ReservationRequest) -> Result<LeaseHandle, String> {
-        self.acquire_with(request, |path, data| atomic_write(path, data))
+        self.acquire_with(request, atomic_write)
     }
     fn acquire_with(
         &self,
         request: &ReservationRequest,
         write: impl Fn(&Path, &str) -> Result<(), String>,
     ) -> Result<LeaseHandle, String> {
-        let _lock = bounded_lock(&self.root.join("authority.lock"))?;
-        let unique: std::collections::BTreeSet<_> = request.resources.iter().collect();
-        if request.owner.is_empty() || unique.len() != request.resources.len() {
-            return Err("invalid reservation request".into());
-        }
-        if let Some(id) = self.blocked(&request.resources)?.first() {
-            return Err(format!("resource busy: {id}"));
-        }
-        let mut handle = LeaseHandle {
-            owner: request.owner.clone(),
-            generation: new_identity()?,
-            paths: BTreeMap::new(),
-        };
-        for id in &request.resources {
-            let path = self.path(id)?;
-            let record = ReservationRecord {
-                version: 1,
-                owner: handle.owner.clone(),
-                generation: handle.generation.clone(),
-                resource_id: id.clone(),
-                task_id: Some(request.owner.clone()),
-                worker_ids: request.worker_ids.clone(),
-                model_ids: request.model_ids.clone(),
-                acquired_at: Some(request.acquired_at.clone()),
-            };
-            // Include the attempted path: rename may have succeeded before directory fsync failed.
-            handle
-                .paths
-                .insert(id.clone(), path.to_string_lossy().into_owned());
-            if let Err(error) = serde_json::to_string(&record)
-                .map_err(|e| e.to_string())
-                .and_then(|json| write(&path, &json))
-            {
-                self.remove_owned(&handle)
-                    .map_err(|cleanup| format!("{error}; cleanup uncertain: {cleanup}"))?;
-                return Err(error);
-            }
-        }
-        Ok(handle)
+        ReservationAcquisition { authority: self }.acquire_with(request, write)
     }
+}
+
+impl ResourceReservations {
     pub fn verify(&self, handle: &LeaseHandle) -> Result<(), String> {
+        if (crate::managed_lease::ManagedLease { resources: self }).verify(handle, false)? {
+            return Ok(());
+        }
         for id in handle.paths.keys() {
             let record: ReservationRecord = serde_json::from_str(
                 &fs::read_to_string(self.path(id)?).map_err(|e| e.to_string())?,
@@ -161,6 +145,9 @@ impl ResourceReservations {
         Ok(())
     }
     pub fn release(&self, handle: &LeaseHandle) -> Result<(), String> {
+        if (crate::managed_lease::ManagedLease { resources: self }).request_release(handle)? {
+            return Ok(());
+        }
         ReservationRelease { authority: self }.execute(handle)
     }
     fn remove_owned(&self, handle: &LeaseHandle) -> Result<(), String> {
@@ -183,6 +170,58 @@ impl ResourceReservations {
         File::open(self.root.join("leases"))
             .and_then(|f| f.sync_all())
             .map_err(|e| e.to_string())
+    }
+}
+
+struct ReservationAcquisition<'a> {
+    authority: &'a ResourceReservations,
+}
+impl ReservationAcquisition<'_> {
+    fn acquire_with(
+        &self,
+        request: &ReservationRequest,
+        write: impl Fn(&Path, &str) -> Result<(), String>,
+    ) -> Result<LeaseHandle, String> {
+        let _lock = bounded_lock(&self.authority.root.join("authority.lock"))?;
+        let unique: std::collections::BTreeSet<_> = request.resources.iter().collect();
+        if request.owner.is_empty() || unique.len() != request.resources.len() {
+            return Err("invalid reservation request".into());
+        }
+        if let Some(id) = self.authority.blocked(&request.resources)?.first() {
+            return Err(format!("resource busy: {id}"));
+        }
+        let mut handle = LeaseHandle {
+            owner: request.owner.clone(),
+            generation: new_identity()?,
+            paths: BTreeMap::new(),
+        };
+        for id in &request.resources {
+            let path = self.authority.path(id)?;
+            let record = ReservationRecord {
+                version: 1,
+                owner: handle.owner.clone(),
+                generation: handle.generation.clone(),
+                resource_id: id.clone(),
+                task_id: Some(request.owner.clone()),
+                worker_ids: request.worker_ids.clone(),
+                model_ids: request.model_ids.clone(),
+                acquired_at: Some(request.acquired_at.clone()),
+            };
+            // Include the attempted path: rename may have succeeded before directory fsync failed.
+            handle
+                .paths
+                .insert(id.clone(), path.to_string_lossy().into_owned());
+            if let Err(error) = serde_json::to_string(&record)
+                .map_err(|e| e.to_string())
+                .and_then(|json| write(&path, &json))
+            {
+                self.authority
+                    .remove_owned(&handle)
+                    .map_err(|cleanup| format!("{error}; cleanup uncertain: {cleanup}"))?;
+                return Err(error);
+            }
+        }
+        Ok(handle)
     }
 }
 

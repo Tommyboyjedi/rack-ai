@@ -18,7 +18,7 @@ spec = importlib.util.spec_from_file_location("rack_gate", gate_path)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 authority = module.Authority({"authority": root / "authority.json", "secret": root / "control.secret"})
-gate = module.AdmissionGate(authority)
+gate = module.AdmissionGate(authority, {"clock": __import__("time").time, "busy": lambda: bool(pending)})
 history, pending = {}, {}
 dispatches = []
 invocation = ""
@@ -155,6 +155,8 @@ app.router.add_get("/history/{identity}", get_history)
 app.router.add_post("/api/jobs/{identity}/cancel", cancel)
 app.router.add_get("/rack-gate/status", queue)
 app.router.add_post("/rack-gate/barrier", queue)
+app.router.add_post("/rack-gate/idle", queue)
+app.router.add_post("/rack-gate/admit-job", queue)
 app.router.add_get("/", native)
 app.router.add_get("/ws", websocket)
 app.router.add_get("/assets/{name}", asset)

@@ -36,6 +36,19 @@ impl JCodeExecutionConfig {
         Ok(Self { home_dir })
     }
 
+    pub fn scope_call(&self, endpoints: (&str, &str)) -> Result<(), String> {
+        let path = self.home_dir.join(".jcode/config.toml");
+        let config = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        fs::write(
+            path,
+            config.replace(
+                &format!("base_url = \"{}\"", endpoints.0),
+                &format!("base_url = \"{}\"", endpoints.1),
+            ),
+        )
+        .map_err(|e| e.to_string())
+    }
+
     pub fn home_dir(&self) -> &Path {
         self.home_dir.as_path()
     }

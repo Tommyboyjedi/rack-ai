@@ -1058,6 +1058,7 @@ dependencies = [
  "rack_ai_domain",
  "serde",
  "serde_json",
+ "sha2",
  "ureq",
 ]
 
@@ -1085,6 +1086,22 @@ dependencies = [
  "tower",
  "tower-http",
  "uuid",
+]
+
+[[package]]
+name = "rack_ai_runtime"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "rack_ai_application",
+ "rack_ai_infrastructure",
+ "rack_ai_media",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "tokio",
 ]
 
 [[package]]

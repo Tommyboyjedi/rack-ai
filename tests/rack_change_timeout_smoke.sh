@@ -32,6 +32,8 @@ with open(path, "r", encoding="utf-8") as handle:
 for worker in document["workers"]:
     if worker["id"] == "local-coder":
         worker["entrypoint"] = entrypoint
+        # This disposable fixture specifically exercises the legacy implementer timeout.
+        worker["role"] = "implementer-tester"
 with open(path, "w", encoding="utf-8") as handle:
     json.dump(document, handle, indent=2)
     handle.write("\n")

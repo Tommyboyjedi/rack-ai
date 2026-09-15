@@ -10,6 +10,26 @@ pub struct Admission<'a> {
 }
 impl Admission<'_> {
     pub fn job(&self, principal: &Principal, request: JobRequest) -> Result<Job, String> {
+        JobAdmission {
+            config: self.config,
+            store: self.store,
+        }
+        .job(principal, request)
+    }
+    pub fn session(
+        &self,
+        principal: &Principal,
+        request: SessionRequest,
+    ) -> Result<Session, String> {
+        SessionAdmission { store: self.store }.session(principal, request)
+    }
+}
+struct JobAdmission<'a> {
+    config: &'a Config,
+    store: &'a Store,
+}
+impl JobAdmission<'_> {
+    pub fn job(&self, principal: &Principal, request: JobRequest) -> Result<Job, String> {
         if request.priority > principal.ceiling {
             return Err("forbidden: priority exceeds source ceiling".into());
         }
@@ -25,6 +45,11 @@ impl Admission<'_> {
                     Err("conflict: identity payload changed".into())
                 };
             }
+            crate::shared_job::SharedJob {
+                config: self.config,
+                store: self.store,
+            }
+            .authorize(principal, &request)?;
             profile::validate(&request, &self.config.profile)?;
             if state.jobs.iter().filter(|j| !j.state.terminal()).count()
                 >= crate::limits::ACTIVE_JOBS
@@ -54,10 +79,21 @@ impl Admission<'_> {
                 artifacts: vec![],
                 error: None,
             };
+            if let Some(binding) = &job.request.reservation {
+                crate::job_activity::JobActivity {
+                    config: self.config,
+                }
+                .admit(binding)?;
+            }
             state.jobs.push(job.clone());
             Ok(job)
         })
     }
+}
+struct SessionAdmission<'a> {
+    store: &'a Store,
+}
+impl SessionAdmission<'_> {
     pub fn session(
         &self,
         principal: &Principal,
@@ -99,6 +135,7 @@ impl Admission<'_> {
                 created_at: now(),
                 release_requested: false,
                 stopped: false,
+                terminal_reason: None,
             };
             state.sessions.push(session.clone());
             Ok(session)

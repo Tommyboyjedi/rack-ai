@@ -5,6 +5,21 @@ pub struct ImageDispatch<'a> {
 impl ImageDispatch<'_> {
     pub fn dispatch(&self, job: &Job) -> Result<(), String> {
         let r = self.runtime;
+        if let Err(error) = crate::profile::verify_checkpoint(&r.config.profile) {
+            return r.store.update(|s| {
+                let saved = s
+                    .jobs
+                    .iter_mut()
+                    .find(|j| j.id == job.id)
+                    .ok_or("job missing")?;
+                if !saved.state.terminal() {
+                    saved.state = JobState::Failed;
+                    saved.error = Some(error);
+                    saved.updated_at = now();
+                }
+                Ok(())
+            });
+        }
         let prepared = r.store.update(|s| {
             let j = s
                 .jobs
@@ -30,6 +45,14 @@ impl ImageDispatch<'_> {
         let Some(prepared) = prepared else {
             return Ok(());
         };
+        let service = r.store.read()?.service;
+        crate::lifecycle::Lifecycle { runtime: r }.verify(&service)?;
+        if let Some(handle) = &service.lease {
+            rack_ai_infrastructure::managed_lease::ManagedLease {
+                resources: &r.reservations,
+            }
+            .verify(handle, true)?;
+        }
         let result = r.backend.submit(&prepared);
         r.store.update(|s| {
             let j = s

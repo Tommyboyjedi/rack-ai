@@ -427,3 +427,15 @@ A selected v2 request persists a generic selection decision and must have execut
 `work_id`, `submission_id`, and `idempotency_key` are opaque. A submission-specific safe internal transaction identifier preserves distinct submissions for the same work ID. A repeat with the same persisted source/work/submission/idempotency identity is rejected before another execution.
 
 V1 remains readable with its historical singular `implementation` routing semantics. Rack AI never interprets a v1 packet as v2. This compatibility window remains until an explicitly versioned deprecation change. PR32 does not add client dependency scheduling, universal inference/media execution forms, ComfyUI arbitration, preemption, idle-worker overflow, or three-GPU scheduling.
+
+## PR35 boundary amendment
+
+RackAI-published logical tags and bounded pure inference are authorized alongside existing
+broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
+qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
+whole-request denial; already accepted held work is distinct from a denied acquisition.
+ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
+Implementation scope is RackAI only. Companion integrations and production cutover are
+deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths
+relative to the repository root). Existing workspace, evidence and review protections remain.
