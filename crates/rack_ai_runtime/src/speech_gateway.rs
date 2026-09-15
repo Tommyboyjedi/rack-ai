@@ -27,7 +27,9 @@ pub async fn handle(
         Err(_) => return failure("receiver_failure".into()),
     };
     let deadline =
-        std::time::Instant::now() + std::time::Duration::from_secs(crate::speech::MAX_SECONDS + 5);
+        std::time::Instant::now() + std::time::Duration::from_secs(
+            service.config.limits.max_wait_seconds + invocation.request.timeout_seconds + 2,
+        );
     loop {
         let copy = service.clone();
         let owner = invocation.owner.clone();
@@ -115,6 +117,14 @@ fn submit(
     if !voices.iter().any(|v| v == voice) {
         return Err("unknown_voice_id".into());
     }
+    // Internal admission defaults may change; reconciliation must retain the original budget.
+    let wait_seconds = service.authority.read(|s| {
+        Ok(s.data.invocations.values().find(|i| {
+            i.owner == d.owner
+                && i.request.reservation_id == d.id
+                && i.request.submission_id == key
+        }).and_then(|i| i.request.wait_seconds))
+    })?;
     (crate::inference::Submission { service })
         .submit(
             &d.owner,
@@ -128,7 +138,7 @@ fn submit(
                 payload: Some(payload),
                 max_tokens: 1,
                 timeout_seconds: d.profile.inference_seconds,
-                wait_seconds: Some(1),
+                wait_seconds,
                 workspace_scope: None,
             },
         )

@@ -89,4 +89,63 @@ class SpeechTests(unittest.TestCase):
                 r.release(failed);r.wait(failed,'released')
             finally:r.close()
 
+    def test_dispatch_wait_and_legacy_expiry_reconciliation(self):
+        import fcntl
+        import os
+        import time
+        from contextlib import ExitStack
+        def settings(c):
+            configure(c)
+            c['limits']={'max_wait_seconds':5}
+        with tempfile.TemporaryDirectory() as tmp:
+            r=Rack(tmp,settings)
+            try:
+                tts=r.wait(r.acquire('cb','local-tts','paramount'))
+                authority=r.root/'authority'
+                state_path=authority/'managed.json'
+                for key in ('queued','legacy'):
+                    with ThreadPoolExecutor() as pool:
+                        with ExitStack() as locks:
+                            # Occupy dispatch slots without changing reservation ownership.
+                            for index in range(4):
+                                f=locks.enter_context((authority/'worker-slots'/f'dispatch-{index}').open('a'))
+                                fcntl.flock(f,fcntl.LOCK_EX)
+                            pending=pool.submit(speech,r,tts,key)
+                            deadline=time.monotonic()+3
+                            record=None
+                            while time.monotonic()<deadline:
+                                doc=json.loads(state_path.read_text())
+                                record=next((i for i in doc['data']['invocations'].values()
+                                    if i['request']['submission_id']==key),None)
+                                if record:break
+                                time.sleep(.02)
+                            self.assertIsNotNone(record)
+                            self.assertEqual(record['state'],'accepted')
+                            if key=='queued':
+                                time.sleep(1.2)
+                                current=json.loads(state_path.read_text())['data']['invocations'][record['id']]
+                                self.assertEqual(current['state'],'accepted')
+                            else:
+                                # Persist an old one-second request that expired before dispatch.
+                                with (authority/'authority.lock').open('a') as lock:
+                                    fcntl.flock(lock,fcntl.LOCK_EX)
+                                    doc=json.loads(state_path.read_text())
+                                    old=doc['data']['invocations'][record['id']]
+                                    old['request']['wait_seconds']=1
+                                    old['waiting_deadline']=0
+                                    replacement=state_path.with_suffix('.fixture')
+                                    replacement.write_text(json.dumps(doc))
+                                    os.replace(replacement,state_path)
+                        status,body=pending.result()
+                        if key=='queued':
+                            self.assertEqual(status,200,body)
+                            self.assertEqual(speech(r,tts,key),(status,body))
+                        else:
+                            self.assertEqual(status,409,body)
+                            self.assertIn(b'speech_Expired:',body)
+                            self.assertEqual(speech(r,tts,key),(status,body))
+                self.assertEqual(r.counts('dispatch')[tts['model']],1)
+                r.release(tts);r.wait(tts,'released')
+            finally:r.close()
+
 if __name__=='__main__':unittest.main()

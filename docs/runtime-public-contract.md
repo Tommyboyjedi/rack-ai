@@ -302,3 +302,11 @@ blobs requires quiescent registry readers and the registration lock.
 Errors are small JSON `{"error":"code"}` without filesystem paths: 422 for invalid
 ID/form/filename/audio, 413 for an oversized file/body, 408 for an upload timeout,
 429 for admission/storage capacity, and 503 for unavailable/unsafe storage.
+
+### Speech dispatch wait
+
+Speech uses the existing runtime max_wait_seconds admission budget (300 seconds in
+the current deployment), independently of its 60-second synthesis timeout. The
+synchronous gateway allows queue time plus execution time. It does not impose a
+one-second dispatch deadline. Reconciliation preserves previously stored request
+budgets: a legacy expired identity remains expired and is never automatically retried.
