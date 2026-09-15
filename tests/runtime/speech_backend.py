@@ -2,15 +2,23 @@
 import runpy
 import sys
 from pathlib import Path
+registry = None
+if "--voices" in sys.argv:
+    index = sys.argv.index("--voices")
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]/"runtimes/chatterbox"))
+    from voices import Registry
+    registry = Registry(sys.argv[index+1])
+    del sys.argv[index:index+2]
 # Reuse the existing fixture's event/control lifecycle, changing only its protocol.
 source = (Path(__file__).with_name("backend.py")).read_text()
 source = source.replace("import http.server", "import http.server\nimport io\nimport wave")
 source = source.replace("self.reply({'data':", """if self.path == '/health':
-            self.reply(dict(model=model, activation=activation, sample_rate=24000, voices=['approved', 'second']))
+            self.reply(dict(model=model, activation=activation, sample_rate=24000, voices=list(registry.load()) if registry else ['approved', 'second']))
             return
         self.reply({'data':""")
 source = source.replace("assert request['model'] == model", """assert self.headers.get('Authorization') == 'Bearer '+activation
-        assert set(request) == {'text','voice'}""")
+        assert set(request) == {'text','voice'}
+        if registry: assert request['voice'] in registry.load()""")
 source = source.replace("if self.path=='/v1/responses':", """if self.path=='/speech':
             output=io.BytesIO()
             with wave.open(output,'wb') as wav:

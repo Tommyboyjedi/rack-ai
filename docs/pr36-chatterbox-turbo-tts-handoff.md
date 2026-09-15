@@ -49,7 +49,7 @@ Content-Type: application/json
 ```
 
 Success: bounded binary `audio/wav`, PCM16 mono 24000 Hz, with `Cache-Control: no-store`.
-No client temperature, paths, URLs, model, GPU, upload, or automatic retry fields.
+No client temperature, paths, URLs, model, GPU, or automatic retry fields in speech.
 `POST <gateway_path>/voices` with the same source authorization and `{}` returns
 `{"voices":["id",...]}`. It is available only on a Ready, owned TTS reservation.
 The capability, owner, profile, generation and all claims are verified; raw `infer` speech
@@ -170,3 +170,31 @@ Real GPU startup, normal watermarking during synthesis, selected-voice quality u
 dependencies, RTF and live automatic restoration remain unqualified. No production cutover
 or multi-GPU claim is made. Independent code acceptance and fake-service restoration are
 not substitutes for the required RTX 2060 proof.
+
+
+## Subsequent PR36 voice-registration extension
+
+The operator explicitly authorized an unauthenticated multipart upload endpoint:
+POST /runtime/v1/voices/register, with voice_id and file. It writes the same registered
+voice format without changing the TTS worker, model residency or reservation lifecycle.
+See the Voice registration section in runtime-public-contract.md for the exact request,
+validation, atomic replacement, existing storage configuration and finite retained-upload
+budget. The prior no-upload scope was superseded only for this minimal endpoint.
+
+### Registration validation
+
+- Focused registration, speech lifecycle and Python registry tests: **10 passed,
+  17 subtests passed** in 19.50 seconds.
+- Required workspace regression with isolated RACK_AI_RESOURCE_ROOT:
+  **366 passed**, zero failures.
+- Runtime Clippy with warnings denied and git diff --check: passed.
+- Independent semantic review: **ACCEPT**, including finite retained-upload storage.
+
+One intermediate run encountered the existing speech concurrency fixture returning 409
+instead of 429; it passed on both subsequent runs. Another exposed duplicate ephemeral
+ports in fixture configuration; the test helper now prevents assigning the same port to
+multiple profiles. Production endpoint/ownership validation remains unchanged.
+
+These are deterministic receiver/worker-registry checks using synthetic WAVs and a CPU
+backend fixture. This extension has not been deployed or GPU-qualified; production must
+configure the existing Chatterbox profile and administrator-owned registry before use.

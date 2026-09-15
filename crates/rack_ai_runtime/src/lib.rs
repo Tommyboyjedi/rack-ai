@@ -43,3 +43,7 @@ mod idle_tests;
 mod container_socket;
 
 mod gpu_cleanup;
+
+mod reference_audio;
+mod voice_registry;
+mod voice_registration;

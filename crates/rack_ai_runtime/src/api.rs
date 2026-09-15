@@ -43,6 +43,9 @@ pub enum Request {
 pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route("/runtime/v1", post(handle))
+        .route("/runtime/v1/voices/register",
+            post(crate::voice_registration::handle).layer(
+                DefaultBodyLimit::max(crate::voice_registration::MAX_FORM_BYTES)))
         .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),

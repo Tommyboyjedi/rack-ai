@@ -248,3 +248,57 @@ capacity refusal; retain audio and idempotency history together. Raw `infer` doe
 accept speech. See [speech schema](../config/runtime/speech.schema.json) and
 [PR36 operator handoff](pr36-chatterbox-turbo-tts-handoff.md) for installation, voice
 validation, exact errors, compatibility, retention and the current live blocker.
+
+## Voice registration (PR36)
+
+`POST /runtime/v1/voices/register` accepts multipart/form-data fields `voice_id` and
+`file`. **This endpoint deliberately requires no authentication for now**, as requested
+by the operator. Other runtime and scoped speech routes retain their existing authorization.
+
+Example (no Authorization header):
+
+```sh
+curl "$RACKAI_BASE_URL/runtime/v1/voices/register" \
+  -F 'voice_id=character-jane' \
+  -F 'file=@reference.wav;type=audio/wav'
+```
+
+Success is HTTP 200:
+`{"voice_id":"character-jane","registered":true,"sha256":"<64 hexadecimal characters>"}`.
+
+The ID is 1–128 ASCII letters, digits, underscores, hyphens or periods, cannot start
+with a period and cannot contain consecutive periods. The file part must have a plain
+WAV basename; the supplied name is validated then discarded. Unknown/duplicate fields,
+caller paths, traversal and malformed forms are rejected.
+
+Reference audio must be regular RIFF/WAVE PCM16 mono, at 16000, 22050, 24000, 44100 or
+48000 Hz, strictly longer than 5 seconds and no longer than 30 seconds, at most 6 MiB.
+The server parses the audio bytes rather than trusting Content-Type or the extension.
+The complete form is bounded to 6 MiB plus 16 KiB and has a 30-second upload deadline.
+
+Registration uses the existing Chatterbox profile's administrator-selected `--voices`
+registry path; all configured Chatterbox profiles must agree on that path. Provision its
+canonical directory and mode-0600 registry first. An empty `voices` map permits initial
+registration. Missing/unsafe/unconfigured storage returns 503 without creating a new
+storage area. No request can choose the registry or filesystem root.
+
+Under a bounded registration lock, the server writes/syncs a private, content-addressed
+`registered-<sha256>.wav` file inside the existing root, then atomically publishes the
+updated mode-0600 registry using the established durable-write helper. Replacing an ID
+publishes its new entry in one rename. Existing references remain immutable for concurrent
+worker readers. The worker already reads this registry for voice discovery and conditioning,
+so the new/replaced voice is immediately usable without a model or receiver restart.
+
+The existing `POST <gateway_path>/voices` lists IDs. Later speech still uses
+`{"text":"Hello!","voice":"character-jane"}` with its current reservation, source bearer
+and stable Idempotency-Key. Registration does not acquire a GPU or refresh workload activity.
+
+Storage bounds are 128 current IDs and, including superseded server-generated blobs,
+768 MiB / 1024 retained uploaded WAVs. Replacements cannot evade the retained-upload
+budget. Reusing existing identical bytes at capacity remains possible. Old blobs are not
+automatically deleted while workers may be reading them; operator cleanup of unreferenced
+blobs requires quiescent registry readers and the registration lock.
+
+Errors are small JSON `{"error":"code"}` without filesystem paths: 422 for invalid
+ID/form/filename/audio, 413 for an oversized file/body, 408 for an upload timeout,
+429 for admission/storage capacity, and 503 for unavailable/unsafe storage.
