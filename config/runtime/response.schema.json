@@ -393,6 +393,13 @@
               "items": {
                 "type": "string"
               }
+            },
+            "last_activity_at": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
             }
           },
           "required": [
@@ -414,9 +421,9 @@
             "preflight_done",
             "released",
             "gateway_path",
-            "model",
             "profile_version",
-            "resources"
+            "resources",
+            "last_activity_at"
           ]
         },
         {

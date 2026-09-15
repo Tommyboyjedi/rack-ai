@@ -8,7 +8,7 @@ pub struct MediaAdapter<'a> {
     pub config: &'a Config,
 }
 impl MediaAdapter<'_> {
-    fn runtime(&self, d: &Demand) -> Result<Runtime, String> {
+    pub(crate) fn runtime(&self, d: &Demand) -> Result<Runtime, String> {
         MediaBinding {
             config: self.config,
         }
@@ -104,7 +104,7 @@ struct MediaBinding<'a> {
 impl MediaBinding<'_> {
     fn runtime(&self, d: &Demand) -> Result<Runtime, String> {
         let config = crate::media_limits::configuration(d)?;
-        if config.profile.checkpoint_sha256 != d.profile.model {
+        if !d.profile.native_media() && config.profile.checkpoint_sha256 != d.profile.model {
             return Err("media_model_binding_mismatch".into());
         }
         if config.resource_root != self.config.authority_root

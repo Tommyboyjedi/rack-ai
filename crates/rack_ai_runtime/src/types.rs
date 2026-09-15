@@ -44,6 +44,8 @@ pub struct Demand {
     pub generation: String,
     pub access_key: String,
     pub created: u64,
+    #[serde(default)]
+    pub last_activity_at: Option<u64>,
     pub order: u64,
     pub deadline: u64,
     pub transition_deadline: u64,

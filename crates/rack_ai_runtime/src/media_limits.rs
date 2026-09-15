@@ -58,7 +58,9 @@ pub fn configuration(d: &Demand) -> Result<Config, String> {
         .clone()
         .ok_or("media_configuration_required")?;
     let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
-    if Some(&crate::types::digest(&bytes)) != d.profile.media_config_sha256.as_ref() {
+    if Some(&configuration_digest(&bytes, d.profile.native_media())?)
+        != d.profile.media_config_sha256.as_ref()
+    {
         return Err("media_configuration_hash_mismatch".into());
     }
     let c = Config::load(path)?;
@@ -68,4 +70,44 @@ pub fn configuration(d: &Demand) -> Result<Config, String> {
         return Err("media_executable_binding_mismatch".into());
     }
     Ok(c)
+}
+
+/// Native authority pins service/security configuration, not the optional image recipe.
+pub fn configuration_digest(bytes: &[u8], native: bool) -> Result<String, String> {
+    if !native {
+        return Ok(crate::types::digest(bytes));
+    }
+    let mut value: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+    value
+        .as_object_mut()
+        .ok_or("invalid_media_configuration")?
+        .remove("profile");
+    Ok(crate::types::digest(
+        &serde_json::to_vec(&value).map_err(|e| e.to_string())?,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::configuration_digest;
+    #[test]
+    fn native_binding_excludes_only_image_recipe() {
+        let original =
+            br#"{"unit":"owned.service","profile":{"checkpoint":"one","checkpoint_sha256":"a"}}"#;
+        let recipe=br#"{"unit":"owned.service","profile":{"checkpoint":"missing","checkpoint_sha256":"b"}}"#;
+        let service =
+            br#"{"unit":"foreign.service","profile":{"checkpoint":"one","checkpoint_sha256":"a"}}"#;
+        assert_eq!(
+            configuration_digest(original, true).unwrap(),
+            configuration_digest(recipe, true).unwrap()
+        );
+        assert_ne!(
+            configuration_digest(original, false).unwrap(),
+            configuration_digest(recipe, false).unwrap()
+        );
+        assert_ne!(
+            configuration_digest(original, true).unwrap(),
+            configuration_digest(service, true).unwrap()
+        );
+    }
 }

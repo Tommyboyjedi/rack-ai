@@ -53,6 +53,7 @@ impl Admission<'_> {
                 generation: identity()?,
                 access_key: identity()?,
                 created: now(),
+                last_activity_at: None,
                 order: s.data.demands.len() as u64,
                 deadline: now() + request.ttl_seconds,
                 transition_deadline: 0,

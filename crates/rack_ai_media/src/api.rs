@@ -76,7 +76,8 @@ fn dispatch(app: &WebState, input: ApiRequest) -> Result<(StatusCode, serde_json
             Ok((
                 StatusCode::OK,
                 serde_json::json!({"schema":VERSION,"state":s.service.state,"mode":s.service.mode,
-                "heartbeat":s.service.heartbeat,"session_id":session,"message":s.service.error}),
+                "heartbeat":s.service.heartbeat,"session_id":session,
+                "reservation_idle_seconds":app.config.reservation_idle_seconds,"message":status_message(&s, &p.id)}),
             ))
         }
         (Method::GET, "profiles") => Ok((
@@ -124,6 +125,7 @@ pub fn session_view(app: &WebState, session: &Session) -> Result<serde_json::Val
         serde_json::json!({"schema":VERSION,"id":session.id,"location":format!("/api/media/v1/sessions/{}",session.id),
         "state":if session.stopped{"stopped".into()}else if active{serde_json::to_value(state.service.state).map_err(|e|e.to_string())?}
         else{"waiting".into()},"release_requested":session.release_requested,
+        "terminal_reason":session.terminal_reason,
         "access_url":if active && state.service.state==ServiceState::Ready && !session.release_requested{Some(&app.config.native_origin)}else{None}}),
     )
 }
@@ -143,4 +145,18 @@ pub fn error(message: &str) -> Response {
         Json(serde_json::json!({"schema":VERSION,"error":{"code":code,"message":message}})),
     )
         .into_response()
+}
+
+fn status_message<'a>(state: &'a MediaState, owner: &str) -> Option<&'a str> {
+    state.service.error.as_deref().or_else(|| {
+        if state.service.state != ServiceState::Stopped {
+            return None;
+        }
+        state
+            .sessions
+            .iter()
+            .rev()
+            .find(|s| s.owner == owner)
+            .and_then(|s| s.terminal_reason.as_deref())
+    })
 }

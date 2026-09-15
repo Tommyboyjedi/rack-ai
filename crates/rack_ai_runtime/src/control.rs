@@ -51,13 +51,15 @@ impl ReservationControl<'_> {
                     if d.state != DemandState::Denied {
                         d.state = DemandState::Releasing;
                     }
-                    d.reason = Some(
-                        match c.request.action {
-                            Action::Cancel => "cancelled",
-                            _ => "released",
-                        }
-                        .into(),
-                    );
+                    if d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT) {
+                        d.reason = Some(
+                            match c.request.action {
+                                Action::Cancel => "cancelled",
+                                _ => "released",
+                            }
+                            .into(),
+                        );
+                    }
                     for i in s.data.invocations.values_mut().filter(|i| {
                         i.request.reservation_id == c.id
                             && (i.state == InvocationState::Accepted

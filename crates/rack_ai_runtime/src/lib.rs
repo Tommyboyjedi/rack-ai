@@ -6,8 +6,10 @@ pub mod container;
 pub mod control;
 pub mod dispatch;
 pub mod hosting;
+pub mod idle;
 pub mod inference;
 pub mod media;
+mod media_idle;
 pub mod planner;
 pub mod preflight;
 pub mod process;
@@ -29,3 +31,10 @@ pub mod workspace_scope;
 pub mod workspace_scope_api;
 
 mod teardown;
+
+mod network;
+
+#[cfg(test)]
+mod idle_tests;
+
+mod container_socket;

@@ -10,7 +10,6 @@ fn main() -> Result<(), String> {
         return Err("unexpected argument".into());
     }
     Store::new(config.state_root.clone()).initialize()?;
-    rack_ai_media::profile::verify_checkpoint(&config.profile)?;
     let owner = rack_ai_infrastructure::resource_reservations::bounded_lock(
         &config.state_root.join("supervisor.lock"),
     )?;

@@ -92,6 +92,8 @@ pub struct Session {
     pub created_at: u64,
     pub release_requested: bool,
     pub stopped: bool,
+    #[serde(default)]
+    pub terminal_reason: Option<String>,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

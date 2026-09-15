@@ -21,6 +21,7 @@ pub enum Driver {
 pub struct Profile {
     pub tag: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
     pub backend: Backend,
     pub driver: Driver,
@@ -87,6 +88,8 @@ pub struct Config {
     pub authority_root: PathBuf,
     pub fixture_mode: bool,
     pub max_ttl_seconds: u64,
+    #[serde(default = "crate::idle::default_seconds")]
+    pub idle_timeout_seconds: u64,
     #[serde(default)]
     pub limits: crate::capacity::Limits,
     pub devices: BTreeMap<String, Device>,
@@ -124,4 +127,14 @@ impl Config {
 
 fn artifact_timeout() -> u64 {
     900
+}
+
+impl Profile {
+    pub fn native_media(&self) -> bool {
+        self.backend == Backend::Comfyui
+            && self
+                .media_mode
+                .unwrap_or(rack_ai_media::types::Mode::Interactive)
+                == rack_ai_media::types::Mode::Interactive
+    }
 }

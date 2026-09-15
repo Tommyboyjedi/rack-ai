@@ -127,14 +127,12 @@ pub fn endpoint_owned(process: &Process, profile: &Profile) -> Result<(), String
                 container,
                 "/bin/sh",
                 "-c",
-                "find /proc/[0-9]*/fd -maxdepth 1 -type l -exec readlink {} \\; 2>/dev/null",
+                crate::container_socket::SCAN,
+                "rack-socket-probe",
+                "/proc",
             ],
         )?;
-        return if descriptors.lines().any(|line| line == inodes[0]) {
-            Ok(())
-        } else {
-            Err("endpoint_not_owned_by_container".into())
-        };
+        return crate::container_socket::require_listener(&descriptors, &inodes[0]);
     }
     let mut owners = vec![process.pid];
     owners.extend(pids(process)?.into_iter().filter(|pid| *pid != process.pid));

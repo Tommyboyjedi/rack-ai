@@ -17,6 +17,7 @@ impl Reconsideration<'_> {
         }
         self.service.authority.update(|s| {
             crate::workspace_scope::cancel_closed(s);
+            crate::idle::reap(s, self.service.config.idle_timeout_seconds, now());
             for d in s.data.demands.values_mut() {
                 let receipt = self
                     .service
@@ -189,35 +190,37 @@ impl Supervisor {
 // This read-only hint avoids locking/serializing stable retained history every tick.
 // Every mutation and priority/ownership decision is rechecked under update's lock.
 fn pending_changes(service: &Service, s: &Document) -> bool {
-    s.data.invocations.values().any(|i| {
-        crate::workspace_scope::needs_cancel(s, i)
-            || i.state == InvocationState::Accepted
-                && (i.waiting_deadline <= now()
-                    || !s
-                        .data
-                        .demands
-                        .get(&i.request.reservation_id)
-                        .is_some_and(active))
-    }) || s.data.demands.values().any(|d| {
-        (!d.released
-            && service
-                .config
-                .authority_root
-                .join("managed-releases")
-                .join(format!("{}.json", d.generation))
-                .exists())
-            || (!active(d)
-                && matches!(
-                    d.state,
-                    DemandState::Held
-                        | DemandState::Ready
-                        | DemandState::Preparing
-                        | DemandState::Draining
-                ))
-            || (d.state == DemandState::Held
-                && active(d)
-                && (crate::planner::Planner { service })
-                    .refusal(s, d)
-                    .is_none())
-    })
+    crate::idle::pending(s, service.config.idle_timeout_seconds, now())
+        || s.data.invocations.values().any(|i| {
+            crate::workspace_scope::needs_cancel(s, i)
+                || i.state == InvocationState::Accepted
+                    && (i.waiting_deadline <= now()
+                        || !s
+                            .data
+                            .demands
+                            .get(&i.request.reservation_id)
+                            .is_some_and(active))
+        })
+        || s.data.demands.values().any(|d| {
+            (!d.released
+                && service
+                    .config
+                    .authority_root
+                    .join("managed-releases")
+                    .join(format!("{}.json", d.generation))
+                    .exists())
+                || (!active(d)
+                    && matches!(
+                        d.state,
+                        DemandState::Held
+                            | DemandState::Ready
+                            | DemandState::Preparing
+                            | DemandState::Draining
+                    ))
+                || (d.state == DemandState::Held
+                    && active(d)
+                    && (crate::planner::Planner { service })
+                        .refusal(s, d)
+                        .is_none())
+        })
 }

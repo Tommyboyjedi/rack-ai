@@ -19,6 +19,9 @@ impl ReadyLifecycle<'_> {
             })
             .transpose()?
             .unwrap_or(false);
+        if !shared && (crate::idle::IdleCheck { runtime: r }).manual(s)? {
+            return Ok(());
+        }
         let expired = !shared
             && state.sessions.iter().any(|x| {
                 Some(&x.id) == s.session.as_ref() && now() > x.created_at + r.config.session_seconds

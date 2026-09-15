@@ -59,9 +59,6 @@ pub fn workflow(request: &JobRequest, profile: &Profile, job: &str) -> Result<Va
 pub fn verify_checkpoint(profile: &Profile) -> Result<(), String> {
     use sha2::{Digest, Sha256};
     use std::io::Read;
-    if !profile.available {
-        return Ok(());
-    }
     let mut f =
         std::fs::File::open(&profile.checkpoint).map_err(|_| "approved checkpoint missing")?;
     let mut hash = Sha256::new();

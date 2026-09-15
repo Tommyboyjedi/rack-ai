@@ -17,6 +17,7 @@ pub mod gate_probe;
 mod generation_tests;
 pub mod gpu;
 pub mod gpu_processes;
+pub mod idle;
 pub mod lifecycle;
 pub mod limits;
 pub mod native;
@@ -61,3 +62,7 @@ pub mod ready_lifecycle;
 pub mod shared_activation;
 pub mod shared_job;
 pub mod shared_placement;
+
+mod job_activity;
+
+mod config_policy;

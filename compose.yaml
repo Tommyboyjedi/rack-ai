@@ -7,7 +7,7 @@ services:
     ipc: host
 
     ports:
-      - "8017:8017"
+      - "127.0.0.1:8017:8017"
 
     volumes:
       - /srv/fast/huggingface:/root/.cache/huggingface
@@ -60,7 +60,7 @@ services:
     ipc: host
 
     ports:
-      - "8018:8018"
+      - "127.0.0.1:8018:8018"
 
     volumes:
       - /srv/fast/huggingface:/root/.cache/huggingface

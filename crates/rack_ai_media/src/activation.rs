@@ -43,7 +43,11 @@ impl Activation<'_> {
             resources: vec!["gpu-4080-super".into()],
             acquired_at: now().to_string(),
             worker_ids: vec![],
-            model_ids: vec![r.config.profile.checkpoint_sha256.clone()],
+            model_ids: if mode == Mode::Managed {
+                vec![r.config.profile.checkpoint_sha256.clone()]
+            } else {
+                vec![]
+            },
         }) {
             Ok(h) => h,
             Err(e) if e.starts_with("resource busy:") => {

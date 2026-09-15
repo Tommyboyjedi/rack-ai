@@ -10,13 +10,18 @@ import time
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/"media"))
 from fixture import receiver, TOKEN, wait_for
 
+def native_config_hash(media):
+    value=json.loads((media['root']/'config.json').read_text())
+    value.pop('profile',None)
+    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+
 def scenario(root, media):
     def configure(config):
         config["authority_root"] = media["config"]["resource_root"]
         config["devices"]["gpu-4080-super"]["uuid"] = media["config"]["media_uuid"]
         p = next(p for p in config["profiles"] if p["tag"]=="comfyui")
-        p.update(backend="comfyui",driver="systemd",media_config=str(media["root"]/"config.json"),media_config_sha256=hashlib.sha256((media["root"]/"config.json").read_bytes()).hexdigest(),
-            model=media["config"]["profile"]["checkpoint_sha256"],endpoint=media["backend"],
+        p.update(backend="comfyui",driver="systemd",media_config=str(media["root"]/"config.json"),media_config_sha256=native_config_hash(media),
+            model="",endpoint=media["backend"],
             capabilities=["visual"],startup_seconds=10)
     rack = Rack(root,configure=configure,environment=media["environment"])
     try:

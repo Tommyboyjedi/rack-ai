@@ -15,6 +15,7 @@ class HostingTests(unittest.TestCase):
                 path=bin/name;path.write_text('#!'+sys.executable+'\n'+(ROOT/'tests/runtime/fake_host.py').read_text().split('\n',1)[1]);path.chmod(0o700)
             def configure(c):
                 p=c['profiles'][0];p['driver']=driver
+                p['args'] += ['--host', '127.0.0.1']
                 if driver=='docker':
                     p.update(container_image='sha256:'+'a'*64,executable=str(bin/'docker'),executable_sha256=hashlib.sha256((bin/'docker').read_bytes()).hexdigest())
                 else:

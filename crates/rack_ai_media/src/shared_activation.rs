@@ -57,6 +57,7 @@ impl SharedActivation<'_> {
                 created_at: now(),
                 release_requested: false,
                 stopped: false,
+                terminal_reason: None,
             };
             s.service = Service {
                 session: if request.mode == Mode::Interactive {

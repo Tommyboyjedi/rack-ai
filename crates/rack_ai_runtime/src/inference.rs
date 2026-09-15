@@ -39,6 +39,7 @@ impl Submission<'_> {
             let invocation = Invocation { id: identity()?, owner: owner.into(), waiting_deadline: now() + wait, execution_deadline: None,
                 response_bytes: self.service.config.limits.max_response_bytes, cancellation: None, late_result: None,
                 request, state: InvocationState::Accepted, started: None, activation: None, result: None, error: None };
+            crate::idle::touch(s, &invocation.request.reservation_id, now())?;
             s.data.invocations.insert(invocation.id.clone(), invocation.clone());
             crate::capacity::retention(s, &self.service.config.limits)?;
             Ok(invocation)

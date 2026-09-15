@@ -57,6 +57,7 @@ impl Dispatch<'_> {
             {
                 return Ok(None);
             }
+            crate::idle::touch(s, &d.id, now())?;
             let i = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
             i.state = InvocationState::Started;
             i.started = Some(now());
@@ -131,6 +132,9 @@ impl Completion<'_> {
                     i.error = Some(crate::capacity::diagnostic(e));
                     i.state = InvocationState::Uncertain;
                 }
+            }
+            if i.state != InvocationState::Uncertain {
+                crate::idle::touch(s, &demand.id, now())?;
             }
             Ok(())
         })

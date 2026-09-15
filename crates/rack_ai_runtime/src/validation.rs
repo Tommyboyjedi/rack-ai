@@ -10,6 +10,8 @@ pub fn validate(c: &Config) -> Result<(), String> {
         || !address.ip().is_loopback()
         || address.port() == 0
         || !c.authority_root.is_absolute()
+        || c.idle_timeout_seconds == 0
+        || c.idle_timeout_seconds > 86400
         || c.max_ttl_seconds == 0
         || c.max_ttl_seconds > 86400
         || c.host_capacity_mib == 0
@@ -81,7 +83,7 @@ impl ProfileValidation<'_> {
         let url = reqwest::Url::parse(&p.endpoint).map_err(|_| "invalid endpoint")?;
         if !valid_id(&p.tag)
             || p.version.is_empty()
-            || p.model.is_empty()
+            || (!p.native_media() && p.model.is_empty())
             || p.resources.is_empty()
             || !unique(p.resources.iter(), p.resources.len())
             || p.resources.iter().any(|r| !c.devices.contains_key(r))
@@ -120,6 +122,9 @@ impl ProfileValidation<'_> {
             .any(|n| *n == 0 || *n > 3600)
         {
             return Err(format!("invalid runtime profile: {}", p.tag));
+        }
+        if p.driver != Driver::Fixture && p.backend != Backend::Comfyui {
+            crate::network::private_binding(p)?;
         }
         if p.driver == Driver::Docker
             && (p.backend != Backend::Vllm

@@ -78,7 +78,9 @@
       "default": "paramount",
       "maximum": "paramount",
       "tags": [
-        "local-fun-chat"
+        "local-primary",
+        "local-image",
+        "comfyui"
       ],
       "tag_priorities": {},
       "qualification": false
@@ -276,7 +278,11 @@
       "endpoint": "http://127.0.0.1:8017",
       "container_image": "sha256:8bd082c274fae025b7079498fe1da65182ba1d4c2188c0f5a68c1042c38c3695",
       "args": [
-        "UNCONFIGURED-SYNTHETIC-ONLY"
+        "UNCONFIGURED-SYNTHETIC-ONLY",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8017"
       ]
     },
     {
@@ -370,7 +376,6 @@
       "inference_seconds": 120,
       "container_mounts": {},
       "tag": "comfyui",
-      "model": "REPLACE_WITH_QUALIFIED_CHECKPOINT_SHA256",
       "resources": [
         "gpu-4080-super"
       ],
@@ -435,5 +440,6 @@
     "max_wait_seconds": 300,
     "max_response_bytes": 262144,
     "retention_admission_bytes": 31457280
-  }
+  },
+  "idle_timeout_seconds": 1800
 }

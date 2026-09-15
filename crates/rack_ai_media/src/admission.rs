@@ -79,6 +79,12 @@ impl JobAdmission<'_> {
                 artifacts: vec![],
                 error: None,
             };
+            if let Some(binding) = &job.request.reservation {
+                crate::job_activity::JobActivity {
+                    config: self.config,
+                }
+                .admit(binding)?;
+            }
             state.jobs.push(job.clone());
             Ok(job)
         })
@@ -129,6 +135,7 @@ impl SessionAdmission<'_> {
                 created_at: now(),
                 release_requested: false,
                 stopped: false,
+                terminal_reason: None,
             };
             state.sessions.push(session.clone());
             Ok(session)

@@ -39,6 +39,7 @@ impl Retirement<'_> {
             saved.released = true;
             saved.state = match saved.reason.as_deref() {
                 Some("cancelled") => DemandState::Cancelled,
+                Some(crate::idle::IDLE_TIMEOUT) => DemandState::Expired,
                 _ if saved.deadline <= now() => DemandState::Expired,
                 _ => DemandState::Released,
             };

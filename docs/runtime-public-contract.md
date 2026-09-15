@@ -219,3 +219,14 @@ answer or reduce its dispatch count. Proven process cleanup permits reservation
 release without resolving the unknown answer. Failed ownership/cleanup or storage
 proof retains the resource fence. This does not change competing-priority victim
 drain policy or permit replay of uncertain work.
+
+## External GPU inactivity policy
+
+The common reservation lifecycle now has a server-configured 1800-second default GPU
+inactivity limit, independent of ownership TTL/renewal. See
+[activity, idle expiry, media barriers, CB policy and deployment limits](external-reservation-idle.md).
+New activity is recorded per reservation as `last_activity_at`; polling and renewal do
+not refresh it. Idle expiry retains `reason=idle_timeout`, fences new work, and returns
+resources only after the existing verified cleanup. Running/uncertain work remains fenced.
+The manual Start/Open/Finish workflow is preserved, with a separate 1800-second default
+idle safety backstop. Deploy the native activity gate and both receivers together.

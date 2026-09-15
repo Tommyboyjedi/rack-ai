@@ -167,7 +167,9 @@ fn public(d: Demand) -> Result<Value, String> {
         "gateway_path".into(),
         json!(format!("/scoped/{}/{}/v1", d.id, d.access_key)),
     );
-    object.insert("model".into(), json!(d.profile.model));
+    if !d.profile.native_media() {
+        object.insert("model".into(), json!(d.profile.model));
+    }
     object.insert("profile_version".into(), json!(d.profile.version));
     object.insert("resources".into(), json!(d.profile.resources));
     Ok(value)

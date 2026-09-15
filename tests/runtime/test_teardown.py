@@ -25,6 +25,7 @@ class TeardownFixture(unittest.TestCase):
         artifact.write_bytes(b'disposable fixture only')
         def configure(config):
             profile = config['profiles'][0]
+            profile['args'] += ['--host', '127.0.0.1']
             profile.update(driver='systemd',backend='llama_cpp',stop_seconds=2,
                            artifact=str(artifact),artifact_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest())
         environment = dict(os.environ,RACK_HOST_FIXTURE=str(self.root),

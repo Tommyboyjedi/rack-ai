@@ -215,6 +215,7 @@ impl ReadyMonitor<'_> {
         }
         ready?;
         if media {
+            crate::media_idle::MediaIdle { service: r }.observe(d)?;
             let process = adapter.observe(d)?.1;
             r.authority.update(|s| {
                 let saved = current(s, d)?;

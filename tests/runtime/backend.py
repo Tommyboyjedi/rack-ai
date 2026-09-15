@@ -7,7 +7,8 @@ import sys
 import time
 from pathlib import Path
 
-port, model, events, controls = sys.argv[1:]
+port, model, events, controls = sys.argv[1:5]
+assert sys.argv[5:] in ([], ['--host', '127.0.0.1'])
 activation = os.environ['RACK_RUNTIME_ACTIVATION']
 
 def control():

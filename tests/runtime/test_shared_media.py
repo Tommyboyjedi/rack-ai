@@ -10,6 +10,11 @@ from support import Rack, ROOT
 sys.path.insert(0,str(ROOT/'tests/media'))
 from fixture import receiver, CLIENT, TOKEN, wait_for
 
+def native_config_hash(media):
+    value=json.loads((media['root']/'config.json').read_text())
+    value.pop('profile',None)
+    return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),ensure_ascii=False).encode()).hexdigest()
+
 class SharedMediaTests(unittest.TestCase):
     def test_paramount_managed_images_bind_owner_priority_and_replay(self):
         with tempfile.TemporaryDirectory(prefix='rack-pr35-media-') as directory:
@@ -65,8 +70,8 @@ class SharedMediaTests(unittest.TestCase):
                     c['devices']['gpu-4080-super']['uuid']=media['config']['media_uuid']
                     p=next(p for p in c['profiles'] if p['tag']=='comfyui')
                     p.update(backend='comfyui',driver='systemd',media_mode='interactive',
-                        media_config=str(media['root']/'config.json'),media_config_sha256=hashlib.sha256((media['root']/'config.json').read_bytes()).hexdigest(),endpoint=media['backend'],
-                        model=media['config']['profile']['checkpoint_sha256'],startup_seconds=15)
+                        media_config=str(media['root']/'config.json'),media_config_sha256=native_config_hash(media),endpoint=media['backend'],
+                        model='' ,startup_seconds=15)
                     c['sources'].append(dict(source='operator',token_sha256=hashlib.sha256(b'operator').hexdigest(),
                         permitted=['paramount'],default='paramount',maximum='paramount',tags=['comfyui'],qualification=False))
                 r=Rack(root/'runtime',configure=configure,environment=media['environment'])
