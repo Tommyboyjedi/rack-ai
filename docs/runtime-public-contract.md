@@ -230,3 +230,21 @@ not refresh it. Idle expiry retains `reason=idle_timeout`, fences new work, and 
 resources only after the existing verified cleanup. Running/uncertain work remains fenced.
 The manual Start/Open/Finish workflow is preserved, with a separate 1800-second default
 idle safety backstop. Deploy the native activity gate and both receivers together.
+
+## PR36 scoped speech (unqualified until operator live acceptance)
+
+The `local-tts` tag is an `audio` profile with the first-class Chatterbox backend.
+Reservation lifecycle and priority rules are unchanged. Once Ready, authenticated
+`POST <gateway_path>/speech` accepts exactly `{"text":"...","voice":"registered-id"}`
+and a required stable `Idempotency-Key`; it returns PCM16 mono 24 kHz `audio/wav`.
+Both the current scoped capability and the reservation owner's source bearer are required.
+`POST <gateway_path>/voices` with `{}` lists registered IDs only.
+
+Speech is bounded to 1000 characters/4096 UTF-8 bytes, one active generation, 60 seconds,
+and 2,880,044 output bytes. Replay reconciles the same invocation and never resynthesizes
+uncertain work. WAV bytes are retained privately with SHA-256 receipts, outside JSON.
+The fixed 256 MiB retained-audio budget permits at most 93 speech identities before
+capacity refusal; retain audio and idempotency history together. Raw `infer` does not
+accept speech. See [speech schema](../config/runtime/speech.schema.json) and
+[PR36 operator handoff](pr36-chatterbox-turbo-tts-handoff.md) for installation, voice
+validation, exact errors, compatibility, retention and the current live blocker.

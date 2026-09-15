@@ -142,10 +142,12 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
                 request,
             })?,
         )?,
-        Request::Infer { request } => serde_json::to_value(
+        Request::Infer { request } => {
+            if request.payload.as_ref().is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech) { return Err("use_scoped_speech_gateway".into()); }
+            serde_json::to_value(
             (crate::inference::Submission { service }).submit(&source.source, request)?,
         )
-        .map_err(|e| e.to_string())?,
+        .map_err(|e| e.to_string())? },
         Request::Result { invocation_id } | Request::Reconcile { invocation_id } => {
             serde_json::to_value(service.result(&source.source, &invocation_id)?)
                 .map_err(|e| e.to_string())?

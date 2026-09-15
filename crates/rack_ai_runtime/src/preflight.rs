@@ -68,6 +68,17 @@ impl Preflight<'_> {
         .memory(&d.profile, false)
     }
     pub fn empty(&self, p: &Profile) -> Result<(), String> {
+        self.reclaimed(p)?;
+        if p.driver == Driver::Fixture {
+            return Ok(());
+        }
+        MemoryProbe {
+            config: self.config,
+        }
+        .memory(p, true)
+    }
+    /// Shutdown proves allocations are gone; capacity is only an activation condition.
+    pub fn reclaimed(&self, p: &Profile) -> Result<(), String> {
         if p.driver == Driver::Fixture {
             return Ok(());
         }
@@ -76,10 +87,7 @@ impl Preflight<'_> {
                 return Err("gpu_cleanup_uncertain".into());
             }
         }
-        MemoryProbe {
-            config: self.config,
-        }
-        .memory(p, true)
+        Ok(())
     }
     fn gpu_pids(&self, id: &str) -> Result<Vec<u32>, String> {
         let uuid = &self.config.devices.get(id).ok_or("unknown_resource")?.uuid;

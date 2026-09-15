@@ -19,6 +19,9 @@ impl BackendAccess<'_> {
         let process = d.process.as_ref().ok_or("activation_process_missing")?;
         process::endpoint_owned(process, &d.profile)?;
 
+        if d.profile.backend == Backend::Chatterbox {
+            return crate::speech_backend::ready(d);
+        }
         let client = client(2)?;
         let body = decode(
             client
@@ -48,6 +51,11 @@ impl BackendAccess<'_> {
             d.process.as_ref().ok_or("activation_process_missing")?,
             &d.profile,
         )?;
+        if d.profile.backend == Backend::Chatterbox {
+            return crate::speech_backend::synthesize(
+                (d, invocation), &self.config.authority_root,
+            );
+        }
         let request = &invocation.request;
         let bound = invocation.response_bytes;
         if let Some(payload) = &request.payload {

@@ -79,6 +79,11 @@ struct ProfileValidation<'a> {
 }
 impl ProfileValidation<'_> {
     fn validate(&self, p: &Profile) -> Result<(), String> {
+        crate::speech::profile(p)?;
+        if p.backend == Backend::Chatterbox && !self.config.fixture_mode
+            && self.config.devices.get("gpu-2060").is_none_or(|d| d.uuid != "GPU-357ef569-8fac-7c7d-ee1c-51677efb174f") {
+            return Err("chatterbox_exact_uuid_required".into());
+        }
         let c = self.config;
         let url = reqwest::Url::parse(&p.endpoint).map_err(|_| "invalid endpoint")?;
         if !valid_id(&p.tag)

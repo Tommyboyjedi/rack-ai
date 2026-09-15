@@ -8,6 +8,7 @@ pub enum Backend {
     Vllm,
     LlamaCpp,
     Comfyui,
+    Chatterbox,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

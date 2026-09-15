@@ -38,7 +38,9 @@ if name=='nvidia-smi':
         print(faults.get('memory_mib',16384))
     elif '-x' in args:
         uuid=args[args.index('-i')+1]
-        record=f'<process_info><pid>{s["pid"]}</pid><type>C</type></process_info>' if alive() else ''
+        lingering = ('stop_issued' in s and not alive()
+            and time.monotonic() - s['stop_issued'] < faults.get('gpu_cleanup_seconds', 0))
+        record=f'<process_info><pid>{s["pid"]}</pid><type>C</type></process_info>' if alive() or lingering else ''
         if faults.get('foreign_pid'): record+=f'<process_info><pid>{faults["foreign_pid"]}</pid><type>C</type></process_info>'
         print(f'<nvidia_smi_log><gpu><uuid>{uuid}</uuid><processes>{record}</processes></gpu></nvidia_smi_log>')
     else:

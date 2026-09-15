@@ -6,6 +6,7 @@ pub enum Protocol {
     #[default]
     ChatCompletions,
     Responses,
+    Speech,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +16,12 @@ pub struct Payload {
 }
 impl Payload {
     pub fn validate(&self, d: &crate::types::Demand) -> Result<u32, String> {
+        if self.protocol == Protocol::Speech {
+            return crate::speech::validate(self, d);
+        }
+        if d.profile.backend == crate::config::Backend::Chatterbox {
+            return Err("use_speech_interface".into());
+        }
         let body = self.body.as_object().ok_or("invalid_protocol_body")?;
         let allowed = match self.protocol {
             Protocol::ChatCompletions => &[
@@ -36,6 +43,7 @@ impl Payload {
                 "frequency_penalty",
                 "presence_penalty",
             ][..],
+            Protocol::Speech => &[][..],
             Protocol::Responses => &[
                 "model",
                 "input",
@@ -67,6 +75,7 @@ impl Payload {
         let field = match self.protocol {
             Protocol::ChatCompletions => "max_tokens",
             Protocol::Responses => "max_output_tokens",
+            Protocol::Speech => return Err("use_speech_interface".into()),
         };
         let tokens = body
             .get(field)
@@ -79,6 +88,7 @@ impl Payload {
         match self.protocol {
             Protocol::ChatCompletions => "/v1/chat/completions",
             Protocol::Responses => "/v1/responses",
+            Protocol::Speech => "/speech",
         }
     }
 }
@@ -89,6 +99,7 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
     if p.body.get("stream").and_then(Value::as_bool) == Some(true) {
         let finished = match p.protocol {
             Protocol::ChatCompletions => bytes.lines().any(|l| l.trim() == "data: [DONE]"),
+            Protocol::Speech => return Err("use_speech_interface".into()),
             Protocol::Responses => bytes
                 .lines()
                 .any(|l| l.trim() == "event: response.completed"),
@@ -124,6 +135,7 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
                 .get("choices")
                 .and_then(Value::as_array)
                 .is_some_and(|v| !v.is_empty()),
+            Protocol::Speech => return Err("use_speech_interface".into()),
             Protocol::Responses => {
                 value.get("status").and_then(Value::as_str) == Some("completed")
                     && value.get("output").and_then(Value::as_array).is_some()
