@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"rack-ai/runtime/v1/speech",
+  "title":"Scoped synchronous speech request; Idempotency-Key and source Bearer required",
+  "type":"object",
+  "additionalProperties":false,
+  "required":["text","voice"],
+  "properties":{
+    "text":{"type":"string","minLength":1,"maxLength":1000,"description":"Nonblank, no NUL; additionally bounded to 4096 UTF-8 bytes."},
+    "voice":{"type":"string","minLength":1,"maxLength":128,"pattern":"^[A-Za-z0-9_-][A-Za-z0-9_.-]*$","description":"Registered ID; double-dot sequences are forbidden."}
+  }
+}

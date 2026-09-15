@@ -22,6 +22,9 @@ impl Submission<'_> {
             if d.profile.backend == crate::config::Backend::Comfyui { return Err("use_versioned_media_interface".into()); }
             if !active(d) || !matches!(d.state, DemandState::Ready | DemandState::Held | DemandState::Preparing | DemandState::Draining) { return Err("reservation_not_dispatchable".into()); }
             if d.generation != request.generation || d.profile_hash != request.profile_hash { return Err("stale_generation_or_profile".into()); }
+            if d.profile.backend == crate::config::Backend::Chatterbox {
+                crate::speech::admit(s, (d, &request))?;
+            }
             let input_bytes = if let Some(payload) = &request.payload {
                 if payload.validate(d)? != request.max_tokens { return Err("output_limit_mismatch".into()); }
                 serde_json::to_vec(payload).map_err(|e| e.to_string())?.len()
@@ -37,7 +40,7 @@ impl Submission<'_> {
             if wait == 0 || wait > self.service.config.limits.max_wait_seconds { return Err("waiting_limits".into()); }
             self.service.config.limits.pending(s, &request.reservation_id)?;
             let invocation = Invocation { id: identity()?, owner: owner.into(), waiting_deadline: now() + wait, execution_deadline: None,
-                response_bytes: self.service.config.limits.max_response_bytes, cancellation: None, late_result: None,
+                response_bytes: if request.payload.as_ref().is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech) { crate::speech::MAX_WAV_BYTES } else { self.service.config.limits.max_response_bytes }, cancellation: None, late_result: None,
                 request, state: InvocationState::Accepted, started: None, activation: None, result: None, error: None };
             crate::idle::touch(s, &invocation.request.reservation_id, now())?;
             s.data.invocations.insert(invocation.id.clone(), invocation.clone());

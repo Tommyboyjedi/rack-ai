@@ -1,3 +1,6 @@
+pub mod speech;
+pub mod speech_backend;
+pub mod speech_gateway;
 pub mod admission;
 pub mod api;
 pub mod backend;
