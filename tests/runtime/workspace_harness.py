@@ -6,10 +6,22 @@ config=tomllib.loads((Path.home()/'.jcode/config.toml').read_text())
 provider=config['providers'][config['provider']['default_provider']]
 body=dict(model=provider['default_model'],messages=[dict(role='user',content='identical bounded edit')],max_tokens=16)
 control=Path('src/harness-control.json')
-if control.exists():time.sleep(json.loads(control.read_text()).get('pre_submit_delay',0))
+settings=json.loads(control.read_text()) if control.exists() else {}
+if settings:time.sleep(settings.get('pre_submit_delay',0))
 request=urllib.request.Request(provider['base_url']+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
 with urllib.request.urlopen(request,timeout=40) as response:result=json.loads(response.read())
 assert result['model']==provider['default_model']
+if settings.get('three_turns') and provider['default_model']=='local-primary':
+    Path('src/first-turn').write_text('ready')
+    deadline=time.monotonic()+30
+    while not Path('src/continue-turn').exists():
+        if time.monotonic()>deadline:raise AssertionError('test continuation missing')
+        time.sleep(.04)
+    for turn in [2,3]:
+        body['messages']=[dict(role='user',content=f'reserved turn {turn}')]
+        request=urllib.request.Request(provider['base_url']+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json'})
+        with urllib.request.urlopen(request,timeout=40) as response:result=json.loads(response.read())
+
 # The real sandbox must prohibit writes outside the declared src/ bind.
 try:Path('forbidden.txt').write_text('bypass')
 except OSError:print('PATH_BOUNDARY_ENFORCED',flush=True)

@@ -222,6 +222,269 @@
         "generation",
         "action"
       ]
+    },
+    "reserve": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "acquisition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "services": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          }
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "paramount"
+          ]
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "acquisition_id",
+        "work_id",
+        "services",
+        "priority",
+        "ttl_seconds"
+      ]
+    },
+    "work": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "wait_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "inference"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "max_tokens": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "kind",
+                "prompt",
+                "max_tokens",
+                "timeout_seconds"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "workspace"
+                },
+                "workspace": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9_.-]+$"
+                        },
+                        "base_ref": {
+                          "type": "string"
+                        },
+                        "base_sha": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "root": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "registered_root": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "base_ref"
+                      ]
+                    },
+                    "objective": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "acceptance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "commands": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required_artifacts": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "commands"
+                      ]
+                    },
+                    "requirements": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "capability": {
+                          "type": "string"
+                        },
+                        "complexity": {
+                          "enum": [
+                            "small",
+                            "medium",
+                            "large"
+                          ]
+                        },
+                        "requires_large_context": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": []
+                    },
+                    "environment_resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "max_implementation_attempts": {
+                          "const": 1
+                        },
+                        "timeout_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 3600
+                        },
+                        "network": {
+                          "enum": [
+                            "disabled",
+                            "enabled"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "max_implementation_attempts",
+                        "timeout_seconds"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "repository",
+                    "objective",
+                    "allowed_paths",
+                    "acceptance",
+                    "limits"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "workspace"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "reservation_id",
+        "service",
+        "work_id",
+        "payload"
+      ]
     }
   },
   "oneOf": [
@@ -351,6 +614,133 @@
       "required": [
         "operation",
         "invocation_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "reserve"
+        },
+        "request": {
+          "$ref": "#/$defs/reserve"
+        }
+      },
+      "required": [
+        "operation",
+        "request"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "inspect_reservation"
+        },
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "reservation_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "release_reservation"
+        },
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "reservation_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "cancel_reservation"
+        },
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "reservation_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "inspect_work"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "work_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "cancel_work"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "work_id"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "submit_work"
+        },
+        "request": {
+          "$ref": "#/$defs/work"
+        }
+      },
+      "required": [
+        "operation",
+        "request"
       ]
     }
   ]

@@ -100,6 +100,7 @@ impl Drop for Fixture {
 }
 fn request(d: &Demand) -> Inference {
     Inference {
+        work: None,
         schema: VERSION.into(),
         submission_id: identity().unwrap(),
         reservation_id: d.id.clone(),
@@ -267,16 +268,16 @@ fn idle_release_reacquisition_and_athba_priority_are_normal_admission() {
         .iter()
         .find(|s| s.source == "athba")
         .unwrap();
-    let mut forged = cb.request.clone();
-    forged.source_system = "athba".into();
-    assert!(
-        Admission {
-            service: &f.service,
-            source
-        }
-        .acquire(forged)
-        .is_err()
-    );
+    let mut paramount = cb.request.clone();
+    paramount.source_system = "athba".into();
+    let admitted = Admission {
+        service: &f.service,
+        source,
+    }
+    .acquire(paramount)
+    .unwrap();
+    assert_eq!(admitted.priority, Priority::Paramount);
+    assert_eq!(admitted.state, DemandState::Denied);
     f.reap(cb.created + 1800);
     f.retire(&cb);
     let athba = f.acquire(("athba", "local-primary", Priority::Medium));

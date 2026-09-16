@@ -144,18 +144,7 @@ high
 paramount
 ```
 
-ATHBA is a continuous slow-burn source and may submit only `low` or `medium`.
-
-Rack AI admission policy should record a source-specific ceiling:
-
-```text
-source_system = athba
-max_priority = medium
-```
-
-The ATHBA connector should reject an outbound priority above medium, and Rack AI must independently reject a buggy or forged ATHBA request above that ceiling.
-
-High and paramount remain available to other separately authorized rack workloads or operator/system policy. Rack AI may queue ATHBA behind higher-priority work or remove a GPU from ATHBA capacity; it must not promote ATHBA's own priority.
+ATHBA owns its priority choices. RackAI accepts any global priority and any published qualified service uniformly for authenticated ordinary principals. Reservation-bound work inherits the reservation priority; RackAI does not implement ATHBA scheduling policy.
 
 ## ATHBA-owned development environments
 
@@ -251,7 +240,7 @@ The immediate generalization should be limited to:
 - broad capability sets;
 - existing small/medium/large complexity;
 - existing large-context flag;
-- global priority with source-specific ceilings;
+- caller-owned reservation priority;
 - internal model eligibility profiles;
 - generic selection evidence linked to execution provenance;
 - opaque work/submission identity;
@@ -280,7 +269,7 @@ RackAI-published logical tags and bounded pure inference are authorized alongsid
 broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
 qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
 whole-request denial; already accepted held work is distinct from a denied acquisition.
-ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+All authenticated ordinary principals may request any global priority and any published qualified service.
 llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
 Implementation scope is RackAI only. Companion integrations and production cutover are
 deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths

@@ -117,7 +117,11 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
             .get(&call.id)
             .ok_or("invalid_scoped_capability")?;
         use subtle::ConstantTimeEq;
-        if !bool::from(d.access_key.as_bytes().ct_eq(call.generation.as_bytes()))
+        if (!bool::from(d.access_key.as_bytes().ct_eq(call.generation.as_bytes()))
+            && !crate::workspace_scope::authorizes(
+                s,
+                (&d.id, &call.generation, call.namespace.as_deref()),
+            ))
             || !crate::service::active(d)
         {
             return Err("invalid_scoped_capability".into());
@@ -166,6 +170,7 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
     (crate::inference::Submission { service }).submit(
         &d.owner,
         Inference {
+            work: None,
             schema: VERSION.into(),
             submission_id,
             reservation_id: d.id,

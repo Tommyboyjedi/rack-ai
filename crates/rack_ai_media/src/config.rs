@@ -6,6 +6,7 @@ use std::{fs, net::SocketAddr, path::PathBuf};
 pub struct Principal {
     pub id: String,
     pub token_sha256: String,
+    #[serde(default = "legacy_ceiling")]
     pub ceiling: Priority,
     pub operator: bool,
 }
@@ -76,4 +77,8 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         crate::config_policy::validate(self)
     }
+}
+
+fn legacy_ceiling() -> Priority {
+    Priority::Low
 }

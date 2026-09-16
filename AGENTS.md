@@ -37,13 +37,13 @@ Generic request fields may describe:
 - broad capabilities: `reasoning`, `coding`, `visual`, `audio`;
 - complexity: `small`, `medium`, `large`;
 - large-context requirement;
-- source priority and admission ceiling;
+- reservation priority;
 - opaque work/submission identity;
 - repository/base/path/resource/timeout/network/acceptance constraints.
 
 The client sends only the capabilities required by a job. Rack AI owns internal model eligibility and qualification profiles. Clients do not author those profiles and must not choose concrete workers, models, GPUs, endpoints, or JCode profiles.
 
-For ATHBA-originated work, allowed priorities are only `low` and `medium`. Rack AI must reject ATHBA requests above the configured medium ceiling and must not promote ATHBA work to `high` or `paramount`.
+Priority belongs to the reservation and is supplied by its caller. RackAI applies no application-specific priority ceilings or service permissions.
 
 One client submission should correspond to one model invocation. Low-level infrastructure recovery must remain distinguishable from another semantic model submission.
 
@@ -200,7 +200,6 @@ Get explicit human approval before:
 - reducing required evidence retention
 - changing the fundamental trust model
 - adding client-specific workflow semantics to Rack AI
-- raising a source-system priority ceiling
 - merging when the task only requested implementation/review
 
 ## Default Working Method
@@ -226,7 +225,7 @@ RackAI-published logical tags and bounded pure inference are authorized alongsid
 broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
 qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
 whole-request denial; already accepted held work is distinct from a denied acquisition.
-ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+All authenticated ordinary principals may request any global priority and any published qualified service.
 llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
 Implementation scope is RackAI only. Companion integrations and production cutover are
 deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths

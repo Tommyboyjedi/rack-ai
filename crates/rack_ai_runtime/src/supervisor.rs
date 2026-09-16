@@ -48,6 +48,7 @@ impl Reconsideration<'_> {
                     d.transition_deadline = now() + d.profile.drain_seconds;
                 }
             }
+            crate::reservation::close_members(s);
             for i in s.data.invocations.values_mut() {
                 if i.state == InvocationState::Accepted
                     && (i.waiting_deadline <= now()
@@ -99,19 +100,27 @@ impl Supervisor {
                     .demands
                     .values()
                     .filter(|d| {
-                        matches!(
-                            d.state,
-                            DemandState::Preparing | DemandState::Ready | DemandState::Releasing
-                        ) && !s.data.demands.values().any(|parent| {
-                            parent.state == DemandState::Preparing && parent.victims.contains(&d.id)
-                        })
+                        crate::reservation::startable(s, d)
+                            && matches!(
+                                d.state,
+                                DemandState::Preparing
+                                    | DemandState::Ready
+                                    | DemandState::Releasing
+                            )
+                            && !s.data.demands.values().any(|parent| {
+                                parent.state == DemandState::Preparing
+                                    && parent.victims.contains(&d.id)
+                            })
                     })
                     .cloned()
                     .collect::<Vec<_>>(),
                 s.data
                     .invocations
                     .values()
-                    .filter(|i| crate::workers::eligible(s, i))
+                    .filter(|i| {
+                        crate::workers::eligible(s, i)
+                            && crate::dispatch::workspace_slot(&self.service, s, i)
+                    })
                     .filter(|i| reservations.insert(i.request.reservation_id.clone()))
                     .map(|i| i.id.clone())
                     .collect::<Vec<_>>(),

@@ -30,9 +30,6 @@ struct JobAdmission<'a> {
 }
 impl JobAdmission<'_> {
     pub fn job(&self, principal: &Principal, request: JobRequest) -> Result<Job, String> {
-        if request.priority > principal.ceiling {
-            return Err("forbidden: priority exceeds source ceiling".into());
-        }
         self.store.update(|state| {
             if let Some(job) = state.jobs.iter().find(|j| {
                 j.owner == principal.id

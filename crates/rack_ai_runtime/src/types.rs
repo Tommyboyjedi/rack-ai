@@ -33,6 +33,12 @@ pub enum DemandState {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Demand {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub services: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_request: Option<crate::reservation::Reserve>,
     pub id: String,
     pub owner: String,
     pub request: Acquire,
@@ -69,6 +75,8 @@ pub struct Process {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Inference {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<crate::work_payload::Work>,
     pub schema: String,
     pub submission_id: String,
     pub reservation_id: String,
@@ -100,6 +108,8 @@ pub struct CancellationIntent {
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Invocation {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope_access_hash: Option<String>,
     pub id: String,
     pub owner: String,
     pub request: Inference,

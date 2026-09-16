@@ -1,14 +1,4 @@
 {
-  "source_admission_policies": [
-    {
-      "source_system": "athba",
-      "max_priority": "medium"
-    },
-    {
-      "source_system": "*",
-      "max_priority": "paramount"
-    }
-  ],
   "models": [
     {
       "id": "gemma4-12b-local-primary",

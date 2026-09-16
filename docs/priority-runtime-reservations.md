@@ -1,3 +1,5 @@
+> Historical PR35 design. Its application ceilings and service allowlists are superseded by [the reservation/work contract](reservation-work.md); existing lifecycle and safety invariants remain.
+
 # Priority-aware runtime reservations and managed inference
 
 Date: 2026-09-14. Status: **RackAI-only implementation and isolated qualification; production rollout deferred**.

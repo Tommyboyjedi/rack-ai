@@ -23,6 +23,7 @@ pub fn due(d: &Demand, seconds: u64, at: u64) -> bool {
 }
 fn eligible(s: &Document, d: &Demand, seconds: u64, at: u64) -> bool {
     due(d, seconds, at) && !inflight(s, &d.id)
+        && !s.data.invocations.values().any(|i| i.request.reservation_id == d.id && crate::work_payload::is_workspace(i) && i.state == InvocationState::Started)
         // Native admission must close atomically with the ComfyUI queue barrier.
         && (d.profile.backend != Backend::Comfyui
             || d.profile.driver == Driver::Fixture

@@ -66,12 +66,17 @@ pub struct Profile {
 pub struct Source {
     pub source: String,
     pub token_sha256: String,
+    #[serde(default)]
     pub permitted: Vec<Priority>,
+    #[serde(default = "default_priority")]
     pub default: Priority,
+    #[serde(default = "default_priority")]
     pub maximum: Priority,
+    #[serde(default)]
     pub tags: Vec<String>,
     #[serde(default)]
     pub tag_priorities: BTreeMap<String, Vec<Priority>>,
+    #[serde(default)]
     pub qualification: bool,
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,6 +88,8 @@ pub struct Device {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub workspace: Option<crate::work_payload::WorkspaceConfig>,
     pub schema: String,
     pub listen: String,
     pub authority_root: PathBuf,
@@ -137,4 +144,9 @@ impl Profile {
                 .unwrap_or(rack_ai_media::types::Mode::Interactive)
                 == rack_ai_media::types::Mode::Interactive
     }
+}
+
+// Legacy source policy fields deserialize only for migration.
+fn default_priority() -> Priority {
+    Priority::Low
 }

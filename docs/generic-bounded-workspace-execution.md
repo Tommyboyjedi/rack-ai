@@ -33,7 +33,7 @@ Rack AI may understand generic infrastructure concepts:
 
 - broad model capabilities;
 - generic complexity and context requirements;
-- source priority and admission ceilings;
+- reservation prioritys;
 - registered model profiles;
 - worker runtimes and harnesses;
 - physical resources and leases;
@@ -315,22 +315,9 @@ Selection and execution identities must agree. A mismatch fails closed.
 
 The client may inspect this evidence, but it does not choose the concrete worker or author Rack AI's internal model profile.
 
-## Source priority ceilings
+## Reservation priority
 
-Priority is global Rack AI vocabulary, while each source may have an admission ceiling.
-
-For ATHBA:
-
-```text
-allowed priorities: low, medium
-maximum priority: medium
-```
-
-ATHBA is continuous slow-burn work. A job that blocks an ATHBA project may be medium inside the global rack queue, but it is not automatically high or paramount.
-
-High and paramount remain available for separately authorized interactive, operational, service-restoration, safety, or future media workloads.
-
-The source connector should reject an invalid outbound priority, and Rack AI admission policy must independently reject a source request above its configured ceiling. Rack AI must not promote an ATHBA request above medium.
+The caller supplies Low, Medium, High or Paramount on its reservation. Work inherits that priority. Authentication establishes ownership, qualification describes the service, and arbitration compares actual conflicting resources with incumbent-wins-ties. No application ceiling or service allowlist applies.
 
 ## Queue and dependency boundary
 
@@ -399,7 +386,7 @@ The immediate PR23-related generalization should be bounded to:
 
 - broad capability sets;
 - existing complexity and context requirements;
-- global priority with source ceilings;
+- caller-owned reservation priority;
 - internal generic model eligibility profiles;
 - generic selection evidence linked to execution provenance;
 - opaque work/submission identity;
@@ -434,7 +421,7 @@ RackAI-published logical tags and bounded pure inference are authorized alongsid
 broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
 qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
 whole-request denial; already accepted held work is distinct from a denied acquisition.
-ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+All authenticated ordinary principals may request any global priority and any published qualified service.
 llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
 Implementation scope is RackAI only. Companion integrations and production cutover are
 deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths

@@ -2,6 +2,7 @@ import copy
 import hashlib
 import json
 import sys
+import time
 from pathlib import Path
 import requests
 from support import Rack, ROOT
@@ -24,6 +25,11 @@ def test_cb_native_owns_gpu_without_image_identity(tmp_path):
         r=Rack(tmp_path/"runtime",configure=configure,environment=media["environment"])
         try:
             native=r.wait(r.acquire("cb","comfyui","paramount"),seconds=20)
+            assert "gateway_path" not in native
+            assert native["access"]["kind"]=="native_comfyui"
+            assert native["access"]["url"]==media["native"]
+            info=requests.get(native["access"]["url"]+"/object_info",headers={"Authorization":"Bearer cb"},timeout=3)
+            assert info.status_code==200,info.text
             assert "model" not in native
             saved=json.loads((Path(r.config["authority_root"])/"managed.json").read_text())["data"]["demands"][native["id"]]
             assert "model" not in saved["profile"]
@@ -34,4 +40,24 @@ def test_cb_native_owns_gpu_without_image_identity(tmp_path):
             assert reply.status_code==200,reply.text
             r.release(native);r.wait(native,"released")
             assert not json.loads((Path(r.config["authority_root"])/"managed.json").read_text())["claims"]
+            group=r.call('cb','reserve',request=dict(acquisition_id='native-group',work_id='combined',
+                services=['local-primary','comfyui'],priority='medium',ttl_seconds=60))
+            def group_wait(expected):
+                end=time.monotonic()+15
+                while time.monotonic()<end:
+                    current=r.call('cb','inspect_reservation',reservation_id=group['id'])
+                    if current['state']==expected:return current
+                    time.sleep(.05)
+                raise AssertionError(current)
+            combined=group_wait('ready')
+            url=combined['services']['comfyui']['access']['url']
+            assert url==media['native']
+            assert requests.get(url+'/object_info',headers={'Authorization':'Bearer cb'},timeout=3).status_code==200
+            contender=r.wait(r.acquire('other','local-fun-chat','paramount'))
+            group_wait('held')
+            assert requests.post(url+'/prompt',json={},headers={'Authorization':'Bearer cb'},timeout=3).status_code==409
+            r.release(contender);group_wait('ready')
+            assert requests.get(url+'/object_info',headers={'Authorization':'Bearer cb'},timeout=3).status_code==200
+            r.call('cb','release_reservation',reservation_id=group['id']);group_wait('released')
+
         finally:r.close()

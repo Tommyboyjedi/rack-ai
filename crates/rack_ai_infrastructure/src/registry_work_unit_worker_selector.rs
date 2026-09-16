@@ -1,7 +1,6 @@
 use rack_ai_application::GenericResourceAvailability;
 use rack_ai_application::GenericResourceAvailabilityEvidence;
 use rack_ai_application::GenericSelectionReason;
-use rack_ai_application::GenericSourceAdmissionPolicy;
 use rack_ai_application::GenericWorkerIneligibility;
 use rack_ai_application::GenericWorkerIneligibilityReason;
 use rack_ai_application::GenericWorkerSelectionDecision;
@@ -24,11 +23,13 @@ pub struct RegistryWorkUnitWorkerSelector {
     repository: FileSystemRegistryRepository,
     catalog: FileSystemWorkerCatalog,
     resolver: JCodeWorkerConfigResolver,
+    reserved_worker: Option<String>,
 }
 
 impl RegistryWorkUnitWorkerSelector {
     pub fn new(paths: RegistryPaths) -> Self {
         Self {
+            reserved_worker: None,
             repository: FileSystemRegistryRepository::new(paths.clone()),
             catalog: FileSystemWorkerCatalog::new(paths.clone()),
             resolver: JCodeWorkerConfigResolver::new(paths),
@@ -45,23 +46,21 @@ impl WorkUnitWorkerSelector for RegistryWorkUnitWorkerSelector {
             .repository
             .load_models()
             .map_err(WorkUnitSelectionError::Other)?;
-        let workers = self
+        let mut workers = self
             .repository
             .load_workers()
             .map_err(WorkUnitSelectionError::Other)?;
+        if let Some(id) = &self.reserved_worker {
+            workers.retain(|w| &w.id == id);
+        }
         if let Some(routing) = request.routing() {
             let resources = self
                 .repository
                 .load_resources()
                 .map_err(WorkUnitSelectionError::Other)?;
-            let policies = self
-                .repository
-                .load_source_admission_policies()
-                .map_err(WorkUnitSelectionError::Other)?;
             return select_generic(
                 request,
                 routing,
-                &policies,
                 &workers,
                 &models,
                 &resources,
@@ -96,22 +95,12 @@ impl WorkUnitWorkerSelector for RegistryWorkUnitWorkerSelector {
 fn select_generic(
     request: &WorkUnitRequest,
     routing: &rack_ai_application::GenericRoutingHeader,
-    policies: &[GenericSourceAdmissionPolicy],
     workers: &[WorkerRecord],
     models: &[ModelRecord],
     resources: &[ResourceRecord],
     resolver: &JCodeWorkerConfigResolver,
     catalog: &FileSystemWorkerCatalog,
 ) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError> {
-    let policy = policies
-        .iter()
-        .find(|item| item.source_system != "*" && item.matches(&routing.source_system))
-        .or_else(|| policies.iter().find(|item| item.source_system == "*"));
-    let policy = policy.ok_or(WorkUnitSelectionError::SourceAdmissionPolicyMissing)?;
-    if !policy.admits(routing.priority) {
-        return Err(WorkUnitSelectionError::SourceAdmissionDenied);
-    }
-
     let mut decision = GenericWorkerSelectionDecision::new(
         routing,
         request.complexity(),
@@ -538,30 +527,23 @@ mod tests {
     }
 
     #[test]
-    fn generic_admission_rejects_athba_above_medium_and_accepts_global_priorities() {
+    fn generic_admission_accepts_all_principals_at_global_priorities() {
         let root = temp_root();
         write_generic_registry(&root, "active");
         let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
-        assert_eq!(
-            selector.select(&generic_request(
-                vec!["coding"],
-                "small",
-                false,
-                "high",
-                "athba"
-            )),
-            Err(rack_ai_application::WorkUnitSelectionError::SourceAdmissionDenied)
-        );
-        assert_eq!(
-            selector.select(&generic_request(
-                vec!["coding"],
-                "small",
-                false,
-                "paramount",
-                "ATHBA"
-            )),
-            Err(rack_ai_application::WorkUnitSelectionError::SourceAdmissionDenied)
-        );
+        for (source, priority) in [("athba", "high"), ("ATHBA", "paramount")] {
+            assert!(
+                selector
+                    .select(&generic_request(
+                        vec!["coding"],
+                        "small",
+                        false,
+                        priority,
+                        source
+                    ))
+                    .is_ok()
+            );
+        }
         assert!(
             selector
                 .select(&generic_request(
@@ -632,5 +614,12 @@ mod tests {
 {"id":"gemma4-12b-local-primary","label":"Primary","role":"generic","backend":"vllm","worker_id":"local-primary","api_model_id":"local-primary","endpoint":"http://127.0.0.1:8017/v1","port":8017,"status":"active","eligibility_profile":{"model_profile_id":"local-primary-v1","capabilities":["reasoning","coding"],"max_complexity":"large","large_context_eligible":true,"qualification_status":"qualified","qualification_evidence_refs":["proof-primary"],"profile_version":"v1","execution_constraints":["configured-jcode-route"]}},
 {"id":"eqaq-v2-local-coder","label":"Coder","role":"generic","backend":"vllm","worker_id":"local-coder","api_model_id":"local-coder","endpoint":"http://127.0.0.1:8018/v1","port":8018,"status":"active","context_window":16368,"eligibility_profile":{"model_profile_id":"local-coder-v1","capabilities":["coding"],"max_complexity":"small","large_context_eligible":false,"qualification_status":"qualified_with_constraints","qualification_evidence_refs":["proof-coder"],"profile_version":"v1","execution_constraints":["minimal-tool-profile"]}}
 ]}"#).unwrap();
+    }
+}
+
+impl RegistryWorkUnitWorkerSelector {
+    pub fn for_reserved_worker(mut self, id: String) -> Self {
+        self.reserved_worker = Some(id);
+        self
     }
 }

@@ -213,7 +213,7 @@ high
 paramount
 ```
 
-Source systems have configured admission ceilings. ATHBA may emit only `low` or `medium`. Rack AI must reject ATHBA-originated work above medium and must not promote it above that ceiling.
+Reservation priority is caller-owned. RackAI does not cap applications or restrict their published service choices. Reservation-bound work inherits that priority and supplies none of its own.
 
 High and paramount remain available for other separately authorized rack workloads and operator/system policy.
 
@@ -292,7 +292,7 @@ The next bounded evolution should add only what is required for generic model se
 
 - capability sets: `reasoning`, `coding`, `visual`, `audio`;
 - existing complexity and large-context inputs;
-- global priority with source-specific ceilings;
+- caller-owned reservation priority;
 - internal model eligibility/qualification profiles;
 - generic selection evidence linked to execution provenance;
 - opaque work/submission identity;

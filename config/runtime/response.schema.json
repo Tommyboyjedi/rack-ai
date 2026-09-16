@@ -133,6 +133,9 @@
           ],
           "pattern": "^[a-f0-9]{64}$",
           "description": "RackAI registered workspace execution scope; closed or missing scopes cannot admit new work."
+        },
+        "work": {
+          "$ref": "#/$defs/work"
         }
       },
       "required": [
@@ -222,6 +225,546 @@
         "generation",
         "action"
       ]
+    },
+    "reserve": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "acquisition_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "services": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          }
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "paramount"
+          ]
+        },
+        "ttl_seconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "acquisition_id",
+        "work_id",
+        "services",
+        "priority",
+        "ttl_seconds"
+      ]
+    },
+    "work": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "service": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "work_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        },
+        "wait_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1,
+          "maximum": 86400
+        },
+        "payload": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "inference"
+                },
+                "prompt": {
+                  "type": "string"
+                },
+                "max_tokens": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "timeout_seconds": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "kind",
+                "prompt",
+                "max_tokens",
+                "timeout_seconds"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "workspace"
+                },
+                "workspace": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "repository": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 128,
+                          "pattern": "^[A-Za-z0-9_.-]+$"
+                        },
+                        "base_ref": {
+                          "type": "string"
+                        },
+                        "base_sha": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "root": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        },
+                        "registered_root": {
+                          "type": [
+                            "string",
+                            "null"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "base_ref"
+                      ]
+                    },
+                    "objective": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "allowed_paths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "acceptance": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "commands": {
+                          "type": "array",
+                          "items": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required_artifacts": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      },
+                      "required": [
+                        "commands"
+                      ]
+                    },
+                    "requirements": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "capability": {
+                          "type": "string"
+                        },
+                        "complexity": {
+                          "enum": [
+                            "small",
+                            "medium",
+                            "large"
+                          ]
+                        },
+                        "requires_large_context": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": []
+                    },
+                    "environment_resources": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "limits": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "properties": {
+                        "max_implementation_attempts": {
+                          "const": 1
+                        },
+                        "timeout_seconds": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 3600
+                        },
+                        "network": {
+                          "enum": [
+                            "disabled",
+                            "enabled"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "max_implementation_attempts",
+                        "timeout_seconds"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "repository",
+                    "objective",
+                    "allowed_paths",
+                    "acceptance",
+                    "limits"
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "workspace"
+              ]
+            }
+          ]
+        }
+      },
+      "required": [
+        "reservation_id",
+        "service",
+        "work_id",
+        "payload"
+      ]
+    },
+    "demand": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "owner": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/acquire"
+        },
+        "priority": {
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "paramount"
+          ]
+        },
+        "profile_hash": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "denied",
+            "preparing",
+            "ready",
+            "draining",
+            "held",
+            "releasing",
+            "released",
+            "cancelled",
+            "expired",
+            "recovery_required"
+          ]
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "generation": {
+          "type": "string"
+        },
+        "created": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "deadline": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "transition_deadline": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "victims": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "process": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "pid": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "boot": {
+                  "type": "string"
+                },
+                "start": {
+                  "type": "string"
+                },
+                "activation": {
+                  "type": "string"
+                },
+                "unit": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "container": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "invocation": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "pid",
+                "boot",
+                "start",
+                "activation",
+                "unit",
+                "container",
+                "invocation"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effect_started": {
+          "type": "boolean"
+        },
+        "preflight_done": {
+          "type": "boolean"
+        },
+        "released": {
+          "type": "boolean"
+        },
+        "gateway_path": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "profile_version": {
+          "type": "string"
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "last_activity_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "access": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "native_comfyui"
+                },
+                "url": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "session_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reservation_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9_.-]+$"
+                },
+                "generation": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128,
+                  "pattern": "^[A-Za-z0-9_.-]+$"
+                }
+              },
+              "required": [
+                "kind",
+                "url",
+                "session_id",
+                "reservation_id",
+                "generation"
+              ]
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "kind": {
+                  "const": "managed_image"
+                },
+                "jobs_path": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "jobs_path"
+              ]
+            }
+          ]
+        },
+        "reservation_id": {
+          "type": "string"
+        },
+        "services": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "reserve_request": {
+          "$ref": "#/$defs/reserve"
+        }
+      },
+      "required": [
+        "id",
+        "owner",
+        "request",
+        "priority",
+        "profile_hash",
+        "state",
+        "reason",
+        "generation",
+        "created",
+        "order",
+        "deadline",
+        "transition_deadline",
+        "victims",
+        "process",
+        "effect_started",
+        "preflight_done",
+        "released",
+        "profile_version",
+        "resources",
+        "last_activity_at"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "gateway_path"
+          ]
+        },
+        {
+          "required": [
+            "access"
+          ]
+        }
+      ]
     }
   },
   "type": "object",
@@ -233,198 +776,7 @@
     "result": {
       "oneOf": [
         {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "owner": {
-              "type": "string"
-            },
-            "request": {
-              "$ref": "#/$defs/acquire"
-            },
-            "priority": {
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "paramount"
-              ]
-            },
-            "profile_hash": {
-              "type": "string"
-            },
-            "state": {
-              "enum": [
-                "denied",
-                "preparing",
-                "ready",
-                "draining",
-                "held",
-                "releasing",
-                "released",
-                "cancelled",
-                "expired",
-                "recovery_required"
-              ]
-            },
-            "reason": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "generation": {
-              "type": "string"
-            },
-            "created": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "order": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "deadline": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "transition_deadline": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "victims": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "process": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "additionalProperties": false,
-                  "properties": {
-                    "pid": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "boot": {
-                      "type": "string"
-                    },
-                    "start": {
-                      "type": "string"
-                    },
-                    "activation": {
-                      "type": "string"
-                    },
-                    "unit": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "container": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "invocation": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": [
-                    "pid",
-                    "boot",
-                    "start",
-                    "activation",
-                    "unit",
-                    "container",
-                    "invocation"
-                  ]
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "effect_started": {
-              "type": "boolean"
-            },
-            "preflight_done": {
-              "type": "boolean"
-            },
-            "released": {
-              "type": "boolean"
-            },
-            "gateway_path": {
-              "type": "string"
-            },
-            "model": {
-              "type": "string"
-            },
-            "profile_version": {
-              "type": "string"
-            },
-            "resources": {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            },
-            "last_activity_at": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "minimum": 0
-            }
-          },
-          "required": [
-            "id",
-            "owner",
-            "request",
-            "priority",
-            "profile_hash",
-            "state",
-            "reason",
-            "generation",
-            "created",
-            "order",
-            "deadline",
-            "transition_deadline",
-            "victims",
-            "process",
-            "effect_started",
-            "preflight_done",
-            "released",
-            "gateway_path",
-            "profile_version",
-            "resources",
-            "last_activity_at"
-          ]
+          "$ref": "#/$defs/demand"
         },
         {
           "type": "object",
@@ -516,7 +868,11 @@
                 }
               ]
             },
-            "late_result": {}
+            "late_result": {},
+            "scope_access_hash": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            }
           },
           "required": [
             "id",
@@ -573,7 +929,15 @@
                 ]
               }
             },
-            "permitted_priorities": {
+            "default_priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            },
+            "priorities": {
               "type": "array",
               "items": {
                 "enum": [
@@ -583,29 +947,184 @@
                   "paramount"
                 ]
               }
-            },
-            "default_priority": {
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "paramount"
-              ]
-            },
-            "maximum_priority": {
-              "enum": [
-                "low",
-                "medium",
-                "high",
-                "paramount"
-              ]
             }
           },
           "required": [
             "tags",
-            "permitted_priorities",
-            "default_priority",
-            "maximum_priority"
+            "priorities",
+            "default_priority"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "priority": {
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "paramount"
+              ]
+            },
+            "state": {
+              "enum": [
+                "denied",
+                "preparing",
+                "ready",
+                "draining",
+                "held",
+                "releasing",
+                "released",
+                "cancelled",
+                "expired",
+                "recovery_required"
+              ]
+            },
+            "reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "acquisition_id": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "services": {
+              "type": "object",
+              "additionalProperties": {
+                "$ref": "#/$defs/demand"
+              }
+            }
+          },
+          "required": [
+            "id",
+            "priority",
+            "state",
+            "reason",
+            "acquisition_id",
+            "services"
+          ]
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "work_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "reservation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "service": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "state": {
+              "enum": [
+                "accepted",
+                "waiting",
+                "held",
+                "started",
+                "completed",
+                "cancelled",
+                "expired",
+                "uncertain"
+              ]
+            },
+            "invocation_id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "^[A-Za-z0-9_.-]+$"
+            },
+            "started": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "activation": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "result": {},
+            "late_result": {},
+            "cancellation": {
+              "anyOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "requested_at"
+                  ],
+                  "properties": {
+                    "requested_at": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  }
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "work_id",
+            "reservation_id",
+            "service",
+            "state",
+            "invocation_id",
+            "started",
+            "activation",
+            "result",
+            "late_result",
+            "cancellation",
+            "error"
           ]
         }
       ]

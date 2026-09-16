@@ -9,6 +9,10 @@ struct Profile {
 }
 #[derive(Deserialize)]
 struct Demand {
+    #[serde(default)]
+    reservation_id: Option<String>,
+    #[serde(default)]
+    services: BTreeMap<String, String>,
     owner: String,
     deadline: u64,
     released: bool,
@@ -85,7 +89,12 @@ impl ManagedLease<'_> {
             .duration_since(std::time::UNIX_EPOCH)
             .map_err(|e| e.to_string())?
             .as_secs();
-        if dispatch && (d.state != State::Ready || d.released || d.deadline <= now) {
+        if dispatch
+            && (!reservation_ready(&doc, d, now)
+                || d.state != State::Ready
+                || d.released
+                || d.deadline <= now)
+        {
             return Err("managed admission closed".into());
         }
         Ok(true)
@@ -139,4 +148,25 @@ impl ManagedLease<'_> {
         )?;
         Ok(true)
     }
+}
+
+fn reservation_ready(doc: &Document, d: &Demand, now: u64) -> bool {
+    let Some(id) = &d.reservation_id else {
+        return true;
+    };
+    let Some(root) = doc.data.demands.get(id) else {
+        return false;
+    };
+    !root.services.is_empty()
+        && root.services.values().all(|id| {
+            doc.data.demands.get(id).is_some_and(|d| {
+                d.state == State::Ready
+                    && !d.released
+                    && d.deadline > now
+                    && d.profile
+                        .resources
+                        .iter()
+                        .all(|r| doc.claims.get(r) == Some(id))
+            })
+        })
 }

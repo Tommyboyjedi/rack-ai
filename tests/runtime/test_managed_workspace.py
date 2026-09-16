@@ -10,6 +10,7 @@ class ManagedWorkspace(unittest.TestCase):
         def configure(c):
             c['limits']=dict(max_wait_seconds=45)
             for p in c['profiles']:p['inference_seconds']=1
+            next(p for p in c['profiles'] if p['tag']=='local-coder')['capabilities']=['coding']
         self.rack=Rack(self.root/'runtime',configure=configure)
         self.fixture=self.root/'fixture';(self.fixture/'src').mkdir(parents=True)
         (self.fixture/'Cargo.toml').write_text('[package]\nname="managed-proof"\nversion="0.1.0"\nedition="2021"\n')
@@ -84,6 +85,69 @@ class ManagedWorkspace(unittest.TestCase):
         self.assertEqual(self.git('rev-parse','HEAD').strip(),self.base)
         self.assertFalse((Path(result['worktree_path'])/'forbidden.txt').exists())
         self.assertIn('PATH_BOUNDARY_ENFORCED',json.dumps(packet))
+
+    def test_reserved_work_uses_managed_access_for_all_turns_after_restoration(self):
+        r=self.rack
+        # The registry remains its original raw configuration. RackAI must bind access internally.
+        self.models=json.loads((ROOT/'config/models.json').read_text())
+        self.write('models',self.models)
+        before=(self.registry/'config/models.json').read_bytes()
+        r.process.terminate();r.process.wait(timeout=5);r.log.close()
+        r.config['workspace']=dict(registry_root=str(self.registry),state_root=str(self.registry))
+        r.start()
+        (self.fixture/'src/harness-control.json').write_text(json.dumps(dict(three_turns=True)))
+        self.git('add','src/harness-control.json');self.git('commit','-m','three bounded turns')
+        self.base=self.git('rev-parse','HEAD').strip()
+        spec=self.spec('reserved')
+        payload={key:spec['work_unit'][key] for key in ['objective','allowed_paths','acceptance','requirements','limits']}
+        payload['repository']=spec['repository']
+        work=dict(reservation_id=self.p['id'],service='local-primary',work_id='reserved',payload=dict(kind='workspace',workspace=payload))
+        accepted=r.call('athba','submit_work',request=work)
+        end=time.monotonic()+25
+        marker=None
+        while time.monotonic()<end:
+            marker=next((self.root/'workspaces').rglob('first-turn'),None)
+            if marker:break
+            state=r.call('athba','inspect_work',work_id='reserved')
+            if state['state'] in ['completed','uncertain']:
+                packet=state.get('result',{}).get('packet_path')
+                self.fail(Path(packet).read_text() if packet else state)
+            time.sleep(.05)
+        self.assertIsNotNone(marker)
+        contender=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')
+        marker.with_name('continue-turn').write_text('continue')
+        end=time.monotonic()+8
+        while time.monotonic()<end:
+            pending=[i for i in self.invocations().values() if i['request'].get('workspace_scope') and i['state']=='accepted']
+            if pending:break
+            time.sleep(.04)
+        self.assertTrue(pending)
+        self.assertEqual(r.counts('dispatch')['local-primary'],1)
+        r.release(contender);restored=r.wait(self.p)
+        end=time.monotonic()+30
+        while time.monotonic()<end:
+            result=r.call('athba','inspect_work',work_id='reserved')
+            if result['state'] in ['completed','uncertain','cancelled','expired']:break
+            time.sleep(.05)
+        self.assertEqual(result['state'],'completed',result)
+        self.assert_proof(result['result'],'local-primary')
+        self.assertEqual(r.counts('dispatch')['local-primary'],3)
+        self.assertEqual(r.call('athba','submit_work',request=work)['invocation_id'],accepted['invocation_id'])
+        self.assertEqual((self.registry/'config/models.json').read_bytes(),before)
+        children=[i for i in self.invocations().values() if i['request'].get('workspace_scope')]
+        self.assertEqual(len({i['request']['workspace_scope'] for i in children}),1)
+        self.assertEqual(sum(i['activation']==restored['generation'] for i in children),2)
+        coder=dict(work,reservation_id=self.c['id'],service='local-coder',work_id='reserved-coder')
+        r.call('athba','submit_work',request=coder)
+        end=time.monotonic()+25
+        while time.monotonic()<end:
+            result=r.call('athba','inspect_work',work_id='reserved-coder')
+            if result['state'] in ['completed','uncertain','cancelled','expired']:break
+            time.sleep(.05)
+        self.assertEqual(result['state'],'completed',result)
+        self.assert_proof(result['result'],'local-coder')
+        self.assertEqual((self.registry/'config/models.json').read_bytes(),before)
+
 
     def test_held_workspace_restores_once_coder_remains_usable_and_identity_is_scoped(self):
         r=self.rack;chat=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')

@@ -94,6 +94,7 @@ pub fn owns(s: &Document, d: &Demand) -> bool {
 pub fn inflight(s: &Document, id: &str) -> bool {
     s.data.invocations.values().any(|i| {
         i.request.reservation_id == id
+            && !crate::work_payload::is_workspace(i)
             && matches!(
                 i.state,
                 InvocationState::Started | InvocationState::Uncertain

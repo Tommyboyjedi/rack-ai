@@ -41,25 +41,21 @@
     {
       "id": "operator",
       "token_sha256": "REPLACE_WITH_SHA256_OF_RANDOM_OPERATOR_CREDENTIAL",
-      "ceiling": "paramount",
       "operator": true
     },
     {
       "id": "music-director",
       "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_DIRECTOR_CREDENTIAL",
-      "ceiling": "paramount",
       "operator": false
     },
     {
       "id": "athba",
       "token_sha256": "REPLACE_WITH_SHA256_OF_DISTINCT_RANDOM_ATHBA_CREDENTIAL",
-      "ceiling": "medium",
       "operator": false
     },
     {
       "id": "cb",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
-      "ceiling": "paramount",
       "operator": false
     }
   ],

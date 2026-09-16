@@ -80,7 +80,7 @@ Selection evidence may be returned to the client for audit. It explains why Rack
 
 Rack AI's global priority vocabulary may include `low`, `medium`, `high`, and `paramount`.
 
-Source systems have explicit ceilings. ATHBA may submit only `low` or `medium`; reject an ATHBA request above medium and never promote it internally above its source ceiling.
+Authenticated principals may request Low, Medium, High or Paramount. Authentication establishes ownership; it does not limit priority or published services.
 
 Priority controls queue order and resource policy. It does not add capabilities, alter semantic validity, or bypass safety.
 
@@ -142,7 +142,7 @@ RackAI-published logical tags and bounded pure inference are authorized alongsid
 broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
 qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
 whole-request denial; already accepted held work is distinct from a denied acquisition.
-ATHBA remains Low/Medium, with big-brain constrained to Medium by source configuration.
+All authenticated ordinary principals may request any global priority and any published qualified service.
 llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
 Implementation scope is RackAI only. Companion integrations and production cutover are
 deferred; see docs/runtime-public-contract.md and docs/pr35-live-qualification.md (paths

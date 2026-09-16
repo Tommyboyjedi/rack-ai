@@ -17,6 +17,27 @@ use std::sync::Arc;
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Request {
     Discover,
+    Reserve {
+        request: crate::reservation::Reserve,
+    },
+    InspectReservation {
+        reservation_id: String,
+    },
+    ReleaseReservation {
+        reservation_id: String,
+    },
+    CancelReservation {
+        reservation_id: String,
+    },
+    SubmitWork {
+        request: crate::work_payload::Work,
+    },
+    InspectWork {
+        work_id: String,
+    },
+    CancelWork {
+        work_id: String,
+    },
     Acquire {
         request: Acquire,
     },
@@ -28,7 +49,7 @@ pub enum Request {
         request: Control,
     },
     Infer {
-        request: Inference,
+        request: Box<Inference>,
     },
     Result {
         invocation_id: String,
@@ -84,7 +105,13 @@ async fn handle(
             );
         }
     };
-    let slots = if matches!(request, Request::Acquire { .. } | Request::Infer { .. }) {
+    let slots = if matches!(
+        request,
+        Request::Acquire { .. }
+            | Request::Infer { .. }
+            | Request::Reserve { .. }
+            | Request::SubmitWork { .. }
+    ) {
         &service.admission_slots
     } else {
         &service.control_slots
@@ -104,7 +131,7 @@ async fn handle(
                 | "capacity_pending_reservation"
                 | "capacity_retained_evidence" => StatusCode::TOO_MANY_REQUESTS,
                 "not_found" => StatusCode::NOT_FOUND,
-                "source_spoofing" | "source_policy_denied" => StatusCode::FORBIDDEN,
+                "source_spoofing" | "qualification_mode_denied" => StatusCode::FORBIDDEN,
                 "identity_conflict"
                 | "stale_generation"
                 | "stale_generation_or_profile"
@@ -122,11 +149,46 @@ async fn handle(
 }
 fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result<Value, String> {
     let (source, request) = call;
+    let reservation_action = if matches!(&request, Request::CancelReservation { .. }) {
+        crate::control::Action::Cancel
+    } else {
+        crate::control::Action::Release
+    };
+    if matches!(&request, Request::Infer { request } if request.work.is_some()) {
+        return Err("use_submit_work".into());
+    }
     let value = match request {
         Request::Discover => {
-            json!({"tags": service.config.profiles.iter().filter(|p| source.tags.contains(&p.tag)).map(|p| json!({
+            json!({"tags": service.config.profiles.iter().map(|p| json!({
             "tag":p.tag,"version":p.version,"qualified":p.qualified,"capabilities":p.capabilities,"context_tokens":p.context_tokens
-        })).collect::<Vec<_>>(), "permitted_priorities": source.permitted,"default_priority":source.default,"maximum_priority":source.maximum})
+        })).collect::<Vec<_>>(), "priorities":["low","medium","high","paramount"],"default_priority":"low"})
+        }
+        Request::Reserve { request } => {
+            let id = (crate::reservation_admission::ReservationAdmission { service, source })
+                .reserve(request)?;
+            crate::reservation_view::inspect(service, (&source.source, &id))?
+        }
+        Request::InspectReservation { reservation_id } => {
+            crate::reservation_view::inspect(service, (&source.source, &reservation_id))?
+        }
+        Request::ReleaseReservation { reservation_id }
+        | Request::CancelReservation { reservation_id } => {
+            crate::control::reservation_control(
+                service,
+                (&source.source, &reservation_id, reservation_action),
+            )?;
+            crate::reservation_view::inspect(service, (&source.source, &reservation_id))?
+        }
+        Request::SubmitWork { request } => {
+            let id = request.work_id.clone();
+            (crate::work::WorkSubmission { service }).submit((&source.source, request))?;
+            crate::work::inspect(service, (&source.source, &id))?
+        }
+        Request::InspectWork { work_id } => {
+            crate::work::inspect(service, (&source.source, &work_id))?
+        }
+        Request::CancelWork { work_id } => {
+            crate::work::cancel(service, (&source.source, &work_id))?
         }
         Request::Acquire { request } => public(Admission { service, source }.acquire(request)?)?,
         Request::Inspect { reservation_id } => {
@@ -143,7 +205,7 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
             })?,
         )?,
         Request::Infer { request } => serde_json::to_value(
-            (crate::inference::Submission { service }).submit(&source.source, request)?,
+            (crate::inference::Submission { service }).submit(&source.source, *request)?,
         )
         .map_err(|e| e.to_string())?,
         Request::Result { invocation_id } | Request::Reconcile { invocation_id } => {
@@ -158,15 +220,24 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
     };
     Ok(json!({"schema":VERSION, "result":value}))
 }
-fn public(d: Demand) -> Result<Value, String> {
+pub(crate) fn public(d: Demand) -> Result<Value, String> {
     let mut value = serde_json::to_value(&d).map_err(|e| e.to_string())?;
     let object = value.as_object_mut().ok_or("invalid_public_record")?;
     object.remove("profile");
     object.remove("access_key");
-    object.insert(
-        "gateway_path".into(),
-        json!(format!("/scoped/{}/{}/v1", d.id, d.access_key)),
-    );
+    if d.profile.backend != crate::config::Backend::Comfyui {
+        object.insert(
+            "gateway_path".into(),
+            json!(format!("/scoped/{}/{}/v1", d.id, d.access_key)),
+        );
+    } else if d.profile.native_media() {
+        object.insert("access".into(), crate::native_description::describe(&d)?);
+    } else {
+        object.insert(
+            "access".into(),
+            json!({"kind":"managed_image","jobs_path":"/api/media/v1/jobs"}),
+        );
+    }
     if !d.profile.native_media() {
         object.insert("model".into(), json!(d.profile.model));
     }

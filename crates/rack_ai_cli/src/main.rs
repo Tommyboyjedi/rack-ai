@@ -40,7 +40,7 @@ use rack_ai_infrastructure::UtcDateCommandClock;
 
 mod campaign_command;
 mod change_command;
-mod sandbox_tcp_bridge;
+use rack_ai_infrastructure::sandbox_tcp_bridge;
 mod work_unit_command;
 use serde::Deserialize;
 use serde::Serialize;
