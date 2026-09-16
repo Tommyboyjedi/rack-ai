@@ -356,6 +356,57 @@
       "media_config": "/srv/rack-ai/config/media/runtime-managed.json",
       "media_mode": "managed",
       "media_config_sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "version": "chatterbox-turbo-v1",
+      "backend": "chatterbox",
+      "driver": "systemd",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "audio"
+      ],
+      "context_tokens": 8192,
+      "max_output_tokens": 1,
+      "protocols": [
+        "speech"
+      ],
+      "streaming": false,
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "executable": "/opt/rack-ai/chatterbox/bin/python",
+      "executable_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifact": "/opt/rack-ai/chatterbox/worker.pyz",
+      "artifact_sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 90,
+      "drain_seconds": 65,
+      "stop_seconds": 15,
+      "inference_seconds": 60,
+      "container_mounts": {
+        "/srv/fast/huggingface": "/root/.cache/huggingface"
+      },
+      "tag": "local-tts",
+      "model": "ResembleAI/chatterbox-turbo",
+      "resources": [
+        "gpu-2060"
+      ],
+      "device_mib": {
+        "gpu-2060": 4096
+      },
+      "endpoint": "http://127.0.0.1:8020",
+      "container_image": "sha256:8bd082c274fae025b7079498fe1da65182ba1d4c2188c0f5a68c1042c38c3695",
+      "args": [
+        "/opt/rack-ai/chatterbox/worker.pyz",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8020",
+        "--model",
+        "/srv/models/chatterbox-turbo",
+        "--voices",
+        "/etc/rack-ai/voices.json"
+      ]
     }
   ],
   "limits": {

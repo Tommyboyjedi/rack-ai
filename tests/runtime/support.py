@@ -12,10 +12,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 VERSION = 'rack-ai/runtime/v1'
 
+_fixture_ports = set()
 def port():
-    with socket.socket() as s:
-        s.bind(('127.0.0.1', 0))
-        return s.getsockname()[1]
+    while True:
+        with socket.socket() as s:
+            s.bind(('127.0.0.1', 0))
+            selected = s.getsockname()[1]
+        if selected not in _fixture_ports:
+            _fixture_ports.add(selected)
+            return selected
 
 class Rack:
     def __init__(self, directory, configure=None, environment=None):

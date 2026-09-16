@@ -68,6 +68,8 @@ pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route("/runtime/v1", post(handle))
         .route("/runtime/v1/contract", get(crate::contract::handle))
+        .route("/runtime/v1/voices/register", post(crate::voice_registration::handle)
+            .layer(DefaultBodyLimit::max(crate::voice_registration::MAX_FORM_BYTES)))
         .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
@@ -156,6 +158,10 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
     };
     if matches!(&request, Request::Infer { request } if request.work.is_some()) {
         return Err("use_submit_work".into());
+    }
+    if matches!(&request, Request::Infer { request }
+        if request.payload.as_ref().is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech)) {
+        return Err("use_scoped_speech_gateway".into());
     }
     let value = match request {
         Request::Discover => {

@@ -481,6 +481,54 @@
         "work_id",
         "payload"
       ]
+    },
+    "speechRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text",
+        "voice"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1000,
+          "description": "Nonblank, no NUL; additionally bounded to 4096 UTF-8 bytes."
+        },
+        "voice": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9_.-]*$",
+          "description": "Registered ID; double-dot sequences are forbidden."
+        }
+      }
+    },
+    "voiceListRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "voiceRegistrationForm": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "voice_id",
+        "file"
+      ],
+      "properties": {
+        "voice_id": {
+          "type": "string",
+          "pattern": "^(?!\\.)(?!.*\\.\\.)[A-Za-z0-9_.-]{1,128}$"
+        },
+        "file": {
+          "type": "string",
+          "format": "binary",
+          "contentMediaType": "audio/wav",
+          "description": "PCM16 mono WAV, >5 to 30 seconds; <=6 MiB. Plain basename only; no paths."
+        }
+      }
     }
   },
   "oneOf": [

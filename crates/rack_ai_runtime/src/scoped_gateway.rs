@@ -18,6 +18,9 @@ pub async fn handle(
     headers: HeaderMap,
     Json(body): Json<Value>,
 ) -> axum::response::Response {
+    if path == "speech" || path == "voices" {
+        return crate::speech_gateway::handle(service, (id, generation, path, headers, body)).await;
+    }
     let Ok(_permit) = service.gateway_waiters.clone().try_acquire_owned() else {
         return failure("capacity_gateway_waiters".into());
     };
@@ -137,7 +140,7 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
         let key = match call.protocol {
             Protocol::ChatCompletions => "max_tokens",
             Protocol::Responses => "max_output_tokens",
-            Protocol::Speech => return Err("historical_speech_not_supported".into()),
+            Protocol::Speech => return Err("use_speech_interface".into()),
         };
         object.insert(key.into(), json!(d.profile.max_output_tokens));
     }

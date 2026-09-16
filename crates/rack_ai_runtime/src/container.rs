@@ -110,10 +110,7 @@ impl ContainerHosting<'_> {
         if !crate::process::gone(p)? {
             return Err("container_process_still_alive".into());
         }
-        crate::preflight::Preflight {
-            config: self.config,
-        }
-        .empty(&d.profile)
+        crate::gpu_cleanup::wait(self.config, &d.profile)
     }
 }
 fn inspect(id: &str, executable: &std::path::Path) -> Result<Container, String> {

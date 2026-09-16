@@ -140,9 +140,6 @@ impl HostedCleanup<'_> {
         if d.process.is_some() {
             crate::teardown::Teardown::wait(d)?;
         }
-        crate::preflight::Preflight {
-            config: self.config,
-        }
-        .empty(&d.profile)
+        crate::gpu_cleanup::wait(self.config, &d.profile)
     }
 }

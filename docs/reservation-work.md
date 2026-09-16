@@ -10,7 +10,7 @@ Reservation and work operations below use the existing authenticated `POST /runt
 credentials as `POST /runtime/v1`. It is read-only and returns a JSON object:
 
 - `schema`: `rack-ai/runtime-contract/v1`.
-- `contract_version`: `1.0.0`, the published contract revision.
+- `contract_version`: `1.1.0`, the published contract revision.
 - `documentation`: the complete contents of this document as a string.
 - `request_schema`: `config/runtime/request.schema.json` as a JSON object.
 - `response_schema`: `config/runtime/response.schema.json` as a JSON object.
@@ -116,3 +116,73 @@ Remove source `permitted`, `default`, `maximum`, `tags` and `tag_priorities`, wo
 Legacy single-service `acquire` still works; omitted legacy priority now uses the uniform Low default. Discovery publishes the global `priorities` vocabulary and all service profiles, including their qualification status. Ordinary unqualified requests still fail qualification independently of application identity. New reserve requests supply priority explicitly.
 
 No deployment or client migration is performed by this change.
+
+
+## Chatterbox speech and registered voices
+
+Chatterbox Turbo is the live local-tts service with capability audio and protocol
+speech. Reserve it through the same reserve operation as other services:
+
+~~~json
+{"operation":"reserve","request":{"acquisition_id":"dialogue-123","work_id":"dialogue",
+"services":["local-primary","comfyui","local-tts"],"priority":"paramount","ttl_seconds":1800}}
+~~~
+
+Each service is independently acquired. Read services.local-tts.state and use its
+gateway_path when Ready. An unavailable/Held peer does not block Ready speech;
+an unavailable TTS member does not block Ready primary or ComfyUI. Existing Held
+members restore through the managed lifecycle; refresh attempts unavailable members.
+Priority occurs only on the reservation, never on a speech or work call.
+
+Speech uses the synchronous scoped binary interface rather than the text-inference
+submit_work payload. The returned member gateway is bound to the owner and current
+activation, with the same canonical reservation authority:
+
+~~~http
+POST <services.local-tts.gateway_path>/speech
+Authorization: Bearer <principal credential>
+Idempotency-Key: <stable utterance identity>
+Content-Type: application/json
+
+{"text":"Hello! [chuckle]","voice":"character-jane"}
+~~~
+
+Success is bounded audio/wav: PCM16, mono, 24000 Hz, at most 60 seconds /
+2,880,044 bytes. Text must be nonblank, at most 1000 characters and 4096 UTF-8 bytes,
+without NUL. Exactly one synthesis can be accepted/active/uncertain per TTS member.
+The runtime queue wait uses configured max_wait_seconds; generation is bounded to
+60 seconds. Same-key/same-payload retries reconcile, never regenerate; expired and
+uncertain identities remain terminal/uncertain. A changed payload conflicts. HTTP
+429 indicates capacity; scoped validation/state errors return 409 with a JSON error.
+Polling, voice registration/listing and lease control do not extend GPU activity.
+1800 seconds without real workload activity triggers owned-backend cleanup and release.
+
+Settings remain server-owned: temperature=1.05, top_p=0.95, top_k=1000,
+repetition_penalty=1.2; one generation, no rewriting or multiple takes. The model
+loads once per activation. Callers cannot supply paths, GPU choices or model settings.
+
+POST <gateway_path>/voices with the same bearer and {} lists
+{"voices":["character-jane"]} for a Ready owned TTS member.
+
+POST /runtime/v1/voices/register intentionally requires no authentication.
+Send multipart fields voice_id and file (a plain WAV basename):
+
+~~~sh
+curl "$RACKAI_BASE_URL/runtime/v1/voices/register" -F 'voice_id=character-jane' -F 'file=@reference.wav;type=audio/wav'
+~~~
+
+Success: {"voice_id":"character-jane","registered":true,"sha256":"<sha256>"}.
+IDs use 1-128 ASCII letters/digits/underscore/hyphen/period, cannot begin with a
+period or contain consecutive periods. WAV references must be PCM16 mono, >5 and
+<=30 seconds, at 16000/22050/24000/44100/48000 Hz and <=6 MiB.
+Caller paths, traversal, symlinks and invalid formats fail closed. Storage remains
+administrator-owned via the Chatterbox profile's existing --voices registry.
+Registration/replacement atomically updates that registry and is immediately visible
+without reloading the model; no filesystem paths are returned. Upload errors use
+422 (invalid), 413 (oversized), 408 (timeout), 429 (capacity), or 503 (storage).
+The existing 128-ID / 768-MiB / 1024-retained-upload bounds remain.
+
+The embedded request schema includes speechRequest, voiceListRequest and
+voiceRegistrationForm definitions for these separate scoped/multipart routes.
+The response schema includes voiceListResponse, voiceRegistrationResponse and
+speechResponse definitions; binary WAV is not a runtime JSON work result.

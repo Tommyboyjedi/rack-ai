@@ -423,7 +423,7 @@ fn idle_policy_defaults_and_invalid_values_fail_validation() {
 }
 
 #[test]
-fn historical_chatterbox_record_reads_unchanged_but_new_profile_is_rejected() {
+fn historical_chatterbox_record_reads_unchanged() {
     let f = Fixture::new();
     let d = f.acquire(("cb", "local-primary", Priority::Low));
     let path = f.service.config.authority_root.join("managed.json");
@@ -446,12 +446,12 @@ fn historical_chatterbox_record_reads_unchanged_but_new_profile_is_rejected() {
     config.profiles[0].backend = historical.profile.backend;
     assert_eq!(
         crate::validation::validate(&config).unwrap_err(),
-        "historical_tts_profile_not_supported"
+        "invalid_chatterbox_profile"
     );
 }
 
 #[test]
-fn historical_speech_record_reads_unchanged_but_profile_and_execution_are_rejected() {
+fn historical_speech_record_reads_unchanged_and_invalid_payload_is_rejected() {
     let f = Fixture::new();
     let d = f.acquire(("cb", "local-primary", Priority::Low));
     f.ready(&d);
@@ -487,23 +487,15 @@ fn historical_speech_record_reads_unchanged_but_profile_and_execution_are_reject
     config.profiles[0].protocols = historical.profile.protocols.clone();
     assert_eq!(
         crate::validation::validate(&config).unwrap_err(),
-        "historical_tts_profile_not_supported"
+        "speech_backend_required"
     );
     assert_eq!(
         payload.validate(&historical).unwrap_err(),
-        "historical_speech_not_supported"
-    );
-    assert_eq!(
-        crate::backend::BackendAccess {
-            config: &f.service.config
-        }
-        .infer(&historical, &invocation)
-        .unwrap_err(),
-        "historical_speech_not_supported"
+        "invalid_speech_request"
     );
     assert_eq!(
         crate::protocol::raw_result("{}".into(), payload).unwrap_err(),
-        "historical_speech_not_supported"
+        "use_speech_interface"
     );
     assert_eq!(fs::read(&path).unwrap(), original);
 }

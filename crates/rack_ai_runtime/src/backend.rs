@@ -8,6 +8,7 @@ pub struct BackendAccess<'a> {
 }
 impl BackendAccess<'_> {
     pub fn ready(&self, d: &Demand) -> Result<(), String> {
+        if d.profile.backend == Backend::Chatterbox { return crate::speech_backend::ready(d); }
         if d.profile.backend == Backend::Comfyui
             && d.profile.driver != crate::config::Driver::Fixture
         {
@@ -48,11 +49,14 @@ impl BackendAccess<'_> {
         let path = request
             .payload
             .as_ref()
-            .map_or(Ok("/v1/chat/completions"), |p| p.path())?;
+            .map_or("/v1/chat/completions", |p| p.path());
         process::endpoint_owned(
             d.process.as_ref().ok_or("activation_process_missing")?,
             &d.profile,
         )?;
+        if d.profile.backend == Backend::Chatterbox {
+            return crate::speech_backend::synthesize((d, invocation), &self.config.authority_root);
+        }
         let bound = invocation.response_bytes;
         if let Some(payload) = &request.payload {
             let response = client(request.timeout_seconds)?

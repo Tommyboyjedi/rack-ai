@@ -772,6 +772,49 @@
           ]
         }
       ]
+    },
+    "voiceListResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "voices"
+      ],
+      "properties": {
+        "voices": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "voiceRegistrationResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "voice_id",
+        "registered",
+        "sha256"
+      ],
+      "properties": {
+        "voice_id": {
+          "type": "string"
+        },
+        "registered": {
+          "const": true
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "speechResponse": {
+      "type": "string",
+      "format": "binary",
+      "contentMediaType": "audio/wav",
+      "description": "PCM16 mono 24000 Hz WAV; <=60 seconds and <=2880044 bytes."
     }
   },
   "type": "object",

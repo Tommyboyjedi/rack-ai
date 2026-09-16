@@ -8,7 +8,6 @@ pub enum Backend {
     Vllm,
     LlamaCpp,
     Comfyui,
-    // Retained authority records only; rejected by configuration validation.
     Chatterbox,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
