@@ -11,11 +11,20 @@ pub struct Transition<'a> {
 impl Transition<'_> {
     pub fn advance(&self, d: &Demand) -> Result<(), String> {
         let r = self.service;
+        if d.state == DemandState::RecoveryRequired && crate::media_evidence::supported(d) {
+            return (crate::media_recovery::MediaRecovery { service: r }).advance(d, None);
+        }
         if !active(d) || d.state == DemandState::Releasing {
             return crate::retirement::Retirement { service: r }.run(d);
         }
         if d.state == DemandState::Ready {
-            return ReadyMonitor { service: r }.advance(d);
+            return ReadyMonitor { service: r }.advance(d).or_else(|error| {
+                if crate::media_evidence::supported(d) {
+                    (crate::media_recovery::MediaRecovery { service: r }).advance(d, Some(&error))
+                } else {
+                    Err(error)
+                }
+            });
         }
         if d.state != DemandState::Preparing {
             return Ok(());
@@ -178,6 +187,23 @@ impl ReadinessCommit<'_> {
                     });
                     Ok(())
                 })
+            }
+            Err(_)
+                if media
+                    && (crate::media::MediaAdapter { config: &r.config }).restarting(d)?
+                    && now() < d.transition_deadline =>
+            {
+                Ok(())
+            }
+            Err(_)
+                if media
+                    && (crate::media_recovery::MediaRecovery { service: r })
+                        .retire_stopped(d)? =>
+            {
+                Ok(())
+            }
+            Err(error) if media => {
+                (crate::media_recovery::MediaRecovery { service: r }).advance(d, Some(&error))
             }
             Err(_) if now() < d.transition_deadline => Ok(()),
             Err(error) => {

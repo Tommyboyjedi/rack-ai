@@ -102,7 +102,11 @@ impl Supervisor {
                         matches!(
                             d.state,
                             DemandState::Preparing | DemandState::Ready | DemandState::Releasing
-                        ) && !s.data.demands.values().any(|parent| {
+                        ) || (d.state == DemandState::RecoveryRequired
+                            && crate::media_evidence::supported(d))
+                    })
+                    .filter(|d| {
+                        !s.data.demands.values().any(|parent| {
                             parent.state == DemandState::Preparing && parent.victims.contains(&d.id)
                         })
                     })
@@ -158,8 +162,10 @@ impl Supervisor {
                         {
                             return Ok(());
                         }
-                        current.state = DemandState::RecoveryRequired;
-                        current.reason = Some(crate::capacity::diagnostic(error));
+                        if current.state != DemandState::RecoveryRequired {
+                            current.state = DemandState::RecoveryRequired;
+                            current.reason = Some(crate::capacity::diagnostic(error));
+                        }
                         Ok(())
                     });
                     if let Err(e) = saved {

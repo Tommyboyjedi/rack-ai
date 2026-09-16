@@ -56,3 +56,6 @@ mod reference_audio;
 mod voice_registry;
 mod voice_registration;
 mod gpu_cleanup;
+
+mod media_evidence;
+mod media_recovery;

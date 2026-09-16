@@ -40,6 +40,9 @@ async def startup(request, handler):
     machine = json.loads((root / "machine.json").read_text())
     if not machine["active"]:
         raise web.HTTPServiceUnavailable()
+    if request.path == "/rack-gate/status" and fault.get("gate_disconnect"):
+        request.transport.close()
+        return web.Response()
     if request.path == "/rack-gate/status" and fault.get("gate_unavailable"):
         raise web.HTTPServiceUnavailable()
     if invocation != machine["invocation"]:

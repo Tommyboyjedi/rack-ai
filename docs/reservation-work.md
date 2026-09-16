@@ -186,3 +186,15 @@ The embedded request schema includes speechRequest, voiceListRequest and
 voiceRegistrationForm definitions for these separate scoped/multipart routes.
 The response schema includes voiceListResponse, voiceRegistrationResponse and
 speechResponse definitions; binary WAV is not a runtime JSON work result.
+
+
+### Media health and recovery
+
+A ComfyUI transport failure closes admission while RackAI verifies the canonical
+claim, activation, systemd generation, and GPU/process ownership. A verified owned
+backend uses the existing bounded Preparing/startup cleanup lifecycle. A stopped
+backend releases its claim only after systemd has no pending job or populated
+cgroup, the recorded process generations are gone, and the media GPU is clear.
+The supervisor also revisits retained ComfyUI recovery records after receiver
+restart. Conflicting or missing ownership evidence retains the claim and
+`recovery_required`; reconciliation never replays or deletes invocation history.
