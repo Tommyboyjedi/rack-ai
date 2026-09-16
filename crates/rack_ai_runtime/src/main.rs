@@ -3,6 +3,13 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
+    if arguments
+        .first()
+        .is_some_and(|arg| arg == "__sandbox-tcp-bridge")
+    {
+        return rack_ai_infrastructure::sandbox_tcp_bridge::run_from_args(&arguments[1..])
+            .map(|_| ());
+    }
     let (path, validate_only) = match arguments.as_slice() {
         [path] => (path, false),
         [operation, path] if operation == "validate" => (path, true),

@@ -127,6 +127,11 @@ impl<'a> ExecuteChange<'a> {
                 return packet;
             }
         }
+        if let Some(implementer) = self.implementer
+            && let Err(error) = implementer.check_execution()
+        {
+            return fail(packet, ChangeStatus::Failed, error);
+        }
         if request.mode.runs_checks() {
             packet = match self.run_checks(change_request, workspace, packet.clone()) {
                 Ok(value) => value,
@@ -143,6 +148,11 @@ impl<'a> ExecuteChange<'a> {
                     return rejected;
                 }
                 if packet.status() == &ChangeStatus::ChecksPassed {
+                    if let Some(implementer) = self.implementer
+                        && let Err(error) = implementer.check_execution()
+                    {
+                        return fail(packet, ChangeStatus::Failed, error);
+                    }
                     packet = match self.materialize_accepted_revision(
                         change_request,
                         workspace,

@@ -2,6 +2,7 @@ use crate::WorkerExecutionProvenance;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ImplementWorkerRuntime {
+    reserved_access: Option<ReservedAccess>,
     worker_id: String,
     entrypoint: String,
     provider_profile: String,
@@ -21,6 +22,7 @@ impl ImplementWorkerRuntime {
         endpoint: String,
     ) -> Self {
         Self {
+            reserved_access: None,
             worker_id,
             entrypoint,
             provider_profile,
@@ -77,5 +79,22 @@ impl ImplementWorkerRuntime {
 
     pub fn worker_provenance(&self) -> Option<&WorkerExecutionProvenance> {
         self.worker_provenance.as_ref()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ReservedAccess {
+    pub endpoint: String,
+    pub invocation_id: String,
+    pub authority_root: std::path::PathBuf,
+}
+impl ImplementWorkerRuntime {
+    pub fn with_reserved_access(mut self, access: ReservedAccess) -> Self {
+        self.endpoint = access.endpoint.clone();
+        self.reserved_access = Some(access);
+        self
+    }
+    pub fn reserved_access(&self) -> Option<&ReservedAccess> {
+        self.reserved_access.as_ref()
     }
 }

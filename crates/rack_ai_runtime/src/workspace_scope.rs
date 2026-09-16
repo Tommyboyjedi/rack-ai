@@ -8,6 +8,8 @@ use subtle::ConstantTimeEq;
 
 #[derive(Clone, Deserialize, Serialize)]
 pub struct WorkspaceScope {
+    #[serde(default)]
+    pub invocation_id: Option<String>,
     pub owner: String,
     pub reservation_id: String,
     pub deadline_ms: u64,
@@ -17,7 +19,11 @@ pub struct WorkspaceScope {
 #[derive(Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ScopeControl {
-    Open { deadline_ms: u64 },
+    Open {
+        deadline_ms: u64,
+        #[serde(default)]
+        invocation_id: Option<String>,
+    },
     Close,
 }
 pub struct ScopeAccess {
@@ -46,20 +52,35 @@ impl ScopeController<'_> {
         let authorization_hash = digest(access.capability.as_bytes());
         self.service.authority.update(|s| {
             match operation {
-                ScopeControl::Open { deadline_ms } => {
+                ScopeControl::Open {
+                    deadline_ms,
+                    invocation_id,
+                } => {
                     let d = s
                         .data
                         .demands
                         .get(&access.reservation)
                         .ok_or("invalid_scoped_capability")?;
+                    let current_key =
+                        bool::from(d.access_key.as_bytes().ct_eq(access.capability.as_bytes()));
+                    let accepted_runner = invocation_id.as_ref().is_some_and(|id| {
+                        s.data.invocations.get(id).is_some_and(|i| {
+                            parent_open(i)
+                                && i.request.reservation_id == d.id
+                                && i.owner == d.owner
+                                && i.scope_access_hash.as_deref() == Some(&authorization_hash)
+                        })
+                    });
                     if !active(d)
-                        || !bool::from(d.access_key.as_bytes().ct_eq(access.capability.as_bytes()))
+                        || (!current_key && !accepted_runner)
+                        || (invocation_id.is_some() && !accepted_runner)
                     {
                         return Err("invalid_scoped_capability".into());
                     }
                     if let Some(scope) = s.data.workspace_scopes.get(&id) {
                         return if scope.deadline_ms == deadline_ms
                             && scope.authorization_hash == authorization_hash
+                            && scope.invocation_id == invocation_id
                         {
                             Ok(()) // Reconciliation never extends or reopens an execution.
                         } else {
@@ -77,6 +98,7 @@ impl ScopeController<'_> {
                     s.data.workspace_scopes.insert(
                         id,
                         WorkspaceScope {
+                            invocation_id,
                             owner: d.owner.clone(),
                             reservation_id: d.id.clone(),
                             deadline_ms,
@@ -112,7 +134,11 @@ impl ScopeController<'_> {
 pub fn permits(s: &Document, request: &Inference) -> bool {
     request.workspace_scope.as_ref().is_none_or(|id| {
         s.data.workspace_scopes.get(id).is_some_and(|scope| {
-            scope.reservation_id == request.reservation_id
+            scope
+                .invocation_id
+                .as_ref()
+                .is_none_or(|id| s.data.invocations.get(id).is_some_and(parent_open))
+                && scope.reservation_id == request.reservation_id
                 && scope.closed_at_ms.is_none()
                 && scope.deadline_ms > now_ms()
         })
@@ -139,4 +165,32 @@ pub fn cancel_closed(s: &mut Document) {
             i.cancel();
         }
     }
+}
+
+fn parent_open(i: &Invocation) -> bool {
+    crate::work_payload::is_workspace(i)
+        && i.state == InvocationState::Started
+        && i.cancellation.is_none()
+        && i.execution_deadline
+            .is_some_and(|deadline| deadline > now())
+}
+pub fn authorizes(s: &Document, input: (&str, &str, Option<&str>)) -> bool {
+    let (reservation, capability, namespace) = input;
+    namespace
+        .and_then(|namespace| s.data.workspace_scopes.get(&key(reservation, namespace)))
+        .is_some_and(|scope| {
+            scope.reservation_id == reservation
+                && scope.closed_at_ms.is_none()
+                && scope.deadline_ms > now_ms()
+                && scope
+                    .invocation_id
+                    .as_ref()
+                    .is_none_or(|id| s.data.invocations.get(id).is_some_and(parent_open))
+                && bool::from(
+                    scope
+                        .authorization_hash
+                        .as_bytes()
+                        .ct_eq(digest(capability.as_bytes()).as_bytes()),
+                )
+        })
 }

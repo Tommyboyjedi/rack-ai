@@ -1,4 +1,3 @@
-use crate::types::Priority;
 use serde::{Deserialize, Serialize};
 use std::{fs, net::SocketAddr, path::PathBuf};
 #[derive(Clone, Deserialize)]
@@ -6,7 +5,6 @@ use std::{fs, net::SocketAddr, path::PathBuf};
 pub struct Principal {
     pub id: String,
     pub token_sha256: String,
-    pub ceiling: Priority,
     pub operator: bool,
 }
 #[derive(Clone, Deserialize)]

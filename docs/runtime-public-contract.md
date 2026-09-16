@@ -1,3 +1,5 @@
+> The current simplified reserve/work operations and native access description are documented in [reservation-work.md](reservation-work.md). Source ceilings and tag allowlists are removed; legacy operation compatibility below remains.
+
 # RackAI runtime contract v1
 
 The service accepts authenticated POST requests at `/runtime/v1`. The schema identifier is
@@ -105,7 +107,7 @@ Music Director image requests use Paramount. No application adapter is included 
 
 ## Later client integration
 
-Provision the source credential and allowed tags/priorities on RackAI first. Discover tags;
+Provision the source credential on RackAI first. Discover published services;
 acquire independent demands (for example primary and coder); persist the acquisition record;
 wait for readiness; persist each submission identity before sending; inspect/reconcile after
 transport uncertainty; renew/release explicitly. Denial, held demand and uncertain invocation
@@ -185,7 +187,7 @@ ordinary successful `result`. No model stop is claimed. Completion rechecks the 
 fence. Calls belonging to other scopes and the shared reservation remain intact.
 
 The original capability can close only its registered scope after activation rotates;
-it cannot use that exception to register new scopes or invoke a stale model endpoint.
+it cannot use that exception to register new scopes. An already registered, open scope may continue model calls across restoration against the same reservation; the gateway still checks current dispatch authority.
 A temporary HTTP disconnection does not close the scope or cancel accepted work.
 A valid, still-open workspace can therefore wait through preemption and execute once
 on restoration. Companion applications do not need to supply these controls.

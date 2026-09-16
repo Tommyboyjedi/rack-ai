@@ -7,6 +7,8 @@ use std::{
 
 const CONTROL_TIMEOUT: Duration = Duration::from_secs(2);
 pub struct WorkspaceCallRequest<'a> {
+    pub authority_root: Option<&'a Path>,
+    pub invocation_id: Option<&'a str>,
     pub endpoint: &'a str,
     pub workdir: &'a Path,
     pub task: &'a str,
@@ -38,7 +40,10 @@ impl WorkspaceCallScope {
         if !request.endpoint.contains("/scoped/") {
             return Ok(None);
         }
-        let _fence = crate::endpoint_fence::EndpointFence::local(request.endpoint)?;
+        let _fence = match request.authority_root {
+            Some(root) => crate::endpoint_fence::EndpointFence::enter(root, request.endpoint)?,
+            None => crate::endpoint_fence::EndpointFence::local(request.endpoint)?,
+        };
         let encoded =
             serde_json::to_vec(&(request.workdir, request.task)).map_err(|e| e.to_string())?;
         let key = format!("{:x}", Sha256::digest(encoded));
@@ -48,7 +53,7 @@ impl WorkspaceCallScope {
             control_endpoint: format!("{base}/scopes/{key}"),
         };
         scope
-            .control(serde_json::json!({"operation":"open", "deadline_ms":request.deadline_ms}))?;
+            .control(serde_json::json!({"operation":"open", "deadline_ms":request.deadline_ms,"invocation_id":request.invocation_id}))?;
         Ok(Some(scope))
     }
     pub fn endpoint(&self) -> &str {

@@ -8,14 +8,27 @@ use std::{
     path::Path,
 };
 pub fn eligible(s: &Document, i: &Invocation) -> bool {
-    i.state == InvocationState::Accepted
+    (!crate::work_payload::is_workspace(i)
+        || !s.data.invocations.values().any(|other| {
+            other.request.reservation_id == i.request.reservation_id
+                && crate::work_payload::is_workspace(other)
+                && matches!(
+                    other.state,
+                    InvocationState::Started | InvocationState::Uncertain
+                )
+        }))
+        && i.state == InvocationState::Accepted
         && i.waiting_deadline > now()
         && crate::workspace_scope::permits(s, &i.request)
         && s.data
             .demands
             .get(&i.request.reservation_id)
             .is_some_and(|d| {
-                d.state == DemandState::Ready && active(d) && owns(s, d) && !inflight(s, &d.id)
+                d.state == DemandState::Ready
+                    && active(d)
+                    && owns(s, d)
+                    && crate::reservation::ready(s, d)
+                    && !inflight(s, &d.id)
             })
 }
 pub fn permit(service: &Service, pool: Pool) -> Result<Option<File>, String> {

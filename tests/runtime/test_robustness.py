@@ -35,7 +35,9 @@ class RuntimeTests(unittest.TestCase):
         changed = dict(denied['request'],priority='medium')
         r.call('athba','acquire',status=409,request=changed)
         r.call('athba','acquire',status=403,request=dict(changed,acquisition_id='spoof',source_system='cb'))
-        r.call('athba','acquire',status=403,request=dict(changed,acquisition_id='ceiling',priority='high'))
+        unrestricted = r.wait(r.call('athba','acquire',request=dict(changed,acquisition_id='ceiling',priority='high')))
+        self.assertEqual(unrestricted['priority'],'high')
+        r.release(unrestricted); r.wait(unrestricted,'released')
         r.call('bad-token','discover',status=401)
         fresh = r.wait(r.acquire('athba','local-primary','low'))
         self.assertEqual(r.call('athba','acquire',request=fresh['request'])['id'],fresh['id'])
@@ -150,7 +152,6 @@ class RuntimeTests(unittest.TestCase):
         import copy
         alias=copy.deepcopy(r.config['profiles'][-1]); alias['tag']='reverse'; alias['resources'].reverse()
         r.config['profiles'].append(alias)
-        r.config['sources'][-1]['tags'].append('reverse')
         self.restart()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures=[pool.submit(r.acquire,'other',tag,'medium') for tag in ['big-brain','reverse']]
@@ -166,15 +167,15 @@ class RuntimeTests(unittest.TestCase):
         self.restart()
         self.assertEqual(r.call(winner['owner'],'acquire',request=winner['request'])['id'],winner['id'])
 
-    def test_unqualified_path_and_per_tag_priority_are_source_authorized(self):
+    def test_qualification_is_preserved_and_legacy_tag_priority_is_ignored(self):
         r=self.rack
         r.config['profiles'][-1]['qualified']=False
-        r.config['sources'][0]['tag_priorities']={'big-brain':['medium']}
         self.restart()
         denied=r.acquire('athba','big-brain','medium')
         self.assertEqual(denied['reason'],'unqualified_profile')
         r.call('athba','acquire',status=403,request=dict(denied['request'],acquisition_id='qualify',qualification=True))
-        r.call('athba','acquire',status=403,request=dict(denied['request'],acquisition_id='low',priority='low'))
+        unrestricted=r.call('athba','acquire',request=dict(denied['request'],acquisition_id='low',priority='low'))
+        self.assertEqual(unrestricted['reason'],'unqualified_profile')
         d=r.wait(r.acquire('other','big-brain','medium',qualification=True))
         r.result(r.infer(d))
 

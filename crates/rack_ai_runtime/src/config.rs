@@ -66,12 +66,7 @@ pub struct Profile {
 pub struct Source {
     pub source: String,
     pub token_sha256: String,
-    pub permitted: Vec<Priority>,
-    pub default: Priority,
-    pub maximum: Priority,
-    pub tags: Vec<String>,
     #[serde(default)]
-    pub tag_priorities: BTreeMap<String, Vec<Priority>>,
     pub qualification: bool,
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -83,6 +78,8 @@ pub struct Device {
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub workspace: Option<crate::work_payload::WorkspaceConfig>,
     pub schema: String,
     pub listen: String,
     pub authority_root: PathBuf,
@@ -138,3 +135,5 @@ impl Profile {
                 == rack_ai_media::types::Mode::Interactive
     }
 }
+
+// Legacy source policy fields deserialize only for migration.

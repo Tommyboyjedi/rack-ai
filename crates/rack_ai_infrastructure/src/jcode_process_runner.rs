@@ -162,8 +162,14 @@ fn run_with_root(
         None
     } else {
         Some(
-            crate::endpoint_fence::EndpointFence::local(runtime.endpoint())
-                .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?,
+            match runtime.reserved_access() {
+                Some(access) => crate::endpoint_fence::EndpointFence::enter(
+                    &access.authority_root,
+                    runtime.endpoint(),
+                ),
+                None => crate::endpoint_fence::EndpointFence::local(runtime.endpoint()),
+            }
+            .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?,
         )
     };
     let execution_config = JCodeExecutionConfig::prepare_at(root, runtime)
@@ -172,6 +178,12 @@ fn run_with_root(
         .map_err(|e| JCodeProcessFailure::new(e, String::new(), String::new()))?;
     let scope = crate::workspace_call_scope::WorkspaceCallScope::open(
         crate::workspace_call_scope::WorkspaceCallRequest {
+            authority_root: runtime
+                .reserved_access()
+                .map(|access| access.authority_root.as_path()),
+            invocation_id: runtime
+                .reserved_access()
+                .map(|access| access.invocation_id.as_str()),
             endpoint: runtime.endpoint(),
             workdir,
             task,
@@ -348,7 +360,13 @@ fn prepare_bubblewrap_command(
     let endpoint = LocalEndpoint::parse(runtime.endpoint())?;
     let socket_path = root.join(SOCKET_NAME);
     let launcher_path = root.join("sandbox-launcher.sh");
-    let host_bridge = HostUnixBridge::start(&socket_path, endpoint.port)?;
+    let host_bridge = HostUnixBridge::start(
+        &socket_path,
+        BridgeTarget {
+            port: endpoint.port,
+            authority_root: runtime.reserved_access().map(|a| a.authority_root.clone()),
+        },
+    )?;
     let bridge_command = bridge_command(root, &socket_path, endpoint.port)?;
     write_launcher_script(&launcher_path, &bridge_command)?;
 
@@ -443,6 +461,12 @@ impl LocalEndpoint {
     }
 }
 
+#[derive(Clone)]
+struct BridgeTarget {
+    port: u16,
+    authority_root: Option<PathBuf>,
+}
+
 struct HostUnixBridge {
     socket_path: PathBuf,
     stop: Arc<AtomicBool>,
@@ -450,7 +474,7 @@ struct HostUnixBridge {
 }
 
 impl HostUnixBridge {
-    fn start(socket_path: &Path, target_port: u16) -> Result<Self, String> {
+    fn start(socket_path: &Path, target: BridgeTarget) -> Result<Self, String> {
         let _ = fs::remove_file(socket_path);
         let listener = UnixListener::bind(socket_path).map_err(|error| error.to_string())?;
         listener
@@ -463,8 +487,9 @@ impl HostUnixBridge {
             while !stop_clone.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
+                        let target = target.clone();
                         thread::spawn(move || {
-                            let _ = bridge_unix_to_tcp(stream, target_port);
+                            let _ = bridge_unix_to_tcp(stream, target);
                         });
                     }
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
@@ -500,9 +525,13 @@ impl Drop for NetworkIsolationGuard {
     }
 }
 
-fn bridge_unix_to_tcp(stream: UnixStream, target_port: u16) -> Result<(), String> {
-    let _dispatch =
-        crate::endpoint_fence::EndpointFence::local(&format!("http://127.0.0.1:{target_port}"))?;
+fn bridge_unix_to_tcp(stream: UnixStream, target: BridgeTarget) -> Result<(), String> {
+    let target_port = target.port;
+    let endpoint = format!("http://127.0.0.1:{target_port}");
+    let _dispatch = match target.authority_root {
+        Some(root) => crate::endpoint_fence::EndpointFence::enter(&root, &endpoint)?,
+        None => crate::endpoint_fence::EndpointFence::local(&endpoint)?,
+    };
     let upstream =
         TcpStream::connect(("127.0.0.1", target_port)).map_err(|error| error.to_string())?;
     let mut stream_read = stream.try_clone().map_err(|error| error.to_string())?;

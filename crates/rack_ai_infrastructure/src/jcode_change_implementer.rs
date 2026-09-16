@@ -10,6 +10,7 @@ use crate::JCodeWorkerConfigResolver;
 use crate::RegistryPaths;
 
 pub struct JCodeChangeImplementer {
+    access: Option<rack_ai_application::implement_worker_runtime::ReservedAccess>,
     resolver: JCodeWorkerConfigResolver,
     default_worker: Option<ImplementWorkerRuntime>,
 }
@@ -17,6 +18,7 @@ pub struct JCodeChangeImplementer {
 impl JCodeChangeImplementer {
     pub fn new(paths: RegistryPaths, default_worker: Option<ImplementWorkerRuntime>) -> Self {
         Self {
+            access: None,
             resolver: JCodeWorkerConfigResolver::new(paths),
             default_worker,
         }
@@ -29,7 +31,10 @@ impl JCodeChangeImplementer {
         if let Some(runtime) = request.worker() {
             let resolved = self.resolver.resolve(runtime.worker_id())?;
             assert_runtime_matches(runtime, &resolved)?;
-            return Ok(resolved);
+            return Ok(match &self.access {
+                Some(access) => resolved.with_reserved_access(access.clone()),
+                None => resolved,
+            });
         }
         self.default_worker
             .clone()
@@ -39,7 +44,13 @@ impl JCodeChangeImplementer {
 }
 
 impl ChangeImplementer for JCodeChangeImplementer {
+    fn check_execution(&self) -> Result<(), String> {
+        self.access
+            .as_ref()
+            .map_or(Ok(()), crate::reserved_execution::check)
+    }
     fn implement(&self, request: &ImplementChangeRequest) -> Result<ImplementChangeResult, String> {
+        self.check_execution()?;
         let runtime = self.resolve_runtime(request)?;
         let output = JCodeProcessRunner::run_with_allowed_paths(
             &runtime,
@@ -310,5 +321,15 @@ mod tests {
         let root = std::env::temp_dir().join(format!("rack-ai-jcode-implementer-{nanos}"));
         fs::create_dir_all(&root).unwrap();
         root
+    }
+}
+
+impl JCodeChangeImplementer {
+    pub fn with_reserved_access(
+        mut self,
+        access: rack_ai_application::implement_worker_runtime::ReservedAccess,
+    ) -> Self {
+        self.access = Some(access);
+        self
     }
 }

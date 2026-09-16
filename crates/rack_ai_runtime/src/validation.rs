@@ -51,25 +51,18 @@ pub fn validate(c: &Config) -> Result<(), String> {
     for p in &c.profiles {
         ProfileValidation { config: c }.validate(p)?;
     }
+    if c.workspace.is_some()
+        && (c.limits.max_dispatch_workers < 2 || c.limits.max_pending_per_reservation < 2)
+    {
+        return Err("workspace requires a dispatch slot for nested model calls".into());
+    }
     for s in &c.sources {
         if !valid_id(&s.source)
             || s.source == "*"
             || s.token_sha256.len() != 64
             || !s.token_sha256.bytes().all(|b| b.is_ascii_hexdigit())
-            || !s.permitted.contains(&s.default)
-            || s.permitted.iter().any(|p| *p > s.maximum)
-            || s.tag_priorities.iter().any(|(tag, ps)| {
-                !s.tags.contains(tag)
-                    || ps.is_empty()
-                    || ps.iter().any(|p| !s.permitted.contains(p))
-            })
-            || s.tags.is_empty()
-            || s.tags
-                .iter()
-                .any(|t| !c.profiles.iter().any(|p| &p.tag == t))
-            || (s.source.eq_ignore_ascii_case("athba") && s.maximum > Priority::Medium)
         {
-            return Err("invalid source policy".into());
+            return Err("invalid principal credentials".into());
         }
     }
     Ok(())

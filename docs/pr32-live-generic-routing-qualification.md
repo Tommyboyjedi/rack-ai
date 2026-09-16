@@ -1,5 +1,7 @@
 # PR32 live generic routing qualification
 
+Historical qualification record: the work-unit CLI and wire contracts described here are retired. Current operations use [reservations and work](reservation-work.md). These past results do not qualify the replacement contract.
+
 Date: 2026-09-03 UTC
 
 Published PR32 commit before qualification: `ddda2f8d375b0a9cd5243583bbe9f249bfb287d9`.

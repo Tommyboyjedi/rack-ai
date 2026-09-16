@@ -111,7 +111,10 @@ impl Supervisor {
                 s.data
                     .invocations
                     .values()
-                    .filter(|i| crate::workers::eligible(s, i))
+                    .filter(|i| {
+                        crate::workers::eligible(s, i)
+                            && crate::dispatch::workspace_slot(&self.service, s, i)
+                    })
                     .filter(|i| reservations.insert(i.request.reservation_id.clone()))
                     .map(|i| i.id.clone())
                     .collect::<Vec<_>>(),

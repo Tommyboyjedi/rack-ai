@@ -23,104 +23,31 @@
     {
       "source": "athba",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000001",
-      "permitted": [
-        "low",
-        "medium"
-      ],
-      "default": "low",
-      "maximum": "medium",
-      "tags": [
-        "local-primary",
-        "local-coder",
-        "big-brain"
-      ],
-      "tag_priorities": {
-        "big-brain": [
-          "medium"
-        ]
-      },
       "qualification": false
     },
     {
       "source": "operator",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000002",
-      "permitted": [
-        "paramount"
-      ],
-      "default": "paramount",
-      "maximum": "paramount",
-      "tags": [
-        "comfyui"
-      ],
-      "tag_priorities": {},
       "qualification": false
     },
     {
       "source": "music-director",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000003",
-      "permitted": [
-        "paramount"
-      ],
-      "default": "paramount",
-      "maximum": "paramount",
-      "tags": [
-        "local-image"
-      ],
-      "tag_priorities": {},
       "qualification": false
     },
     {
       "source": "cb",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000004",
-      "permitted": [
-        "paramount"
-      ],
-      "default": "paramount",
-      "maximum": "paramount",
-      "tags": [
-        "local-primary",
-        "local-image",
-        "comfyui"
-      ],
-      "tag_priorities": {},
       "qualification": false
     },
     {
       "source": "other-authorized",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000005",
-      "permitted": [
-        "low",
-        "medium",
-        "high"
-      ],
-      "default": "low",
-      "maximum": "high",
-      "tags": [
-        "big-brain"
-      ],
-      "tag_priorities": {},
       "qualification": false
     },
     {
       "source": "qualification-operator",
       "token_sha256": "0000000000000000000000000000000000000000000000000000000000000006",
-      "permitted": [
-        "low",
-        "medium",
-        "high",
-        "paramount"
-      ],
-      "default": "low",
-      "maximum": "paramount",
-      "tags": [
-        "local-primary",
-        "local-coder",
-        "local-fun-chat",
-        "big-brain",
-        "comfyui",
-        "local-image"
-      ],
-      "tag_priorities": {},
       "qualification": true
     }
   ],

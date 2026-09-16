@@ -1,6 +1,5 @@
 //! Independent listener, deployment-path and authenticated-source configuration policies.
 use crate::config::Config;
-use crate::types::Priority;
 pub fn validate(config: &Config) -> Result<(), String> {
     NetworkPolicy { config }.validate()?;
     LocalPolicy { config }.validate()?;
@@ -108,10 +107,9 @@ impl SourcePolicy<'_> {
                 p.id.is_empty()
                     || p.token_sha256.len() != 64
                     || !p.token_sha256.bytes().all(|b| b.is_ascii_hexdigit())
-                    || (p.id == "athba" && p.ceiling > Priority::Medium)
             })
         {
-            return Err("invalid source credentials/ceilings".into());
+            return Err("invalid principal credentials".into());
         }
         let ids: std::collections::BTreeSet<_> =
             self.config.principals.iter().map(|p| &p.id).collect();

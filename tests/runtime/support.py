@@ -44,13 +44,11 @@ class Rack:
                 executable_sha256=hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
                 args=[str(ROOT/'tests/runtime/backend.py'), str(listen), tag, str(self.events),str(self.root/(tag+'.control.json'))],
                 artifact=None, artifact_sha256=None, startup_seconds=3,drain_seconds=3,stop_seconds=2,inference_seconds=5))
-        policies = [('athba',['low','medium']),('comfy',['paramount']),('cb',['paramount']),
-                    ('other',['low','medium','high','paramount'])]
         return dict(schema=VERSION,listen=self.address,authority_root=str(self.root/'authority'),fixture_mode=True,
             max_ttl_seconds=60,host_capacity_mib=1024,
             devices={r:dict(uuid=r,capacity_mib=1024) for r in tags[-1][1]}, profiles=profiles,
-            sources=[dict(source=s,token_sha256=hashlib.sha256(s.encode()).hexdigest(),permitted=p,
-                default=p[0],maximum=p[-1],tags=[t[0] for t in tags],qualification=s=='other') for s,p in policies])
+            sources=[dict(source=s,token_sha256=hashlib.sha256(s.encode()).hexdigest(),
+                qualification=s=='other') for s in ['athba','comfy','cb','other']])
 
     def start(self):
         path = self.root/'config.json'

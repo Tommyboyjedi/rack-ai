@@ -3,13 +3,13 @@ use crate::{
     types::*,
 };
 use serde::Deserialize;
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Control {
     pub generation: String,
     pub action: Action,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Action {
     Renew { ttl_seconds: u64 },
@@ -26,51 +26,52 @@ pub struct ReservationControl<'a> {
 }
 impl ReservationControl<'_> {
     pub fn control(&self, c: ControlContext<'_>) -> Result<Demand, String> {
-        self.service.authority.update(|s| {
-            let current = owned(s, c.owner, c.id)?;
-            if current.state == DemandState::Denied {
-                return Ok(current.clone());
-            }
-            if current.generation != c.request.generation {
-                return Err("stale_generation".into());
-            }
-            let d = s.data.demands.get_mut(c.id).ok_or("not_found")?;
-            match c.request.action {
-                Action::Renew { ttl_seconds } => {
-                    if d.released || d.deadline <= now() || d.state == DemandState::Denied {
-                        return Err("reservation_terminal".into());
-                    }
-                    if ttl_seconds == 0 || ttl_seconds > self.service.config.max_ttl_seconds {
-                        return Err("invalid_ttl".into());
-                    }
-                    d.deadline = now() + ttl_seconds;
+        self.service.authority.update(|s| self.apply(s, c))
+    }
+    pub(crate) fn apply(&self, s: &mut Document, c: ControlContext<'_>) -> Result<Demand, String> {
+        let current = owned(s, c.owner, c.id)?;
+        if current.state == DemandState::Denied {
+            return Ok(current.clone());
+        }
+        if current.generation != c.request.generation {
+            return Err("stale_generation".into());
+        }
+        let d = s.data.demands.get_mut(c.id).ok_or("not_found")?;
+        match c.request.action {
+            Action::Renew { ttl_seconds } => {
+                if d.released || d.deadline <= now() || d.state == DemandState::Denied {
+                    return Err("reservation_terminal".into());
                 }
-                Action::Release | Action::Cancel => {
-                    d.released = true;
-                    d.transition_deadline = now() + d.profile.drain_seconds;
-                    if d.state != DemandState::Denied {
-                        d.state = DemandState::Releasing;
-                    }
-                    if d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT) {
-                        d.reason = Some(
-                            match c.request.action {
-                                Action::Cancel => "cancelled",
-                                _ => "released",
-                            }
-                            .into(),
-                        );
-                    }
-                    for i in s.data.invocations.values_mut().filter(|i| {
-                        i.request.reservation_id == c.id
-                            && (i.state == InvocationState::Accepted
-                                || matches!(c.request.action, Action::Cancel))
-                    }) {
-                        i.cancel();
-                    }
+                if ttl_seconds == 0 || ttl_seconds > self.service.config.max_ttl_seconds {
+                    return Err("invalid_ttl".into());
+                }
+                d.deadline = now() + ttl_seconds;
+            }
+            Action::Release | Action::Cancel => {
+                d.released = true;
+                d.transition_deadline = now() + d.profile.drain_seconds;
+                if d.state != DemandState::Denied {
+                    d.state = DemandState::Releasing;
+                }
+                if d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT) {
+                    d.reason = Some(
+                        match c.request.action {
+                            Action::Cancel => "cancelled",
+                            _ => "released",
+                        }
+                        .into(),
+                    );
+                }
+                for i in s.data.invocations.values_mut().filter(|i| {
+                    i.request.reservation_id == c.id
+                        && (i.state == InvocationState::Accepted
+                            || matches!(c.request.action, Action::Cancel))
+                }) {
+                    i.cancel();
                 }
             }
-            Ok(d.clone())
-        })
+        }
+        Ok(d.clone())
     }
     pub fn cancel_invocation(&self, owner: &str, id: &str) -> Result<Invocation, String> {
         self.service.authority.update(|s| {
@@ -81,7 +82,45 @@ impl ReservationControl<'_> {
                 .filter(|i| i.owner == owner)
                 .ok_or("not_found")?;
             i.cancel();
-            Ok(i.clone())
+            let result = i.clone();
+            crate::workspace_scope::cancel_closed(s);
+            Ok(result)
         })
     }
+}
+
+pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Result<(), String> {
+    service.authority.update(|s| {
+        let (owner, id, action) = input;
+        let d = owned(s, owner, id)?;
+        let root_id = crate::reservation::root(s, d)?.id.clone();
+        let ids = crate::reservation::members(s, d)?;
+        if !matches!(action, Action::Renew { .. }) {
+            s.data
+                .demands
+                .get_mut(&root_id)
+                .ok_or("not_found")?
+                .reservation_closed = Some(if matches!(action, Action::Cancel) {
+                DemandState::Cancelled
+            } else {
+                DemandState::Released
+            });
+        }
+        for id in ids {
+            let generation = owned(s, owner, &id)?.generation.clone();
+            (ReservationControl { service }).apply(
+                s,
+                ControlContext {
+                    owner,
+                    id: &id,
+                    request: Control {
+                        generation,
+                        action: action.clone(),
+                    },
+                },
+            )?;
+        }
+        crate::workspace_scope::cancel_closed(s);
+        Ok(())
+    })
 }
