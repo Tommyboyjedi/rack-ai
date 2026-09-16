@@ -421,3 +421,89 @@ fn idle_policy_defaults_and_invalid_values_fail_validation() {
         assert!(crate::validation::validate(&config).is_err());
     }
 }
+
+#[test]
+fn historical_chatterbox_record_reads_unchanged_but_new_profile_is_rejected() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let path = f.service.config.authority_root.join("managed.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["data"]["demands"][&d.id]["profile"]["backend"] = "chatterbox".into();
+    let original = serde_json::to_vec(&value).unwrap();
+    fs::write(&path, &original).unwrap();
+    let historical = f.inspect(&d);
+    assert_eq!(
+        historical.profile.backend,
+        crate::config::Backend::Chatterbox
+    );
+    assert_eq!(
+        serde_json::to_value(&historical.profile).unwrap()["backend"],
+        "chatterbox"
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let mut config = f.service.config.clone();
+    crate::validation::validate(&config).unwrap();
+    config.profiles[0].backend = historical.profile.backend;
+    assert_eq!(
+        crate::validation::validate(&config).unwrap_err(),
+        "historical_tts_profile_not_supported"
+    );
+}
+
+#[test]
+fn historical_speech_record_reads_unchanged_but_profile_and_execution_are_rejected() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    f.ready(&d);
+    let i = Submission {
+        service: &f.service,
+    }
+    .submit("cb", request(&d))
+    .unwrap();
+    let path = f.service.config.authority_root.join("managed.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["data"]["demands"][&d.id]["profile"]["protocols"] = serde_json::json!(["speech"]);
+    value["data"]["invocations"][&i.id]["request"]["payload"] = serde_json::json!({
+        "protocol": "speech", "body": {"model": d.profile.model, "input": "historical text"}
+    });
+    let original = serde_json::to_vec(&value).unwrap();
+    fs::write(&path, &original).unwrap();
+    let historical = f.inspect(&d);
+    let invocation = f.service.result("cb", &i.id).unwrap();
+    let payload = invocation.request.payload.as_ref().unwrap();
+    assert_eq!(payload.protocol, crate::protocol::Protocol::Speech);
+    assert_eq!(
+        historical.profile.protocols,
+        vec![crate::protocol::Protocol::Speech]
+    );
+    assert_eq!(serde_json::to_value(payload).unwrap()["protocol"], "speech");
+    assert_eq!(
+        serde_json::to_value(&historical.profile).unwrap()["protocols"],
+        serde_json::json!(["speech"])
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let mut config = f.service.config.clone();
+    crate::validation::validate(&config).unwrap();
+    config.profiles[0].protocols = historical.profile.protocols.clone();
+    assert_eq!(
+        crate::validation::validate(&config).unwrap_err(),
+        "historical_tts_profile_not_supported"
+    );
+    assert_eq!(
+        payload.validate(&historical).unwrap_err(),
+        "historical_speech_not_supported"
+    );
+    assert_eq!(
+        crate::backend::BackendAccess {
+            config: &f.service.config
+        }
+        .infer(&historical, &invocation)
+        .unwrap_err(),
+        "historical_speech_not_supported"
+    );
+    assert_eq!(
+        crate::protocol::raw_result("{}".into(), payload).unwrap_err(),
+        "historical_speech_not_supported"
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+}

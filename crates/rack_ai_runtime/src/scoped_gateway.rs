@@ -137,6 +137,7 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
         let key = match call.protocol {
             Protocol::ChatCompletions => "max_tokens",
             Protocol::Responses => "max_output_tokens",
+            Protocol::Speech => return Err("historical_speech_not_supported".into()),
         };
         object.insert(key.into(), json!(d.profile.max_output_tokens));
     }

@@ -3,6 +3,7 @@ pub mod api;
 pub mod backend;
 pub mod config;
 pub mod container;
+mod contract;
 pub mod control;
 pub mod dispatch;
 pub mod hosting;

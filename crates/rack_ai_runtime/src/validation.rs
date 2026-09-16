@@ -73,6 +73,11 @@ struct ProfileValidation<'a> {
 impl ProfileValidation<'_> {
     fn validate(&self, p: &Profile) -> Result<(), String> {
         let c = self.config;
+        if p.backend == Backend::Chatterbox
+            || p.protocols.contains(&crate::protocol::Protocol::Speech)
+        {
+            return Err("historical_tts_profile_not_supported".into());
+        }
         let url = reqwest::Url::parse(&p.endpoint).map_err(|_| "invalid endpoint")?;
         if !valid_id(&p.tag)
             || p.version.is_empty()

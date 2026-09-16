@@ -8,7 +8,7 @@ use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, State},
     http::{HeaderMap, StatusCode},
-    routing::post,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -67,6 +67,7 @@ pub enum Request {
 pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route("/runtime/v1", post(handle))
+        .route("/runtime/v1/contract", get(crate::contract::handle))
         .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
@@ -83,12 +84,7 @@ async fn handle(
     headers: HeaderMap,
     request: Result<Json<Request>, axum::extract::rejection::JsonRejection>,
 ) -> (StatusCode, Json<Value>) {
-    let token = headers
-        .get("authorization")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|h| h.strip_prefix("Bearer "))
-        .unwrap_or("");
-    let source = match service.config.authenticate(token) {
+    let source = match authenticate(&service.config, &headers) {
         Ok(source) => source,
         Err(_) => {
             return (
@@ -252,4 +248,16 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     object.insert("profile_version".into(), json!(d.profile.version));
     object.insert("resources".into(), json!(d.profile.resources));
     Ok(value)
+}
+
+pub(crate) fn authenticate(
+    config: &crate::config::Config,
+    headers: &HeaderMap,
+) -> Result<crate::config::Source, String> {
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .unwrap_or("");
+    config.authenticate(token)
 }
