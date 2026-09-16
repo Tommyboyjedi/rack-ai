@@ -148,3 +148,15 @@ def test_owned_unreachable_backend_is_cleaned_up_at_recovery_deadline(tmp_path):
         assert any('stop' in args for args in machine['mutations'])
         doc = json.loads((Path(rack.config['authority_root'])/'managed.json').read_text())
         assert 'gpu-4080-super' not in doc['claims']
+
+
+def test_initial_start_waits_for_gate_identity_without_quarantine(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        fault(media, gate_unavailable=True)
+        reservation, demand = reserve(rack, 'initial-start')
+        time.sleep(2)
+        assert rack.inspect(demand)['state'] == 'preparing'
+        fault(media, gate_unavailable=False)
+        rack.wait(demand, seconds=15)
+        rack.call('cb', 'release_reservation', reservation_id=reservation['id'])
+        terminal(rack, demand)

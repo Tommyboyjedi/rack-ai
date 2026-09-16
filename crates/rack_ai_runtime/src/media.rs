@@ -66,6 +66,13 @@ impl MediaAdapter<'_> {
         }
         .restarting(d)
     }
+    pub fn awaiting_identity(&self, d: &Demand) -> Result<bool, String> {
+        let service = self.runtime(d)?.store.read()?.service;
+        Ok(service.activation == d.generation
+            && service.state == ServiceState::Starting
+            && service.generation.is_none()
+            && service.invocation.is_none())
+    }
     pub fn ready(&self, d: &Demand) -> Result<(), String> {
         MediaObservation {
             config: self.config,

@@ -202,6 +202,14 @@ impl ReadinessCommit<'_> {
             {
                 Ok(())
             }
+            Err(_)
+                if media
+                    && now() < d.transition_deadline
+                    && (crate::media::MediaAdapter { config: &r.config })
+                        .awaiting_identity(d)? =>
+            {
+                Ok(())
+            }
             Err(error) if media => {
                 (crate::media_recovery::MediaRecovery { service: r }).advance(d, Some(&error))
             }
