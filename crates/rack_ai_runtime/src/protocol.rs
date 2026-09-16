@@ -6,6 +6,8 @@ pub enum Protocol {
     #[default]
     ChatCompletions,
     Responses,
+    // Retained authority records only; never an executable protocol.
+    Speech,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -15,6 +17,7 @@ pub struct Payload {
 }
 impl Payload {
     pub fn validate(&self, d: &crate::types::Demand) -> Result<u32, String> {
+        self.path()?;
         let body = self.body.as_object().ok_or("invalid_protocol_body")?;
         let allowed = match self.protocol {
             Protocol::ChatCompletions => &[
@@ -51,6 +54,7 @@ impl Payload {
                 "stream",
                 "store",
             ][..],
+            Protocol::Speech => return Err("historical_speech_not_supported".into()),
         };
         if body.keys().any(|k| !allowed.contains(&k.as_str()))
             || !d.profile.protocols.contains(&self.protocol)
@@ -67,6 +71,7 @@ impl Payload {
         let field = match self.protocol {
             Protocol::ChatCompletions => "max_tokens",
             Protocol::Responses => "max_output_tokens",
+            Protocol::Speech => return Err("historical_speech_not_supported".into()),
         };
         let tokens = body
             .get(field)
@@ -75,10 +80,11 @@ impl Payload {
             .ok_or("explicit_output_bound_required")?;
         u32::try_from(tokens).map_err(|_| "invalid_output_bound".into())
     }
-    pub fn path(&self) -> &'static str {
+    pub fn path(&self) -> Result<&'static str, String> {
         match self.protocol {
-            Protocol::ChatCompletions => "/v1/chat/completions",
-            Protocol::Responses => "/v1/responses",
+            Protocol::ChatCompletions => Ok("/v1/chat/completions"),
+            Protocol::Responses => Ok("/v1/responses"),
+            Protocol::Speech => Err("historical_speech_not_supported".into()),
         }
     }
 }
@@ -86,12 +92,14 @@ pub fn default_protocols() -> Vec<Protocol> {
     vec![Protocol::ChatCompletions]
 }
 pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
+    p.path()?;
     if p.body.get("stream").and_then(Value::as_bool) == Some(true) {
         let finished = match p.protocol {
             Protocol::ChatCompletions => bytes.lines().any(|l| l.trim() == "data: [DONE]"),
             Protocol::Responses => bytes
                 .lines()
                 .any(|l| l.trim() == "event: response.completed"),
+            Protocol::Speech => return Err("historical_speech_not_supported".into()),
         };
         if !finished {
             return Err("stream_completion_uncertain".into());
@@ -128,6 +136,7 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
                 value.get("status").and_then(Value::as_str) == Some("completed")
                     && value.get("output").and_then(Value::as_array).is_some()
             }
+            Protocol::Speech => return Err("historical_speech_not_supported".into()),
         };
         observed_limit(&value, p)?;
         if !complete || value.get("model") != p.body.get("model") {

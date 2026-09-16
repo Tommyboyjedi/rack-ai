@@ -4,6 +4,8 @@ import tempfile
 from pathlib import Path
 import subprocess
 import unittest
+import urllib.error
+import urllib.request
 import jsonschema
 from support import Rack, ROOT, VERSION
 
@@ -33,5 +35,54 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout.strip(),'RUNTIME_CONFIG_VALID')
             self.assertEqual(list(Path(root).iterdir()),[path])
+
+class ContractEndpointTests(unittest.TestCase):
+    def get_contract(self, rack, authorization=None):
+        headers = {} if authorization is None else {'Authorization': authorization}
+        request = urllib.request.Request(
+            f'http://{rack.address}/runtime/v1/contract', headers=headers)
+        try:
+            response = urllib.request.urlopen(request, timeout=4)
+        except urllib.error.HTTPError as error:
+            response = error
+        with response:
+            return response.status, json.loads(response.read())
+
+    def test_contract_requires_existing_bearer_authentication(self):
+        with tempfile.TemporaryDirectory(prefix='rack-contract-auth-') as root:
+            r = Rack(root)
+            try:
+                for token in [None, 'Bearer wrong', 'Basic athba', 'bearer athba']:
+                    with self.subTest(authorization=token):
+                        status, body = self.get_contract(r, token)
+                        self.assertEqual(status, 401)
+                        self.assertEqual(body, dict(schema=VERSION, error='unauthorized'))
+                for source in ['athba', 'other']:
+                    self.assertEqual(self.get_contract(r, f'Bearer {source}')[0], 200)
+            finally:
+                r.close()
+
+    def test_contract_contains_canonical_files_and_is_read_only(self):
+        with tempfile.TemporaryDirectory(prefix='rack-contract-embedded-') as root:
+            r = Rack(root)
+            try:
+                # No contract files exist in the receiver's configured runtime directory.
+                self.assertFalse((r.root/'docs').exists())
+                self.assertFalse((r.root/'config/runtime').exists())
+                discovery = r.call('athba', 'discover')
+                authority = r.root/'authority/managed.json'
+                before = authority.read_bytes()
+                status, body = self.get_contract(r, 'Bearer athba')
+                self.assertEqual(status, 200)
+                self.assertEqual(body, dict(
+                    schema='rack-ai/runtime-contract/v1', contract_version='1.0.0',
+                    documentation=(ROOT/'docs/reservation-work.md').read_text(),
+                    request_schema=json.loads((ROOT/'config/runtime/request.schema.json').read_text()),
+                    response_schema=json.loads((ROOT/'config/runtime/response.schema.json').read_text())))
+                self.assertEqual(r.call('athba', 'discover'), discovery)
+                self.assertEqual(authority.read_bytes(), before)
+                self.assertFalse(r.events.exists())
+            finally:
+                r.close()
 
 if __name__=='__main__':unittest.main(verbosity=2)

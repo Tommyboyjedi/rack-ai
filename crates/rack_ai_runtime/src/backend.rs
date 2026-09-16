@@ -44,18 +44,22 @@ impl BackendAccess<'_> {
     pub fn infer(&self, d: &Demand, invocation: &Invocation) -> Result<Value, String> {
         // The caller persisted Started and revalidated the generation before entering.
         // No automatic retry is allowed after this boundary.
+        let request = &invocation.request;
+        let path = request
+            .payload
+            .as_ref()
+            .map_or(Ok("/v1/chat/completions"), |p| p.path())?;
         process::endpoint_owned(
             d.process.as_ref().ok_or("activation_process_missing")?,
             &d.profile,
         )?;
-        let request = &invocation.request;
         let bound = invocation.response_bytes;
         if let Some(payload) = &request.payload {
             let response = client(request.timeout_seconds)?
                 .post(format!(
                     "{}{}",
                     d.profile.endpoint.trim_end_matches('/'),
-                    payload.path()
+                    path
                 ))
                 .json(&payload.body)
                 .send()

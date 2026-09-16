@@ -2,7 +2,24 @@
 
 RackAI does not assign or cap application priority. Requested priority is caller-owned input on a reservation. Authentication establishes ownership/security, not workload importance or service entitlement. Published qualified services are available uniformly to authenticated ordinary principals.
 
-All operations below use the existing authenticated `POST /runtime/v1` endpoint and its existing `{schema, result}` response envelope. No new work-unit version, workspace scheduler, ledger, gateway or native proxy is introduced.
+Reservation and work operations below use the existing authenticated `POST /runtime/v1` endpoint and its existing `{schema, result}` response envelope. No new work-unit version, workspace scheduler, ledger, gateway or native proxy is introduced.
+
+## Read the deployed contract
+
+`GET /runtime/v1/contract` requires the same `Authorization: Bearer <token>`
+credentials as `POST /runtime/v1`. It is read-only and returns a JSON object:
+
+- `schema`: `rack-ai/runtime-contract/v1`.
+- `contract_version`: `1.0.0`, the published contract revision.
+- `documentation`: the complete contents of this document as a string.
+- `request_schema`: `config/runtime/request.schema.json` as a JSON object.
+- `response_schema`: `config/runtime/response.schema.json` as a JSON object.
+
+All three canonical files are embedded at compile time, so the response describes
+that deployed binary, independent of files on the runtime host. Missing or invalid
+credentials return the existing HTTP 401 `{schema, error: "unauthorized"}` response.
+`discover` remains the dynamic service/capability discovery operation; this endpoint
+does not report live service availability or change discovery behavior.
 
 ## Reserve services
 
