@@ -15,8 +15,12 @@ from test_shared_media import native_config_hash
 
 
 @contextmanager
-def shared(root):
-    with receiver(root/'media') as media:
+def shared(root, legacy=False):
+    def historical(c):
+        if legacy:
+            for principal in c['principals']:
+                principal['ceiling'] = 'low'
+    with receiver(root/'media', historical) as media:
         fault(media, machine={'new_process': True})
         def configure(c):
             c['authority_root'] = media['config']['resource_root']
@@ -69,7 +73,7 @@ def test_transport_failure_then_clean_stop_releases_claim(tmp_path):
 
 
 def test_stale_recovery_self_reconciles_after_receiver_restart(tmp_path):
-    with shared(tmp_path) as (rack, media):
+    with shared(tmp_path, legacy=True) as (rack, media):
         reservation, demand = reserve(rack, 'old-generation')
         demand = rack.wait(demand)
         rack.process.kill()

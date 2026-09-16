@@ -66,8 +66,22 @@ impl Config {
         {
             return Err("configuration must be mode 0600".into());
         }
-        let value: Self = serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let mut raw: serde_json::Value =
+            serde_json::from_slice(&fs::read(path).map_err(|e| e.to_string())?)
+                .map_err(|e| e.to_string())?;
+        // Pre-generic pinned deployments retain this obsolete field. It grants
+        // no authority and imposes no priority policy; preserve the original file.
+        if let Some(principals) = raw
+            .get_mut("principals")
+            .and_then(serde_json::Value::as_array_mut)
+        {
+            for principal in principals {
+                if let Some(fields) = principal.as_object_mut() {
+                    fields.remove("ceiling");
+                }
+            }
+        }
+        let value: Self = serde_json::from_value(raw).map_err(|e| e.to_string())?;
         value.validate()?;
         Ok(value)
     }
