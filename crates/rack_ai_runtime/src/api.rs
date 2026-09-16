@@ -20,6 +20,9 @@ pub enum Request {
     Reserve {
         request: crate::reservation::Reserve,
     },
+    RefreshReservation {
+        reservation_id: String,
+    },
     InspectReservation {
         reservation_id: String,
     },
@@ -110,6 +113,7 @@ async fn handle(
         Request::Acquire { .. }
             | Request::Infer { .. }
             | Request::Reserve { .. }
+            | Request::RefreshReservation { .. }
             | Request::SubmitWork { .. }
     ) {
         &service.admission_slots
@@ -164,9 +168,11 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
         })).collect::<Vec<_>>(), "priorities":["low","medium","high","paramount"],"default_priority":"low"})
         }
         Request::Reserve { request } => {
-            let id = (crate::reservation_admission::ReservationAdmission { service, source })
-                .reserve(request)?;
-            crate::reservation_view::inspect(service, (&source.source, &id))?
+            (crate::reservation_admission::ReservationAdmission { service, source })
+                .reserve(request)?
+        }
+        Request::RefreshReservation { reservation_id } => {
+            crate::reservation_refresh::refresh(service, (&source.source, &reservation_id))?
         }
         Request::InspectReservation { reservation_id } => {
             crate::reservation_view::inspect(service, (&source.source, &reservation_id))?
@@ -224,6 +230,8 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     let mut value = serde_json::to_value(&d).map_err(|e| e.to_string())?;
     let object = value.as_object_mut().ok_or("invalid_public_record")?;
     object.remove("profile");
+    object.remove("reserve_result");
+    object.remove("reservation_closed");
     object.remove("access_key");
     if d.profile.backend != crate::config::Backend::Comfyui {
         object.insert(

@@ -4,12 +4,11 @@ use rack_ai_application::GenericSelectionReason;
 use rack_ai_application::GenericWorkerIneligibility;
 use rack_ai_application::GenericWorkerIneligibilityReason;
 use rack_ai_application::GenericWorkerSelectionDecision;
-use rack_ai_application::WorkUnitRequest;
-use rack_ai_application::WorkUnitSelectionError;
-use rack_ai_application::WorkUnitWorkerSelection;
-use rack_ai_application::WorkUnitWorkerSelector;
 use rack_ai_application::WorkerCatalog;
-use rack_ai_domain::WorkUnitCapability;
+use rack_ai_application::WorkspaceRequest;
+use rack_ai_application::WorkspaceSelectionError;
+use rack_ai_application::WorkspaceWorkerSelection;
+use rack_ai_application::WorkspaceWorkerSelector;
 
 use crate::FileSystemRegistryRepository;
 use crate::FileSystemWorkerCatalog;
@@ -19,14 +18,14 @@ use crate::RegistryPaths;
 use crate::ResourceRecord;
 use crate::WorkerRecord;
 
-pub struct RegistryWorkUnitWorkerSelector {
+pub struct RegistryWorkspaceWorkerSelector {
     repository: FileSystemRegistryRepository,
     catalog: FileSystemWorkerCatalog,
     resolver: JCodeWorkerConfigResolver,
     reserved_worker: Option<String>,
 }
 
-impl RegistryWorkUnitWorkerSelector {
+impl RegistryWorkspaceWorkerSelector {
     pub fn new(paths: RegistryPaths) -> Self {
         Self {
             reserved_worker: None,
@@ -37,70 +36,62 @@ impl RegistryWorkUnitWorkerSelector {
     }
 }
 
-impl WorkUnitWorkerSelector for RegistryWorkUnitWorkerSelector {
+impl WorkspaceWorkerSelector for RegistryWorkspaceWorkerSelector {
     fn select(
         &self,
-        request: &WorkUnitRequest,
-    ) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError> {
+        request: &WorkspaceRequest,
+    ) -> Result<WorkspaceWorkerSelection, WorkspaceSelectionError> {
         let models = self
             .repository
             .load_models()
-            .map_err(WorkUnitSelectionError::Other)?;
+            .map_err(WorkspaceSelectionError::Other)?;
         let mut workers = self
             .repository
             .load_workers()
-            .map_err(WorkUnitSelectionError::Other)?;
+            .map_err(WorkspaceSelectionError::Other)?;
         if let Some(id) = &self.reserved_worker {
             workers.retain(|w| &w.id == id);
         }
-        if let Some(routing) = request.routing() {
-            let resources = self
-                .repository
-                .load_resources()
-                .map_err(WorkUnitSelectionError::Other)?;
-            return select_generic(
-                request,
-                routing,
-                &workers,
-                &models,
-                &resources,
-                &self.resolver,
-                &self.catalog,
-            );
-        }
-        if request.capability() != WorkUnitCapability::Implementation {
-            return Err(WorkUnitSelectionError::Other(
-                "unsupported work unit capability".to_string(),
-            ));
-        }
-        let active_model_workers = models
-            .iter()
-            .filter(|item| item.status == "active")
-            .map(|item| item.worker_id.as_str())
-            .collect::<Vec<_>>();
-        let worker = choose_worker(request, &workers, &active_model_workers)?;
-        let runtime = self
-            .resolver
-            .resolve(worker.id.as_str())
-            .map_err(WorkUnitSelectionError::Other)?;
-        let placement = self
-            .catalog
-            .resolve(worker.id.as_str())
-            .map_err(WorkUnitSelectionError::Other)?
-            .placement();
-        Ok(WorkUnitWorkerSelection::new(runtime, placement))
+        let resources = self
+            .repository
+            .load_resources()
+            .map_err(WorkspaceSelectionError::Other)?;
+        select_generic(
+            request,
+            &SelectionContext {
+                workers: &workers,
+                models: &models,
+                resources: &resources,
+                resolver: &self.resolver,
+                catalog: &self.catalog,
+            },
+        )
     }
 }
 
-fn select_generic(
-    request: &WorkUnitRequest,
-    routing: &rack_ai_application::GenericRoutingHeader,
-    workers: &[WorkerRecord],
-    models: &[ModelRecord],
-    resources: &[ResourceRecord],
-    resolver: &JCodeWorkerConfigResolver,
-    catalog: &FileSystemWorkerCatalog,
-) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError> {
+struct SelectionContext<'a> {
+    workers: &'a [WorkerRecord],
+    models: &'a [ModelRecord],
+    resources: &'a [ResourceRecord],
+    resolver: &'a JCodeWorkerConfigResolver,
+    catalog: &'a FileSystemWorkerCatalog,
+}
+struct Candidates<'a> {
+    decision: GenericWorkerSelectionDecision,
+    eligible: Vec<(
+        &'a WorkerRecord,
+        &'a rack_ai_application::GenericModelEligibilityProfile,
+    )>,
+    temporarily_unavailable: bool,
+}
+fn candidates<'a>(request: &WorkspaceRequest, context: &SelectionContext<'a>) -> Candidates<'a> {
+    let SelectionContext {
+        workers,
+        models,
+        resources,
+        ..
+    } = context;
+    let routing = request.routing();
     let mut decision = GenericWorkerSelectionDecision::new(
         routing,
         request.complexity(),
@@ -108,7 +99,7 @@ fn select_generic(
     );
     let mut eligible = Vec::new();
     let mut temporarily_unavailable = false;
-    for worker in workers {
+    for worker in *workers {
         let profile = match worker_profile(worker, models) {
             Ok(profile) => profile,
             Err(reason) => {
@@ -170,12 +161,27 @@ fn select_generic(
         .iter()
         .map(|(worker, _)| worker.id.clone())
         .collect();
+    Candidates {
+        decision,
+        eligible,
+        temporarily_unavailable,
+    }
+}
+fn select_generic(
+    request: &WorkspaceRequest,
+    context: &SelectionContext<'_>,
+) -> Result<WorkspaceWorkerSelection, WorkspaceSelectionError> {
+    let Candidates {
+        mut decision,
+        eligible,
+        temporarily_unavailable,
+    } = candidates(request, context);
     let (worker, profile) = match eligible.first().copied() {
         Some(value) => value,
         None if temporarily_unavailable => {
-            return Err(WorkUnitSelectionError::TemporarilyUnavailable);
+            return Err(WorkspaceSelectionError::TemporarilyUnavailable);
         }
-        None => return Err(WorkUnitSelectionError::CapabilityUnavailable),
+        None => return Err(WorkspaceSelectionError::CapabilityUnavailable),
     };
     decision.selected_worker_id = Some(worker.id.clone());
     decision.selection_reason = Some(if eligible.len() == 1 {
@@ -185,14 +191,16 @@ fn select_generic(
     });
     decision.model_profile_version = Some(profile.profile_version.clone());
     decision.qualification_evidence_refs = profile.qualification_evidence_refs.clone();
-    let runtime = resolver
+    let runtime = context
+        .resolver
         .resolve(worker.id.as_str())
-        .map_err(WorkUnitSelectionError::Other)?;
-    let placement = catalog
+        .map_err(WorkspaceSelectionError::Other)?;
+    let placement = context
+        .catalog
         .resolve(worker.id.as_str())
-        .map_err(WorkUnitSelectionError::Other)?
+        .map_err(WorkspaceSelectionError::Other)?
         .placement();
-    Ok(WorkUnitWorkerSelection::new(runtime, placement).with_selection_decision(decision))
+    Ok(WorkspaceWorkerSelection::new(runtime, placement).with_selection_decision(decision))
 }
 
 fn worker_profile<'a>(
@@ -217,7 +225,7 @@ fn worker_profile<'a>(
 }
 
 fn capability_reason(
-    request: &WorkUnitRequest,
+    request: &WorkspaceRequest,
     routing: &rack_ai_application::GenericRoutingHeader,
     worker: &WorkerRecord,
     profile: &rack_ai_application::GenericModelEligibilityProfile,
@@ -278,121 +286,17 @@ fn complexity_permits(
     }
 }
 
-fn choose_worker<'a>(
-    request: &WorkUnitRequest,
-    workers: &'a [WorkerRecord],
-    active_model_workers: &[&str],
-) -> Result<&'a WorkerRecord, WorkUnitSelectionError> {
-    let candidates = workers
-        .iter()
-        .filter(|worker| worker.enabled)
-        .filter(|worker| worker.kind == "jcode")
-        .filter(|worker| active_model_workers.contains(&worker.id.as_str()))
-        .collect::<Vec<_>>();
-    if candidates.is_empty() {
-        return Err(WorkUnitSelectionError::Other(
-            "no enabled JCode workers with active model bindings".to_string(),
-        ));
-    }
-    if request.requires_large_context() || request.complexity().prefers_stronger_worker() {
-        return candidates
-            .iter()
-            .find(|worker| worker.tool_profile.as_deref() != Some("minimal"))
-            .copied()
-            .or_else(|| candidates.first().copied())
-            .ok_or_else(|| {
-                WorkUnitSelectionError::Other(
-                    "no worker available for stronger work unit".to_string(),
-                )
-            });
-    }
-    candidates
-        .iter()
-        .find(|worker| worker.tool_profile.as_deref() == Some("minimal"))
-        .copied()
-        .or_else(|| {
-            candidates
-                .iter()
-                .find(|worker| worker.tool_profile.as_deref() == Some("minimal"))
-                .copied()
-        })
-        .or_else(|| candidates.first().copied())
-        .ok_or_else(|| {
-            WorkUnitSelectionError::Other(
-                "no worker available for bounded implementation work".to_string(),
-            )
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use rack_ai_application::WorkUnitRequest;
-    use rack_ai_application::WorkUnitRequestDocument;
-    use rack_ai_application::WorkUnitWorkerSelector;
+    use rack_ai_application::WorkspaceRequest;
+    use rack_ai_application::WorkspaceWorkerSelector;
 
-    use super::RegistryWorkUnitWorkerSelector;
+    use super::RegistryWorkspaceWorkerSelector;
     use crate::RegistryPaths;
-
-    #[test]
-    fn selects_minimal_implementer_for_small_work() {
-        let root = temp_root();
-        write_registry(&root);
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
-        let selection = selector.select(&sample_request(false, "small")).unwrap();
-        assert_eq!(selection.runtime().worker_id(), "local-coder");
-        assert_eq!(
-            selection.placement().resource_ids(),
-            ["gpu-2060".to_string()]
-        );
-        assert_eq!(
-            selection.runtime().worker_provenance().unwrap().worker_role,
-            "implementer-tester"
-        );
-    }
-
-    #[test]
-    fn selects_stronger_worker_for_large_context_work() {
-        let root = temp_root();
-        write_registry(&root);
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
-        let selection = selector.select(&sample_request(true, "medium")).unwrap();
-        assert_eq!(selection.runtime().worker_id(), "local-primary");
-        assert_eq!(
-            selection.placement().resource_ids(),
-            ["gpu-4060ti".to_string()]
-        );
-        assert_eq!(
-            selection.runtime().worker_provenance().unwrap().worker_role,
-            "planner-verifier"
-        );
-    }
-
-    fn sample_request(requires_large_context: bool, complexity: &str) -> WorkUnitRequest {
-        WorkUnitRequest::from_document(
-            serde_json::from_value::<WorkUnitRequestDocument>(serde_json::json!({
-                "version": "rack-ai/work-unit/v1",
-                "workload": {"id": "adaptos", "kind": "application-development"},
-                "repository": {"id": "adaptos", "base_ref": "main"},
-                "work_unit": {
-                    "id": "adaptos-001",
-                    "objective": "Implement a bounded feature.",
-                    "allowed_paths": ["src/"],
-                    "acceptance": {"commands": [["cargo", "test"]]},
-                    "requirements": {
-                        "complexity": complexity,
-                        "requires_large_context": requires_large_context
-                    },
-                    "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap()
-    }
 
     fn write_registry(root: &PathBuf) {
         fs::create_dir_all(root.join("config")).unwrap();
@@ -474,7 +378,7 @@ mod tests {
     fn generic_coding_small_selects_least_scarce_coder_and_persists_decision() {
         let root = temp_root();
         write_generic_registry(&root, "active");
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root));
         let selection = selector
             .select(&generic_request(
                 vec!["coding"],
@@ -501,7 +405,7 @@ mod tests {
     fn generic_reasoning_coding_medium_selects_primary_and_records_generic_exclusion() {
         let root = temp_root();
         write_generic_registry(&root, "active");
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root));
         let selection = selector
             .select(&generic_request(
                 vec!["coding", "reasoning"],
@@ -530,7 +434,7 @@ mod tests {
     fn generic_admission_accepts_all_principals_at_global_priorities() {
         let root = temp_root();
         write_generic_registry(&root, "active");
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root));
         for (source, priority) in [("athba", "high"), ("ATHBA", "paramount")] {
             assert!(
                 selector
@@ -561,7 +465,7 @@ mod tests {
     fn generic_distinguishes_temporary_capacity_from_no_capability() {
         let root = temp_root();
         write_generic_registry(&root, "busy");
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root.clone()));
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root.clone()));
         assert_eq!(
             selector.select(&generic_request(
                 vec!["coding"],
@@ -570,10 +474,10 @@ mod tests {
                 "medium",
                 "neutral"
             )),
-            Err(rack_ai_application::WorkUnitSelectionError::TemporarilyUnavailable)
+            Err(rack_ai_application::WorkspaceSelectionError::TemporarilyUnavailable)
         );
         write_generic_registry(&root, "active");
-        let selector = RegistryWorkUnitWorkerSelector::new(RegistryPaths::new(root));
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root));
         assert_eq!(
             selector.select(&generic_request(
                 vec!["visual"],
@@ -582,7 +486,7 @@ mod tests {
                 "medium",
                 "neutral"
             )),
-            Err(rack_ai_application::WorkUnitSelectionError::CapabilityUnavailable)
+            Err(rack_ai_application::WorkspaceSelectionError::CapabilityUnavailable)
         );
     }
 
@@ -592,32 +496,29 @@ mod tests {
         large_context: bool,
         priority: &str,
         source: &str,
-    ) -> WorkUnitRequest {
-        WorkUnitRequest::from_document(serde_json::from_value(serde_json::json!({
-            "version": "rack-ai/work-unit/v2",
-            "workload": {"id": "neutral", "kind": "application-development"},
-            "repository": {"id": "neutral", "base_ref": "main"},
-            "work_unit": {
-                "id": "neutral-001", "objective": "Make one bounded change.", "allowed_paths": ["src/"],
-                "acceptance": {"commands": [["cargo", "test"]]},
-                "requirements": {"complexity": complexity, "requires_large_context": large_context},
-                "limits": {"max_implementation_attempts": 1, "timeout_seconds": 30},
-                "routing": {"source_system": source, "work_id": "opaque-work", "submission_id": "opaque-submission", "idempotency_key": "opaque-key", "required_capabilities": capabilities, "priority": priority}
-            }
-        })).unwrap()).unwrap()
+    ) -> WorkspaceRequest {
+        rack_ai_application::WorkspaceRequest {
+            change: serde_json::from_value(serde_json::json!({"change_id":"neutral-001",
+                "repository":{"id":"neutral","base_ref":"main"}, "task":"Make one bounded change.",
+                "allowed_paths":["src/"],"acceptance":{"commands":[["cargo","test"]]},
+                "limits":{"max_implementation_attempts":1,"timeout_seconds":30}})).unwrap(),
+            requirements: serde_json::from_value(serde_json::json!({"complexity":complexity,"requires_large_context":large_context})).unwrap(),
+            routing: serde_json::from_value(serde_json::json!({"source_system":source,"work_id":"opaque-work",
+                "submission_id":"opaque-submission","idempotency_key":"opaque-key","required_capabilities":capabilities,"priority":priority})).unwrap(),
+        }
     }
 
     fn write_generic_registry(root: &PathBuf, resource_status: &str) {
         write_registry(root);
         fs::write(root.join("config/resources.json"), format!(r#"{{"resources":[{{"id":"gpu-4060ti","type":"gpu","label":"Primary","vram_gb":16,"device_hint":"generic","max_concurrent_tasks":1,"owner":"local-primary","status":"{resource_status}"}},{{"id":"gpu-2060","type":"gpu","label":"Coder","vram_gb":6,"device_hint":"generic","max_concurrent_tasks":1,"owner":"local-coder","status":"{resource_status}"}}]}}"#)).unwrap();
-        fs::write(root.join("config/models.json"), r#"{"source_admission_policies":[{"source_system":"athba","max_priority":"medium"},{"source_system":"*","max_priority":"paramount"}],"models":[
+        fs::write(root.join("config/models.json"), r#"{"models":[
 {"id":"gemma4-12b-local-primary","label":"Primary","role":"generic","backend":"vllm","worker_id":"local-primary","api_model_id":"local-primary","endpoint":"http://127.0.0.1:8017/v1","port":8017,"status":"active","eligibility_profile":{"model_profile_id":"local-primary-v1","capabilities":["reasoning","coding"],"max_complexity":"large","large_context_eligible":true,"qualification_status":"qualified","qualification_evidence_refs":["proof-primary"],"profile_version":"v1","execution_constraints":["configured-jcode-route"]}},
 {"id":"eqaq-v2-local-coder","label":"Coder","role":"generic","backend":"vllm","worker_id":"local-coder","api_model_id":"local-coder","endpoint":"http://127.0.0.1:8018/v1","port":8018,"status":"active","context_window":16368,"eligibility_profile":{"model_profile_id":"local-coder-v1","capabilities":["coding"],"max_complexity":"small","large_context_eligible":false,"qualification_status":"qualified_with_constraints","qualification_evidence_refs":["proof-coder"],"profile_version":"v1","execution_constraints":["minimal-tool-profile"]}}
 ]}"#).unwrap();
     }
 }
 
-impl RegistryWorkUnitWorkerSelector {
+impl RegistryWorkspaceWorkerSelector {
     pub fn for_reserved_worker(mut self, id: String) -> Self {
         self.reserved_worker = Some(id);
         self

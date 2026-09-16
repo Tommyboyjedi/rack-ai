@@ -67,16 +67,6 @@ pub struct Source {
     pub source: String,
     pub token_sha256: String,
     #[serde(default)]
-    pub permitted: Vec<Priority>,
-    #[serde(default = "default_priority")]
-    pub default: Priority,
-    #[serde(default = "default_priority")]
-    pub maximum: Priority,
-    #[serde(default)]
-    pub tags: Vec<String>,
-    #[serde(default)]
-    pub tag_priorities: BTreeMap<String, Vec<Priority>>,
-    #[serde(default)]
     pub qualification: bool,
 }
 #[derive(Clone, Deserialize, Serialize)]
@@ -147,6 +137,3 @@ impl Profile {
 }
 
 // Legacy source policy fields deserialize only for migration.
-fn default_priority() -> Priority {
-    Priority::Low
-}

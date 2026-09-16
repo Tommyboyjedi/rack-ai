@@ -29,7 +29,7 @@ pub mod create_change_worktree_request;
 pub mod durable_file;
 pub mod environment_resource_mount;
 pub mod execute_change;
-pub mod execute_work_unit;
+pub mod execute_workspace;
 pub mod execution_queue_repository;
 pub mod executor_config;
 pub mod generic_routing;
@@ -65,14 +65,13 @@ pub mod task_execution_request;
 pub mod task_executor;
 pub mod task_spec;
 pub mod task_spec_repository;
-pub mod work_unit_request;
-pub mod work_unit_request_document;
 pub mod worker_binding;
 pub mod worker_catalog;
 pub mod worker_execution_provenance;
 pub mod workspace_execution_result;
 pub mod workspace_executor;
 pub mod workspace_path;
+pub mod workspace_request;
 pub mod workspace_root;
 pub mod write_file_request;
 
@@ -169,12 +168,12 @@ pub use clock::Clock;
 pub use durable_file::CampaignLock;
 pub use durable_file::atomic_write;
 pub use environment_resource_mount::EnvironmentResourceMount;
-pub use execute_work_unit::ExecuteWorkUnit;
-pub use execute_work_unit::ExecuteWorkUnitDependencies;
-pub use execute_work_unit::ExecuteWorkUnitResult;
-pub use execute_work_unit::WorkUnitSelectionError;
-pub use execute_work_unit::WorkUnitWorkerSelection;
-pub use execute_work_unit::WorkUnitWorkerSelector;
+pub use execute_workspace::ExecuteWorkspace;
+pub use execute_workspace::ExecuteWorkspaceDependencies;
+pub use execute_workspace::ExecuteWorkspaceResult;
+pub use execute_workspace::WorkspaceSelectionError;
+pub use execute_workspace::WorkspaceWorkerSelection;
+pub use execute_workspace::WorkspaceWorkerSelector;
 
 #[cfg(test)]
 mod campaign_runner_tests;
@@ -190,8 +189,8 @@ pub use executor_config::ExecutorConfig;
 pub use generic_routing::{
     GenericCapability, GenericModelEligibilityProfile, GenericPriority, GenericQualificationStatus,
     GenericResourceAvailability, GenericResourceAvailabilityEvidence, GenericRoutingHeader,
-    GenericSelectionReason, GenericSourceAdmissionPolicy, GenericWorkerIneligibility,
-    GenericWorkerIneligibilityReason, GenericWorkerSelectionDecision,
+    GenericSelectionReason, GenericWorkerIneligibility, GenericWorkerIneligibilityReason,
+    GenericWorkerSelectionDecision,
 };
 pub use git_evidence::GitEvidence;
 pub use git_worktree::GitWorktree;
@@ -234,13 +233,12 @@ pub use task_execution_request::TaskExecutionRequest;
 pub use task_executor::TaskExecutor;
 pub use task_spec::TaskSpec;
 pub use task_spec_repository::TaskSpecRepository;
-pub use work_unit_request::WorkUnitRequest;
-pub use work_unit_request_document::WorkUnitRequestDocument;
 pub use worker_binding::WorkerBinding;
 pub use worker_catalog::WorkerCatalog;
 pub use worker_execution_provenance::WorkerExecutionProvenance;
 pub use workspace_execution_result::WorkspaceExecutionResult;
 pub use workspace_executor::WorkspaceExecutor;
 pub use workspace_path::WorkspacePath;
+pub use workspace_request::{WorkspaceRequest, WorkspaceRequirements};
 pub use workspace_root::WorkspaceRoot;
 pub use write_file_request::WriteFileRequest;

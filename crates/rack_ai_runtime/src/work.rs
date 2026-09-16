@@ -27,6 +27,9 @@ impl WorkSubmission<'_> {
         let d = self.service.authority.read(|s| {
             crate::reservation::select(s, (owner, &work.reservation_id, &work.service)).cloned()
         })?;
+        if d.state == DemandState::Denied {
+            return Err("service_unavailable".into());
+        }
         let (prompt, max_tokens, timeout_seconds) = match &work.payload {
             Payload::Inference {
                 prompt,
@@ -76,7 +79,7 @@ pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> 
         let w = i.request.work.as_ref().ok_or("work_required")?;
         let d = crate::service::owned(s, input.0, &i.request.reservation_id)?;
         let state = if (i.state == InvocationState::Accepted || (crate::work_payload::is_workspace(i) && i.state == InvocationState::Started)) && !crate::reservation::ready(s, d) {
-            if crate::reservation::members(s, d)?.iter().any(|id| s.data.demands.get(id).is_some_and(|d| matches!(d.state, DemandState::Held | DemandState::Draining))) { "held".into() } else { "waiting".into() }
+            if matches!(d.state, DemandState::Held | DemandState::Draining) { "held".into() } else { "waiting".into() }
         } else { serde_json::to_value(i.state).map_err(|e| e.to_string())? };
         Ok(json!({"work_id":w.work_id,"reservation_id":w.reservation_id,"service":w.service,"state":state,
             "invocation_id":i.id,"started":i.started,"activation":i.activation,"result":i.result,

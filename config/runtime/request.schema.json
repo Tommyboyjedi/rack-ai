@@ -415,9 +415,6 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "capability": {
-                          "type": "string"
-                        },
                         "complexity": {
                           "enum": [
                             "small",
@@ -451,8 +448,7 @@
                         },
                         "network": {
                           "enum": [
-                            "disabled",
-                            "enabled"
+                            "disabled"
                           ]
                         }
                       },
@@ -741,6 +737,25 @@
       "required": [
         "operation",
         "request"
+      ]
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "operation": {
+          "const": "refresh_reservation"
+        },
+        "reservation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[A-Za-z0-9_.-]+$"
+        }
+      },
+      "required": [
+        "operation",
+        "reservation_id"
       ]
     }
   ]

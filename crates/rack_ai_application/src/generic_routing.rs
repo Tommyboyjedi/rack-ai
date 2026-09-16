@@ -22,12 +22,6 @@ pub enum GenericPriority {
     Paramount,
 }
 
-impl GenericPriority {
-    pub fn permits(self, requested: Self) -> bool {
-        requested <= self
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct GenericRoutingHeader {
     pub source_system: String,
@@ -76,21 +70,6 @@ fn required_identity(value: String, field: &str) -> Result<String, String> {
         return Err(format!("{field} must not be empty"));
     }
     Ok(value)
-}
-
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GenericSourceAdmissionPolicy {
-    pub source_system: String,
-    pub max_priority: GenericPriority,
-}
-
-impl GenericSourceAdmissionPolicy {
-    pub fn matches(&self, source_system: &str) -> bool {
-        self.source_system == "*" || self.source_system.eq_ignore_ascii_case(source_system)
-    }
-    pub fn admits(&self, priority: GenericPriority) -> bool {
-        self.max_priority.permits(priority)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]

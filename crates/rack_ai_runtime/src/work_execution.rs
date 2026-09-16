@@ -1,19 +1,19 @@
 //! Reserved workspace work is an existing invocation executing the existing change transaction.
 use crate::{service::Service, types::*, work_payload::Work};
 use rack_ai_application::{
-    ExecuteWorkUnit, ExecuteWorkUnitDependencies, RepositoryRegistry, WorkUnitRequest,
-    WorkUnitWorkerSelection, WorkUnitWorkerSelector,
+    ExecuteWorkspace, ExecuteWorkspaceDependencies, RepositoryRegistry, WorkspaceWorkerSelection,
+    WorkspaceWorkerSelector,
 };
 use rack_ai_infrastructure::{
     ConfiguredWorkspaceExecutor, FileSystemChangeManifestRepository, FileSystemRegistryRepository,
     FileSystemRepositoryRegistry, GitCommandWorktree, JCodeChangeImplementer, RegistryPaths,
-    RegistryWorkUnitWorkerSelector, RepositoryPaths,
+    RegistryWorkspaceWorkerSelector, RepositoryPaths,
 };
 pub const MAX_WORKSPACE_SECONDS: u64 = 3600;
 pub fn selection(
     service: &Service,
     input: (&Demand, &Work),
-) -> Result<WorkUnitWorkerSelection, String> {
+) -> Result<WorkspaceWorkerSelection, String> {
     let (d, w) = input;
     let config = service
         .config
@@ -28,15 +28,25 @@ pub fn selection(
     {
         return Err("workspace_limits_or_qualification".into());
     }
-    let parsed = WorkUnitRequest::from_document(w.document(d)?)?;
+    let parsed = w.request(d)?;
     let paths = RegistryPaths::new(config.registry_root.clone());
+    let registry = FileSystemRepositoryRegistry::new(paths.clone());
+    let policy = registry.command_policy()?;
+    rack_ai_application::ChangeRequest::from_document(
+        parsed.change.clone(),
+        &rack_ai_application::ChangeRequestResolution {
+            registry: &registry,
+            command_policy: &policy,
+            git: &GitCommandWorktree,
+        },
+    )?;
     let models = FileSystemRegistryRepository::new(paths.clone()).load_models()?;
     let mut selections = Vec::new();
     for model in models
         .iter()
         .filter(|m| m.api_model_id.as_deref() == Some(d.profile.model.as_str()))
     {
-        let selector = RegistryWorkUnitWorkerSelector::new(paths.clone())
+        let selector = RegistryWorkspaceWorkerSelector::new(paths.clone())
             .for_reserved_worker(model.worker_id.clone());
         if let Ok(selected) = selector.select(&parsed)
             && selected
@@ -79,9 +89,9 @@ pub fn execute(
         authority_root: service.config.authority_root.clone(),
     };
     let implementer = JCodeChangeImplementer::new(paths.clone(), None).with_reserved_access(access);
-    let selector = RegistryWorkUnitWorkerSelector::new(paths)
+    let selector = RegistryWorkspaceWorkerSelector::new(paths)
         .for_reserved_worker(selected.runtime().worker_id().into());
-    let result = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+    let result = ExecuteWorkspace::new(ExecuteWorkspaceDependencies {
         registry: &registry,
         command_policy: &policy,
         git: &GitCommandWorktree,
@@ -90,7 +100,7 @@ pub fn execute(
         implementer: Some(&implementer),
         selector: &selector,
     })
-    .execute(work.document(d)?)?;
+    .execute(work.request(d)?)?;
     let value = serde_json::to_value(result).map_err(|e| e.to_string())?;
     if serde_json::to_vec(&value).map_err(|e| e.to_string())?.len() as u64
         > invocation.response_bytes

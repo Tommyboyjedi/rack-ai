@@ -63,12 +63,15 @@ class ReservedWork(unittest.TestCase):
         r=self.rack
         reservation,_=self.reserve(priority='low');reservation=self.wait(reservation)
         contender=r.wait(r.acquire('cb','local-fun-chat','paramount'))
-        self.wait(reservation,'held')
+        self.wait(reservation,'partial')
         work=self.work(reservation)
         waiting=r.call('athba','submit_work',request=work)
         self.assertEqual(waiting['state'],'held')
         self.assertIsNone(waiting['started'])
-        cancelled=self.work(reservation,'cancelled','local-coder')
+        coder=self.work(reservation,'ready-coder','local-coder')
+        r.call('athba','submit_work',request=coder)
+        self.result('ready-coder')
+        cancelled=self.work(reservation,'cancelled','local-primary')
         r.call('athba','submit_work',request=cancelled)
         self.assertEqual(r.call('athba','cancel_work',work_id='cancelled')['state'],'cancelled')
         self.assertEqual(r.counts('dispatch')['local-primary'],0)
@@ -76,17 +79,54 @@ class ReservedWork(unittest.TestCase):
         completed=self.result('one')
         self.assertEqual(completed['invocation_id'],waiting['invocation_id'])
         self.assertEqual(r.counts('dispatch')['local-primary'],1)
-        self.assertEqual(r.counts('dispatch')['local-coder'],0)
-    def test_whole_reservation_denial_and_multi_resource_preemption(self):
+        self.assertEqual(r.counts('dispatch')['local-coder'],1)
+    def test_partial_refresh_is_explicit_and_preserves_ready_and_held_members(self):
         r=self.rack
-        incumbent=r.wait(r.acquire('cb','local-coder','paramount'))
-        denied,request=self.reserve(priority='paramount')
-        self.assertEqual(denied['state'],'denied')
-        self.assertEqual(r.counts('start')['local-primary'],0)
-        r.release(incumbent);r.wait(incumbent,'released')
-        self.assertEqual(r.call('athba','reserve',request=request)['state'],'denied')
-        big=r.wait(r.acquire('other','big-brain','low'))
-        replacement,_=self.reserve('fresh','high')
-        replacement=self.wait(replacement)
-        self.assertEqual(r.wait(big,'held')['id'],big['id'])
-        self.assertEqual(replacement['priority'],'high')
+        r.process.terminate();r.process.wait(timeout=5);r.log.close()
+        big=next(p for p in r.config['profiles'] if p['tag']=='big-brain')
+        big['resources']=['gpu-4080-super'];big['device_mib']={'gpu-4080-super':256}
+        r.start()
+        blocker=r.wait(r.acquire('cb','comfyui','paramount'))
+        original,request=self.reserve(priority='medium',services=['big-brain','local-primary','local-coder'])
+        current=self.wait(original,'partial')
+        end=time.monotonic()+10
+        while any(current['services'][tag]['state']!='ready' for tag in ['local-primary','local-coder']):
+            self.assertLess(time.monotonic(),end)
+            time.sleep(.04);current=self.wait(original,'partial')
+        self.assertEqual(current['services']['big-brain']['state'],'unavailable')
+        self.assertEqual(current['requested_services'],request['services'])
+        jsonschema.validate(dict(schema=VERSION,result=current),json.loads((ROOT/'config/runtime/response.schema.json').read_text()))
+        snapshots={tag:(current['services'][tag]['id'],current['services'][tag]['generation']) for tag in ['local-primary','local-coder']}
+        work=self.work(current,'partial-coder','local-coder');r.call('athba','submit_work',request=work);self.result('partial-coder')
+        r.call('athba','submit_work',status=400,request=self.work(current,'missing','big-brain'))
+        r.call('cb','refresh_reservation',status=404,reservation_id=current['id'])
+        for _ in range(2):
+            same=r.call('athba','refresh_reservation',reservation_id=current['id'])
+            self.assertEqual(same['services']['big-brain']['state'],'unavailable')
+        r.release(blocker);r.wait(blocker,'released');time.sleep(.3)
+        replay=r.call('athba','reserve',request=request)
+        self.assertEqual(replay,original)
+        self.assertEqual(r.counts('start')['big-brain'],0)
+        contender=r.wait(r.acquire('cb','local-fun-chat','paramount'))
+        r.wait(current['services']['local-primary'],'held')
+        refreshed=r.call('athba','refresh_reservation',reservation_id=current['id'])
+        self.assertEqual(refreshed['id'],current['id']);self.assertEqual(refreshed['priority'],'medium')
+        self.assertEqual(refreshed['services']['local-primary']['state'],'held')
+        r.wait(refreshed['services']['big-brain'])
+        for tag in ['local-primary','local-coder']:
+            self.assertEqual((refreshed['services'][tag]['id'],refreshed['services'][tag]['generation']),snapshots[tag])
+            self.assertEqual(r.counts('start')[tag],1)
+        r.call('athba','submit_work',request=self.work(current,'held-peer-coder','local-coder'));self.result('held-peer-coder')
+        r.release(contender);restored=self.wait(current)
+        self.assertEqual(restored['services']['local-primary']['id'],snapshots['local-primary'][0])
+        self.assertEqual(r.counts('start')['big-brain'],1)
+        self.assertEqual(r.call('athba','reserve',request=request),original)
+        r.call('athba','release_reservation',reservation_id=current['id']);self.wait(current,'released')
+        r.call('athba','refresh_reservation',status=409,reservation_id=current['id'])
+
+
+def test_retired_work_unit_cli_is_unavailable():
+    import subprocess
+    result=subprocess.run([str(ROOT/'target/debug/rack_ai_cli'),'work-unit'],capture_output=True,text=True,timeout=5)
+    assert result.returncode != 0
+    assert 'unsupported command' in result.stderr

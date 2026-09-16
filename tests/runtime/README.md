@@ -1,4 +1,4 @@
-# PR35 isolated runtime verification
+# Isolated runtime verification
 
 These clients exercise the compiled Rust HTTP receiver, canonical authority,
 production lifecycle and native media gate. Model endpoints are real disposable CPU
@@ -12,7 +12,7 @@ cargo build --workspace --offline
 python3 -m venv .venv
 .venv/bin/pip install -r tests/media/requirements.txt
 RACK_AI_RESOURCE_ROOT="$PWD/evidence/runtime-legacy" \
-  timeout 300 .venv/bin/python -m pytest tests/runtime -q
+  timeout 600 .venv/bin/python -m pytest tests/runtime -q
 RACK_AI_RESOURCE_ROOT="$PWD/evidence/scenario-legacy" \
   timeout 180 .venv/bin/python tests/runtime/scenario.py evidence/runtime-scenario
 RACK_AI_RESOURCE_ROOT="$PWD/evidence/workspace-legacy" \

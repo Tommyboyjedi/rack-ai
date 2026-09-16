@@ -1,13 +1,14 @@
 use crate::{
     admission::Admission, config::Source, reservation::Reserve, service::Service, types::*,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use serde_json::Value;
+use std::collections::BTreeSet;
 pub struct ReservationAdmission<'a> {
     pub service: &'a Service,
     pub source: &'a Source,
 }
 impl ReservationAdmission<'_> {
-    pub fn reserve(&self, request: Reserve) -> Result<String, String> {
+    pub fn reserve(&self, request: Reserve) -> Result<Value, String> {
         self.service.authority.update(|s| {
             if let Some(d) = s.data.demands.values().find(|d| {
                 d.owner == self.source.source
@@ -15,11 +16,13 @@ impl ReservationAdmission<'_> {
                         .as_ref()
                         .is_some_and(|r| r.acquisition_id == request.acquisition_id)
             }) {
-                return if d.reserve_request.as_ref() == Some(&request) {
-                    Ok(d.id.clone())
-                } else {
-                    Err("identity_conflict".into())
-                };
+                if d.reserve_request.as_ref() != Some(&request) {
+                    return Err("identity_conflict".into());
+                }
+                return d
+                    .reserve_result
+                    .clone()
+                    .ok_or("original_reservation_receipt_missing".into());
             }
             if !valid_id(&request.acquisition_id)
                 || !valid_id(&request.work_id)
@@ -29,8 +32,11 @@ impl ReservationAdmission<'_> {
             {
                 return Err("invalid_request".into());
             }
+            let admission = Admission {
+                service: self.service,
+                source: self.source,
+            };
             let mut demands = Vec::new();
-            let mut resources = BTreeSet::new();
             for tag in &request.services {
                 let p = self
                     .service
@@ -39,9 +45,6 @@ impl ReservationAdmission<'_> {
                     .iter()
                     .find(|p| &p.tag == tag)
                     .ok_or("unknown_tag")?;
-                if p.resources.iter().any(|r| !resources.insert(r.clone())) {
-                    return Err("services_require_conflicting_resources".into());
-                }
                 let acquisition_id = format!(
                     "reserve-{}",
                     digest(
@@ -54,44 +57,59 @@ impl ReservationAdmission<'_> {
                 }) {
                     return Err("identity_conflict".into());
                 }
-                demands.push(
-                    (Admission {
-                        service: self.service,
-                        source: self.source,
-                    })
-                    .prepare(
-                        Acquire {
-                            schema: VERSION.into(),
-                            source_system: self.source.source.clone(),
-                            work_id: request.work_id.clone(),
-                            acquisition_id,
-                            tag: tag.clone(),
-                            priority: Some(request.priority),
-                            capabilities: p.capabilities.clone(),
-                            context_tokens: p.context_tokens,
-                            ttl_seconds: request.ttl_seconds,
-                            qualification: false,
-                        },
-                        s.data.demands.len() as u64 + demands.len() as u64,
-                    )?,
-                );
+                demands.push(admission.prepare(
+                    Acquire {
+                        schema: VERSION.into(),
+                        source_system: self.source.source.clone(),
+                        work_id: request.work_id.clone(),
+                        acquisition_id,
+                        tag: tag.clone(),
+                        priority: Some(request.priority),
+                        capabilities: p.capabilities.clone(),
+                        context_tokens: p.context_tokens,
+                        ttl_seconds: request.ttl_seconds,
+                        qualification: false,
+                    },
+                    s.data.demands.len() as u64 + demands.len() as u64,
+                )?);
             }
             let id = demands.first().ok_or("invalid_request")?.id.clone();
-            let services: BTreeMap<_, _> = demands
+            let services = demands
                 .iter()
                 .map(|d| (d.profile.tag.clone(), d.id.clone()))
                 .collect();
-            crate::reservation::admit(s, (self.service, &mut demands))?;
             for mut d in demands {
                 d.reservation_id = Some(id.clone());
-                if d.id == id {
-                    d.services = services.clone();
-                    d.reserve_request = Some(request.clone());
-                }
+                attempt(self.service, (s, &mut d))?;
                 s.data.demands.insert(d.id.clone(), d);
             }
+            let root = s.data.demands.get_mut(&id).ok_or("not_found")?;
+            root.services = services;
+            root.reserve_request = Some(request);
+            let result = crate::reservation_view::view(s, (&self.source.source, &id))?;
+            s.data
+                .demands
+                .get_mut(&id)
+                .ok_or("not_found")?
+                .reserve_result = Some(result.clone());
             crate::capacity::retention(s, &self.service.config.limits)?;
-            Ok(id)
+            Ok(result)
         })
     }
+}
+pub(crate) fn attempt(
+    service: &Service,
+    input: (&mut Document, &mut Demand),
+) -> Result<(), String> {
+    let (s, d) = input;
+    let refusal = crate::admission::eligibility(d)
+        .or_else(|| (crate::planner::Planner { service }).refusal(s, d));
+    if let Some(reason) = refusal {
+        d.state = DemandState::Denied;
+        d.reason = Some(reason);
+    } else {
+        crate::planner::fence(s, d)?;
+        d.reason = None;
+    }
+    Ok(())
 }

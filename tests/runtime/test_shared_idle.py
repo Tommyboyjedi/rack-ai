@@ -16,7 +16,7 @@ class SharedIdleTests(unittest.TestCase):
             root=Path(directory)
             def media_config(c):
                 c["principals"].append(dict(id="cb",token_sha256=hashlib.sha256(b"cb").hexdigest(),
-                                            ceiling="paramount",operator=False))
+                                            operator=False))
             with receiver(root/"media",configure=media_config) as media:
                 def configure(c):
                     c["idle_timeout_seconds"]=3
@@ -28,9 +28,6 @@ class SharedIdleTests(unittest.TestCase):
                         media_config_sha256=hashlib.sha256((media["root"]/"config.json").read_bytes()).hexdigest(),
                         endpoint=media["backend"],model=media["config"]["profile"]["checkpoint_sha256"],
                         capabilities=["visual"],startup_seconds=15)
-                    for source in c["sources"]:
-                        source["tags"]=["local-image" if t=="comfyui" else t for t in source["tags"]]
-                    next(s for s in c["sources"] if s["source"]=="cb")["tags"]=["local-primary","local-image"]
                 r=Rack(root/"runtime",configure=configure,environment=media["environment"])
                 try:
                     image=r.wait(r.acquire("cb","local-image","paramount"),seconds=20)

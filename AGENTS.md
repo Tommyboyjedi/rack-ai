@@ -224,7 +224,7 @@ Prefer boring, explicit, typed, bounded, observable, recoverable code.
 RackAI-published logical tags and bounded pure inference are authorized alongside existing
 broad-capability routing. Tags do not grant concrete model/GPU/command selection or bypass
 qualification. New reservation conflicts use strict priority with incumbent-wins-ties and
-whole-request denial; already accepted held work is distinct from a denied acquisition.
+independent service acquisition. Missing services require explicit refresh; Held services retain their restoration lifecycle.
 All authenticated ordinary principals may request any global priority and any published qualified service.
 llama_cpp is an additional hosting backend; JCode remains a bounded execution harness.
 Implementation scope is RackAI only. Companion integrations and production cutover are

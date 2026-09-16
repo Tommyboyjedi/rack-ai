@@ -93,7 +93,19 @@ pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Re
     service.authority.update(|s| {
         let (owner, id, action) = input;
         let d = owned(s, owner, id)?;
+        let root_id = crate::reservation::root(s, d)?.id.clone();
         let ids = crate::reservation::members(s, d)?;
+        if !matches!(action, Action::Renew { .. }) {
+            s.data
+                .demands
+                .get_mut(&root_id)
+                .ok_or("not_found")?
+                .reservation_closed = Some(if matches!(action, Action::Cancel) {
+                DemandState::Cancelled
+            } else {
+                DemandState::Released
+            });
+        }
         for id in ids {
             let generation = owned(s, owner, &id)?.generation.clone();
             (ReservationControl { service }).apply(

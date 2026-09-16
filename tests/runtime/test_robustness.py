@@ -152,7 +152,6 @@ class RuntimeTests(unittest.TestCase):
         import copy
         alias=copy.deepcopy(r.config['profiles'][-1]); alias['tag']='reverse'; alias['resources'].reverse()
         r.config['profiles'].append(alias)
-        r.config['sources'][-1]['tags'].append('reverse')
         self.restart()
         with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
             futures=[pool.submit(r.acquire,'other',tag,'medium') for tag in ['big-brain','reverse']]
@@ -171,7 +170,6 @@ class RuntimeTests(unittest.TestCase):
     def test_qualification_is_preserved_and_legacy_tag_priority_is_ignored(self):
         r=self.rack
         r.config['profiles'][-1]['qualified']=False
-        r.config['sources'][0]['tag_priorities']={'big-brain':['medium']}
         self.restart()
         denied=r.acquire('athba','big-brain','medium')
         self.assertEqual(denied['reason'],'unqualified_profile')

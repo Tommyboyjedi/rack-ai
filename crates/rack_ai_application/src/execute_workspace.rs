@@ -17,19 +17,18 @@ use crate::GitWorktree;
 use crate::ImplementWorkerRuntime;
 use crate::RepositoryRegistry;
 use crate::ReviewPacket;
-use crate::WorkUnitRequest;
-use crate::WorkUnitRequestDocument;
 use crate::WorkerExecutionProvenance;
 use crate::WorkspaceExecutor;
+use crate::WorkspaceRequest;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct WorkUnitWorkerSelection {
+pub struct WorkspaceWorkerSelection {
     runtime: ImplementWorkerRuntime,
     placement: Placement,
     selection_decision: Option<GenericWorkerSelectionDecision>,
 }
 
-impl WorkUnitWorkerSelection {
+impl WorkspaceWorkerSelection {
     pub fn new(runtime: ImplementWorkerRuntime, placement: Placement) -> Self {
         Self {
             runtime,
@@ -57,19 +56,15 @@ impl WorkUnitWorkerSelection {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum WorkUnitSelectionError {
-    SourceAdmissionDenied,
-    SourceAdmissionPolicyMissing,
+pub enum WorkspaceSelectionError {
     CapabilityUnavailable,
     TemporarilyUnavailable,
     Other(String),
 }
 
-impl fmt::Display for WorkUnitSelectionError {
+impl fmt::Display for WorkspaceSelectionError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         let value = match self {
-            Self::SourceAdmissionDenied => "source priority exceeds configured admission ceiling",
-            Self::SourceAdmissionPolicyMissing => "source admission policy is missing",
             Self::CapabilityUnavailable => "no eligible capability worker",
             Self::TemporarilyUnavailable => "eligible worker is temporarily unavailable",
             Self::Other(value) => value,
@@ -78,37 +73,36 @@ impl fmt::Display for WorkUnitSelectionError {
     }
 }
 
-pub trait WorkUnitWorkerSelector {
+pub trait WorkspaceWorkerSelector {
     fn select(
         &self,
-        request: &WorkUnitRequest,
-    ) -> Result<WorkUnitWorkerSelection, WorkUnitSelectionError>;
+        request: &WorkspaceRequest,
+    ) -> Result<WorkspaceWorkerSelection, WorkspaceSelectionError>;
 }
 
-pub struct ExecuteWorkUnit<'a> {
+pub struct ExecuteWorkspace<'a> {
     registry: &'a dyn RepositoryRegistry,
     command_policy: &'a dyn CommandPolicy,
     git: &'a dyn GitWorktree,
     manifests: &'a dyn ChangeManifestRepository,
     executor: Option<&'a dyn WorkspaceExecutor>,
     implementer: Option<&'a dyn ChangeImplementer>,
-    selector: &'a dyn WorkUnitWorkerSelector,
+    selector: &'a dyn WorkspaceWorkerSelector,
 }
 
-pub struct ExecuteWorkUnitDependencies<'a> {
+pub struct ExecuteWorkspaceDependencies<'a> {
     pub registry: &'a dyn RepositoryRegistry,
     pub command_policy: &'a dyn CommandPolicy,
     pub git: &'a dyn GitWorktree,
     pub manifests: &'a dyn ChangeManifestRepository,
     pub executor: Option<&'a dyn WorkspaceExecutor>,
     pub implementer: Option<&'a dyn ChangeImplementer>,
-    pub selector: &'a dyn WorkUnitWorkerSelector,
+    pub selector: &'a dyn WorkspaceWorkerSelector,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub struct ExecuteWorkUnitResult {
-    pub workload_id: String,
-    pub work_unit_id: String,
+pub struct ExecuteWorkspaceResult {
+    pub work_id: String,
     pub change_id: String,
     pub selected_worker_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,8 +118,8 @@ pub struct ExecuteWorkUnitResult {
     pub packet_path: String,
 }
 
-impl<'a> ExecuteWorkUnit<'a> {
-    pub fn new(dependencies: ExecuteWorkUnitDependencies<'a>) -> Self {
+impl<'a> ExecuteWorkspace<'a> {
+    pub fn new(dependencies: ExecuteWorkspaceDependencies<'a>) -> Self {
         Self {
             registry: dependencies.registry,
             command_policy: dependencies.command_policy,
@@ -137,15 +131,12 @@ impl<'a> ExecuteWorkUnit<'a> {
         }
     }
 
-    pub fn execute(
-        &self,
-        document: WorkUnitRequestDocument,
-    ) -> Result<ExecuteWorkUnitResult, String> {
-        let request = WorkUnitRequest::from_document(document)?;
-        if let Some(header) = request.routing() {
-            if self.manifests.has_idempotent_submission(header)? {
-                return Err("duplicate idempotent submission".to_string());
-            }
+    pub fn execute(&self, request: WorkspaceRequest) -> Result<ExecuteWorkspaceResult, String> {
+        if self
+            .manifests
+            .has_idempotent_submission(request.routing())?
+        {
+            return Err("duplicate idempotent submission".to_string());
         }
         let selection = self
             .selector
@@ -160,7 +151,7 @@ impl<'a> ExecuteWorkUnit<'a> {
             implementer: self.implementer,
         })
         .execute(ExecuteChangeRequest {
-            document: request.to_change_request_document(),
+            document: request.change.clone(),
             mode: crate::ChangeExecutionMode::ImplementAndVerify,
             selected_worker: Some(selection.runtime().clone()),
         })?;
@@ -176,26 +167,19 @@ impl<'a> ExecuteWorkUnit<'a> {
                 return Err("selection and execution provenance worker mismatch".to_string());
             }
         }
-        Ok(build_result(
-            &request,
-            selection.runtime(),
-            selection.placement(),
-            &packet,
-            packet_path,
-        ))
+        Ok(build_result(&request, (&selection, &packet, packet_path)))
     }
 }
 
 fn build_result(
-    request: &WorkUnitRequest,
-    runtime: &ImplementWorkerRuntime,
-    placement: &Placement,
-    packet: &ReviewPacket,
-    packet_path: String,
-) -> ExecuteWorkUnitResult {
-    ExecuteWorkUnitResult {
-        workload_id: request.workload_id().value().to_string(),
-        work_unit_id: request.work_unit_id().value().to_string(),
+    request: &WorkspaceRequest,
+    outcome: (&WorkspaceWorkerSelection, &ReviewPacket, String),
+) -> ExecuteWorkspaceResult {
+    let (selection, packet, packet_path) = outcome;
+    let runtime = selection.runtime();
+    let placement = selection.placement();
+    ExecuteWorkspaceResult {
+        work_id: request.routing.work_id.clone(),
         change_id: request.change_id(),
         selected_worker_id: runtime.worker_id().to_string(),
         worker_provenance: packet.worker_provenance().cloned(),
@@ -230,10 +214,10 @@ mod tests {
     use rack_ai_domain::Placement;
     use rack_ai_domain::RepositoryId;
 
-    use super::ExecuteWorkUnit;
-    use super::ExecuteWorkUnitDependencies;
-    use super::WorkUnitWorkerSelection;
-    use super::WorkUnitWorkerSelector;
+    use super::ExecuteWorkspace;
+    use super::ExecuteWorkspaceDependencies;
+    use super::WorkspaceWorkerSelection;
+    use super::WorkspaceWorkerSelector;
     use crate::ApprovedCommandPolicy;
     use crate::ChangeManifestRepository;
     use crate::CommandEvidence;
@@ -252,14 +236,13 @@ mod tests {
     use crate::ScriptedAttempt;
     use crate::ScriptedChangeImplementer;
     use crate::ScriptedWrite;
-    use crate::WorkUnitRequestDocument;
     use crate::WorkspaceExecutionResult;
     use crate::WorkspaceExecutor;
     use crate::WorkspaceRoot;
     use crate::WriteFileRequest;
 
     #[test]
-    fn executes_work_unit_and_returns_structured_result() {
+    fn executes_workspace_and_returns_structured_result() {
         let fixture = Fixture::new();
         let git = FixtureGit::new(&fixture.root, vec!["src/lib.rs".to_string()]);
         let manifests = FixtureManifests::default();
@@ -287,7 +270,7 @@ mod tests {
             .with_models(vec!["eqaq-v2-local-coder".to_string()])
             .with_backends(vec!["jcode".to_string()]),
         );
-        let result = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+        let result = ExecuteWorkspace::new(ExecuteWorkspaceDependencies {
             registry: &fixture,
             command_policy: &ApprovedCommandPolicy::default(),
             git: &git,
@@ -298,8 +281,7 @@ mod tests {
         })
         .execute(sample_document())
         .unwrap();
-        assert_eq!(result.workload_id, "adaptos");
-        assert_eq!(result.work_unit_id, "adaptos-001");
+        assert_eq!(result.work_id, "adaptos-001");
         assert_eq!(result.selected_worker_id, "local-coder");
         assert_eq!(
             result.worker_provenance.as_ref().unwrap().worker_id,
@@ -320,50 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_not_ready_work_unit_before_execution() {
-        let fixture = Fixture::new();
-        let git = FixtureGit::new(&fixture.root, vec!["src/lib.rs".to_string()]);
-        let manifests = FixtureManifests::default();
-        let executor = FixtureExecutor::default();
-        let implementer = ScriptedChangeImplementer::new(&executor, vec![]);
-        let selector = FixedSelector::new(
-            "local-coder",
-            Placement::new(
-                vec!["local-coder".to_string()],
-                vec!["gpu-2060".to_string()],
-            ),
-        );
-        let error = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
-            registry: &fixture,
-            command_policy: &ApprovedCommandPolicy::default(),
-            git: &git,
-            manifests: &manifests,
-            executor: Some(&executor),
-            implementer: Some(&implementer),
-            selector: &selector,
-        })
-        .execute(
-            serde_json::from_value(serde_json::json!({
-                "version": "rack-ai/work-unit/v1",
-                "workload": {"id": "adaptos", "kind": "application-development"},
-                "repository": {"id": "adaptos", "base_ref": "main"},
-                "work_unit": {
-                    "id": "adaptos-001",
-                    "objective": "Implement a bounded feature.",
-                    "allowed_paths": ["src/"],
-                    "acceptance": {"commands": [["cargo", "test"]]},
-                    "readiness": {"ready": false},
-                    "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
-                }
-            }))
-            .unwrap(),
-        )
-        .unwrap_err();
-        assert!(error.contains("not marked ready"));
-    }
-
-    #[test]
-    fn v2_selection_execution_provenance_mismatch_fails_closed() {
+    fn selection_execution_provenance_mismatch_fails_closed() {
         let fixture = Fixture::new();
         let git = FixtureGit::new(&fixture.root, vec!["src/lib.rs".to_string()]);
         let manifests = FixtureManifests::default();
@@ -419,18 +358,8 @@ mod tests {
             },
         );
         let mut document = sample_document();
-        document.version = "rack-ai/work-unit/v2".to_string();
-        document.work_unit.routing = Some(
-            crate::work_unit_request_document::GenericRoutingHeaderDocument {
-                source_system: "neutral".to_string(),
-                work_id: "work-opaque".to_string(),
-                submission_id: "submission-opaque".to_string(),
-                idempotency_key: "idempotency-opaque".to_string(),
-                required_capabilities: vec![crate::GenericCapability::Coding],
-                priority: crate::GenericPriority::Medium,
-            },
-        );
-        let error = ExecuteWorkUnit::new(ExecuteWorkUnitDependencies {
+        document.routing = header;
+        let error = ExecuteWorkspace::new(ExecuteWorkspaceDependencies {
             registry: &fixture,
             command_policy: &ApprovedCommandPolicy::default(),
             git: &git,
@@ -492,13 +421,13 @@ mod tests {
     }
 
     struct FixedSelector {
-        selection: WorkUnitWorkerSelection,
+        selection: WorkspaceWorkerSelection,
     }
 
     impl FixedSelector {
         fn new(worker_id: &str, placement: Placement) -> Self {
             Self {
-                selection: WorkUnitWorkerSelection::new(
+                selection: WorkspaceWorkerSelection::new(
                     ImplementWorkerRuntime::new(
                         worker_id.to_string(),
                         "/home/tomp/.local/bin/jcode".to_string(),
@@ -522,11 +451,11 @@ mod tests {
         }
     }
 
-    impl WorkUnitWorkerSelector for FixedSelector {
+    impl WorkspaceWorkerSelector for FixedSelector {
         fn select(
             &self,
-            _request: &crate::WorkUnitRequest,
-        ) -> Result<WorkUnitWorkerSelection, super::WorkUnitSelectionError> {
+            _request: &crate::WorkspaceRequest,
+        ) -> Result<WorkspaceWorkerSelection, super::WorkspaceSelectionError> {
             Ok(self.selection.clone())
         }
     }
@@ -639,22 +568,16 @@ mod tests {
         }
     }
 
-    fn sample_document() -> WorkUnitRequestDocument {
-        serde_json::from_value(serde_json::json!({
-            "version": "rack-ai/work-unit/v1",
-            "workload": {"id": "adaptos", "kind": "application-development"},
-            "repository": {"id": "adaptos", "base_ref": "main", "base_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
-            "work_unit": {
-                "id": "adaptos-001",
-                "objective": "Implement TicketStore::save(path) for one open ticket.",
-                "allowed_paths": ["src/lib.rs"],
-                "acceptance": {
-                    "commands": [["cargo", "test", "save_single_open_ticket"]],
-                    "required_artifacts": ["src/lib.rs"]
-                },
-                "limits": {"max_implementation_attempts": 2, "timeout_seconds": 900}
-            }
-        }))
-        .unwrap()
+    fn sample_document() -> crate::WorkspaceRequest {
+        crate::WorkspaceRequest {
+            change: serde_json::from_value(serde_json::json!({
+                "change_id":"adaptos-001", "repository":{"id":"adaptos","base_ref":"main","base_sha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+                "task":"Implement TicketStore::save(path) for one open ticket.", "allowed_paths":["src/lib.rs"],
+                "acceptance":{"commands":[["cargo","test","save_single_open_ticket"]],"required_artifacts":["src/lib.rs"]},
+                "limits":{"max_implementation_attempts":2,"timeout_seconds":900}
+            })).unwrap(),
+            requirements: Default::default(),
+            routing: crate::GenericRoutingHeader::new("neutral".into(),"adaptos-001".into(),"submission".into(),"key".into(),vec![crate::GenericCapability::Coding],crate::GenericPriority::Medium).unwrap(),
+        }
     }
 }

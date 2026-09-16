@@ -66,8 +66,8 @@ def receiver(root, configure=None):
             "runtime_revision": "d43a5fa20c8547ff42d13232f589a06536c42b97", "available": True},
         "start_timeout": 20, "drain_timeout": 10, "stop_timeout": 10, "idle_seconds": 3, "session_seconds": 3600,
         "min_memory_mb": 1, "min_disk_mb": 1,
-        "principals": [{"id": "operator", "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest(), "ceiling": "paramount", "operator": True},
-                       {"id": "director", "token_sha256": hashlib.sha256(CLIENT.encode()).hexdigest(), "ceiling": "medium", "operator": False}]}
+        "principals": [{"id": "operator", "token_sha256": hashlib.sha256(TOKEN.encode()).hexdigest(), "operator": True},
+                       {"id": "director", "token_sha256": hashlib.sha256(CLIENT.encode()).hexdigest(), "operator": False}]}
     config["runtime"] = {"python": sys.executable, "script": str(REPO / "tests/media/fake_comfy.py"),
                          "directory": str(Path.cwd())}
     if configure:

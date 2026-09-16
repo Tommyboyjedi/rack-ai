@@ -9,15 +9,12 @@ class Principals(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='rack-generic-principals-')
         def configure(c):
-            for s in c['sources']:
-                s.update(permitted=['low'], maximum='low', default='high', tags=['nonexistent'],
-                         tag_priorities={'local-primary':['low']})
             c['profiles'][-1]['qualified'] = False
         self.rack = Rack(Path(self.directory.name), configure=configure)
     def tearDown(self):
         self.rack.close()
         self.directory.cleanup()
-    def test_all_priorities_for_both_principals_ignore_deprecated_policy(self):
+    def test_all_priorities_for_both_principals(self):
         r = self.rack
         for owner in ['athba', 'cb']:
             for priority in ['low', 'medium', 'high', 'paramount']:

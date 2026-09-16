@@ -54,6 +54,8 @@ impl Admission<'_> {
             reservation_id: None,
             services: Default::default(),
             reserve_request: None,
+            reserve_result: None,
+            reservation_closed: None,
             id: identity()?,
             owner: self.source.source.clone(),
             request: request.clone(),

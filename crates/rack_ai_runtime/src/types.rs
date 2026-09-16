@@ -39,6 +39,10 @@ pub struct Demand {
     pub services: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reserve_request: Option<crate::reservation::Reserve>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reserve_result: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reservation_closed: Option<DemandState>,
     pub id: String,
     pub owner: String,
     pub request: Acquire,

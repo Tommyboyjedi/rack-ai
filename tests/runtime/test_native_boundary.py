@@ -13,7 +13,7 @@ from test_shared_media import native_config_hash
 def test_cb_native_owns_gpu_without_image_identity(tmp_path):
     def media_config(c):
         Path(c["profile"]["checkpoint"]).unlink()
-        c["principals"].append(dict(id="cb",token_sha256=hashlib.sha256(b"cb").hexdigest(),ceiling="paramount",operator=False))
+        c["principals"].append(dict(id="cb",token_sha256=hashlib.sha256(b"cb").hexdigest(),operator=False))
     with receiver(tmp_path/"media",configure=media_config) as media:
         def configure(c):
             c["authority_root"]=media["config"]["resource_root"]
@@ -21,7 +21,6 @@ def test_cb_native_owns_gpu_without_image_identity(tmp_path):
             p=next(p for p in c["profiles"] if p["tag"]=="comfyui")
             p.update(backend="comfyui",driver="systemd",media_mode="interactive",model="",media_config=str(media["root"]/"config.json"),media_config_sha256=native_config_hash(media),endpoint=media["backend"],startup_seconds=15)
             image=copy.deepcopy(p);image.update(tag="local-image",media_mode="managed",model=media["config"]["profile"]["checkpoint_sha256"],media_config_sha256=hashlib.sha256((media["root"]/"config.json").read_bytes()).hexdigest());c["profiles"].append(image)
-            next(s for s in c["sources"] if s["source"]=="cb")["tags"]=["comfyui","local-image"]
         r=Rack(tmp_path/"runtime",configure=configure,environment=media["environment"])
         try:
             native=r.wait(r.acquire("cb","comfyui","paramount"),seconds=20)
@@ -54,8 +53,9 @@ def test_cb_native_owns_gpu_without_image_identity(tmp_path):
             assert url==media['native']
             assert requests.get(url+'/object_info',headers={'Authorization':'Bearer cb'},timeout=3).status_code==200
             contender=r.wait(r.acquire('other','local-fun-chat','paramount'))
-            group_wait('held')
-            assert requests.post(url+'/prompt',json={},headers={'Authorization':'Bearer cb'},timeout=3).status_code==409
+            partial=group_wait('partial')
+            assert partial['services']['comfyui']['state']=='ready'
+            assert requests.get(url+'/object_info',headers={'Authorization':'Bearer cb'},timeout=3).status_code==200
             r.release(contender);group_wait('ready')
             assert requests.get(url+'/object_info',headers={'Authorization':'Bearer cb'},timeout=3).status_code==200
             r.call('cb','release_reservation',reservation_id=group['id']);group_wait('released')

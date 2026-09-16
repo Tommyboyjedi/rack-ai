@@ -19,9 +19,7 @@ class SharedMediaTests(unittest.TestCase):
     def test_paramount_managed_images_bind_owner_priority_and_replay(self):
         with tempfile.TemporaryDirectory(prefix='rack-pr35-media-') as directory:
             root = Path(directory)
-            def media_config(c):
-                c['principals'][1]['ceiling']='paramount'
-            with receiver(root/'media',configure=media_config) as media:
+            with receiver(root/'media') as media:
                 def configure(c):
                     c['authority_root']=media['config']['resource_root']
                     c['devices']['gpu-4080-super']['uuid']=media['config']['media_uuid']
@@ -29,10 +27,8 @@ class SharedMediaTests(unittest.TestCase):
                     p.update(tag='local-image',backend='comfyui',driver='systemd',media_mode='managed',
                         media_config=str(media['root']/'config.json'),media_config_sha256=hashlib.sha256((media['root']/'config.json').read_bytes()).hexdigest(),endpoint=media['backend'],
                         model=media['config']['profile']['checkpoint_sha256'],capabilities=['visual'],startup_seconds=10)
-                    for source in c['sources']:
-                        source['tags']=['local-image' if t=='comfyui' else t for t in source['tags']]
                     c['sources'].append(dict(source='director',token_sha256=hashlib.sha256(b'director').hexdigest(),
-                        permitted=['paramount'],default='paramount',maximum='paramount',tags=['local-image'],qualification=False))
+                        qualification=False))
                 r=Rack(root/'runtime',configure=configure,environment=media['environment'])
                 try:
                     d=r.wait(r.acquire('director','local-image','paramount'))
@@ -73,7 +69,7 @@ class SharedMediaTests(unittest.TestCase):
                         media_config=str(media['root']/'config.json'),media_config_sha256=native_config_hash(media),endpoint=media['backend'],
                         model='' ,startup_seconds=15)
                     c['sources'].append(dict(source='operator',token_sha256=hashlib.sha256(b'operator').hexdigest(),
-                        permitted=['paramount'],default='paramount',maximum='paramount',tags=['comfyui'],qualification=False))
+                        qualification=False))
                 r=Rack(root/'runtime',configure=configure,environment=media['environment'])
                 try:
                     d=r.wait(r.acquire('operator','comfyui','paramount'))

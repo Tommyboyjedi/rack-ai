@@ -1,37 +1,53 @@
-# Reservation/work validation
+# Reservation/work correction validation
 
-Validated in `/home/tomp/rack-ai-generic-access` on gpurack, based on main
-`dd1b60715defb60cf6993c2c66d036dc4ee6fb61`. Validation preceded the publication commit.
+Validated on gpurack in `/home/tomp/rack-ai-generic-access`, branch
+`codex/generic-reservation-access`, based on published commit
+`5b20155a8bd81b591c80a994e00f14f036de10f0`.
 
-## Essential proof
+## Final architecture
+
+Workspace submissions construct a typed `WorkspaceRequest` for the reused
+`ExecuteWorkspace`/`ExecuteChange` machinery. The versioned work-unit request
+parser, serializer, CLI command and legacy worker-selection branch are removed.
+Worktrees, registered repositories, JCode, path/network enforcement, acceptance,
+revisions, provenance, durable evidence and managed access remain in use.
+
+One reservation retains its requested services and one priority. Acquisition is
+independent per service, in request order. Missing services are never queued;
+explicit refresh attempts only missing services. Ready and Held members retain
+their service records. Original reserve replay returns its persisted original receipt.
+
+## Required proof
 
 | Requirement | Evidence | Result |
 |---|---|---|
-| 1. Identity does not cap priority | `test_generic_principals.py`: both principals request all global priorities despite deprecated policy | PASS |
-| 2. Identity does not restrict services | Uniform discovery/admission; qualification and ownership still enforced | PASS |
-| 3. Reservation priority arbitrates | Strict preemption, incumbent ties, independent Paramount reservations; atomic multi-resource admission | PASS |
-| 4. Work inherits reservation priority | Work rejects a priority field; inference binds the existing activation; workspace routing reads persisted reservation priority | PASS |
-| 5. Multiple services per reservation | Primary/coder and primary/ComfyUI groups; group release; all-or-nothing admission denial | PASS |
-| 6. JCode uses managed access | Primary and coder workspace executions use existing scoped gateways; original registry bytes remain unchanged | PASS |
-| 7. Held work continues after restoration | One workspace calls before preemption, waits without dispatch while Held, then makes two further calls with the same scope/work identity | PASS |
-| 8. Native ComfyUI interface is surfaced | Existing configured native URL/session is returned instead of an LLM gateway path | PASS |
-| 9. Native object information works | `/object_info` succeeds through that URL; combined reservation is fenced while Held and usable after restoration | PASS |
-| 10. Managed images remain supported | Existing `test_paramount_managed_images_bind_owner_priority_and_replay` passes | PASS |
-| 11. Reservation/preemption regressions | Entire runtime fixture suite, including existing lifecycle, cancellation, uncertainty, ownership and media boundaries | PASS |
+| 1. Three requested services yield two Ready and one unavailable | Partial-reservation fixture includes an unavailable first member and two usable peers | PASS |
+| 2. Work runs on a Ready member of a partial reservation | Coder inference completes while big-brain is unavailable | PASS |
+| 3. Work cannot run on an unavailable member | Submission is rejected; no invocation or backend start is created | PASS |
+| 4. A Ready peer remains usable while another member is Held | Coder work completes during primary preemption | PASS |
+| 5. Explicit refresh later acquires a missing service | Freed capacity remains unused until refresh; big-brain then starts | PASS |
+| 6. Refresh preserves already acquired members | Existing member IDs/generations and startup counts remain unchanged | PASS |
+| 7. Held keeps its restoration lifecycle | Refresh leaves primary Held; incumbent release restores the same service reservation ID | PASS |
+| 8. Reserve replay never refreshes | Replay matches the original receipt before and after explicit refresh/restoration | PASS |
+| 9. Versioned work-unit execution paths are gone | Retired CLI command rejects execution; production source has no version parser or old executor references | PASS |
+| 10. JCode and native ComfyUI behavior remains supported | Managed workspace calls resume through the same scope after Held; primary/coder provenance, native object_info and managed images pass | PASS |
 
-## Commands and outcomes
+## Final validation
 
-- Focused reservation/policy tests: **7 passed**.
-- Focused final workspace/native/reservation proof: **5 passed**.
-- `.venv/bin/python -m pytest tests/runtime -q`: **84 passed, 2 subtests passed**, 341.51 seconds.
-- `cargo test --workspace --offline`: run once. **364 passed, 1 failed** because an existing idle test still required the removed ATHBA priority ceiling. The assertion was corrected to verify Paramount admission and incumbent-wins-ties denial.
-- Targeted `cargo test -p rack_ai_runtime --offline`: **14 passed** after that correction. The other 351 Rust unit tests passed in the full run; combined coverage is 365 passing unit tests. The full suite was not repeated.
-- Remaining workspace documentation tests: passed (zero examples).
-- `cargo fmt --all -- --check`: passed.
-- `cargo check --workspace --offline`: passed.
-- Strict runtime clippy initially identified a redundant field name and an enlarged request enum. Both were corrected; targeted strict clippy recheck passed.
-- `git diff --check`: passed.
+- Focused executor/selection tests: **6 passed**.
+- All **15 focused runtime scenarios** pass, including the targeted correction of the unavailable-service response schema; the complete runtime run below confirms them together.
+- Full `cargo test --workspace --offline`: **355 passed**, zero failures; run once. Documentation tests also pass.
+- Full `.venv/bin/python -m pytest tests/runtime -q`: **82 passed, 2 subtests passed**, 313.98 seconds; run once.
+- Rust format, workspace check, strict runtime clippy and diff whitespace checks: **PASS**.
+- Production scan: no work-unit v1/v2 request/execution path, source-admission policy type, priority ceiling or tag-priority field remains.
+- `Cargo.toml`, `Cargo.lock` and administrator-owned `config/repositories.json`: unchanged.
 
-Logs are retained untracked under `evidence/generic-reservation-work-validation/`, including the initial failures and targeted rechecks.
+Development-only failed checks and their targeted corrections are retained alongside
+final logs under untracked `evidence/reservation-work-corrections/`. Obsolete CLI
+contract tests were removed or moved to reservation-owned work; reusable acceptance,
+path, timeout, provenance and scope protections remain tested.
 
-These are isolated development fixtures using the existing process/sandbox/media paths. They are not deployed GPU/model qualification. No service deployment, client-repository change or merge was performed during validation.
+These are isolated development fixtures, not deployed GPU/model qualification.
+No deployment, merge or client-repository changes were performed.
+Configuration migration and fail-closed replay of older records without original
+receipts are documented in [reservation-work.md](reservation-work.md).

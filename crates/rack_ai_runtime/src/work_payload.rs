@@ -1,4 +1,7 @@
-use rack_ai_application::work_unit_request_document::*;
+use rack_ai_application::{
+    AcceptanceDocument, ChangeRepositoryDocument, ChangeRequestDocument, GenericRoutingHeader,
+    LimitsDocument, WorkspaceRequest, WorkspaceRequirements,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -32,15 +35,15 @@ pub enum Payload {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Workspace {
-    pub repository: WorkUnitRepositoryDocument,
+    pub repository: ChangeRepositoryDocument,
     pub objective: String,
     pub allowed_paths: Vec<String>,
-    pub acceptance: WorkUnitAcceptanceDocument,
+    pub acceptance: AcceptanceDocument,
     #[serde(default)]
-    pub requirements: WorkUnitRequirementsDocument,
+    pub requirements: WorkspaceRequirements,
     #[serde(default)]
     pub environment_resources: Vec<String>,
-    pub limits: WorkUnitLimitsDocument,
+    pub limits: LimitsDocument,
 }
 impl Work {
     pub fn workspace(&self) -> Option<&Workspace> {
@@ -49,40 +52,35 @@ impl Work {
             _ => None,
         }
     }
-    pub fn document(&self, d: &crate::types::Demand) -> Result<WorkUnitRequestDocument, String> {
+    pub fn request(&self, d: &crate::types::Demand) -> Result<WorkspaceRequest, String> {
         let w = self.workspace().ok_or("workspace_required")?;
         let identity = format!(
             "work-{}",
             crate::types::digest(format!("{}/{}", d.owner, self.work_id).as_bytes())
         );
-        Ok(WorkUnitRequestDocument {
-            version: "rack-ai/work-unit/v2".into(),
-            workload: WorkloadDocument {
-                id: "reserved-work".into(),
-                kind: "application-development".into(),
-            },
-            repository: w.repository.clone(),
-            work_unit: WorkUnitDocument {
-                id: identity.clone(),
-                objective: w.objective.clone(),
+        Ok(WorkspaceRequest {
+            change: ChangeRequestDocument {
+                change_id: identity.clone(),
+                repository: w.repository.clone(),
+                task: w.objective.clone(),
                 allowed_paths: w.allowed_paths.clone(),
                 acceptance: w.acceptance.clone(),
                 environment_resources: w.environment_resources.clone(),
-                readiness: Default::default(),
-                requirements: w.requirements.clone(),
                 limits: w.limits.clone(),
-                routing: Some(GenericRoutingHeaderDocument {
-                    source_system: d.owner.clone(),
-                    work_id: self.work_id.clone(),
-                    submission_id: identity.clone(),
-                    idempotency_key: identity,
-                    required_capabilities: d.request.capabilities.clone(),
-                    priority: d.priority,
-                }),
             },
+            requirements: w.requirements.clone(),
+            routing: GenericRoutingHeader::new(
+                d.owner.clone(),
+                self.work_id.clone(),
+                identity.clone(),
+                identity,
+                d.request.capabilities.clone(),
+                d.priority,
+            )?,
         })
     }
 }
+
 pub fn is_workspace(i: &crate::types::Invocation) -> bool {
     i.request
         .work

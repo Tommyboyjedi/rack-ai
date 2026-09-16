@@ -42,6 +42,7 @@ mod container_socket;
 mod native_description;
 pub mod reservation;
 mod reservation_admission;
+mod reservation_refresh;
 mod reservation_view;
 mod work;
 mod work_execution;

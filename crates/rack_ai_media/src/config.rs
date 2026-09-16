@@ -1,4 +1,3 @@
-use crate::types::Priority;
 use serde::{Deserialize, Serialize};
 use std::{fs, net::SocketAddr, path::PathBuf};
 #[derive(Clone, Deserialize)]
@@ -6,8 +5,6 @@ use std::{fs, net::SocketAddr, path::PathBuf};
 pub struct Principal {
     pub id: String,
     pub token_sha256: String,
-    #[serde(default = "legacy_ceiling")]
-    pub ceiling: Priority,
     pub operator: bool,
 }
 #[derive(Clone, Deserialize)]
@@ -77,8 +74,4 @@ impl Config {
     pub fn validate(&self) -> Result<(), String> {
         crate::config_policy::validate(self)
     }
-}
-
-fn legacy_ceiling() -> Priority {
-    Priority::Low
 }

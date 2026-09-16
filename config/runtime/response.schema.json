@@ -418,9 +418,6 @@
                       "type": "object",
                       "additionalProperties": false,
                       "properties": {
-                        "capability": {
-                          "type": "string"
-                        },
                         "complexity": {
                           "enum": [
                             "small",
@@ -454,8 +451,7 @@
                         },
                         "network": {
                           "enum": [
-                            "disabled",
-                            "enabled"
+                            "disabled"
                           ]
                         }
                       },
@@ -524,7 +520,8 @@
             "released",
             "cancelled",
             "expired",
-            "recovery_required"
+            "recovery_required",
+            "unavailable"
           ]
         },
         "reason": {
@@ -763,6 +760,16 @@
           "required": [
             "access"
           ]
+        },
+        {
+          "properties": {
+            "state": {
+              "const": "unavailable"
+            }
+          },
+          "required": [
+            "state"
+          ]
         }
       ]
     }
@@ -984,17 +991,9 @@
                 "released",
                 "cancelled",
                 "expired",
-                "recovery_required"
-              ]
-            },
-            "reason": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
+                "recovery_required",
+                "unavailable",
+                "partial"
               ]
             },
             "acquisition_id": {
@@ -1008,15 +1007,24 @@
               "additionalProperties": {
                 "$ref": "#/$defs/demand"
               }
+            },
+            "requested_services": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "string"
+              }
             }
           },
           "required": [
             "id",
             "priority",
             "state",
-            "reason",
             "acquisition_id",
-            "services"
+            "services",
+            "requested_services"
           ]
         },
         {
