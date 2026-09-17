@@ -20,11 +20,20 @@ pub struct Acquire {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum DemandState {
-    Denied,
+    /// A new acquisition could not take ownership now. This is never queued
+    /// inference work.
+    #[serde(alias = "denied")]
+    Unavailable,
     Preparing,
     Ready,
-    Draining,
-    Held,
+    /// A higher-priority owner is waiting for work already running under this
+    /// claim to drain. New work is rejected and queued work is cancelled.
+    #[serde(alias = "draining")]
+    Preempting,
+    /// Ownership was displaced. It is terminal; only a new acquisition can
+    /// obtain the service again.
+    #[serde(alias = "held")]
+    Preempted,
     Releasing,
     Released,
     Cancelled,
@@ -51,6 +60,21 @@ pub struct Demand {
     pub profile_hash: String,
     pub state: DemandState,
     pub reason: Option<String>,
+    /// A bounded hint returned with an unavailable acquisition. It is not a
+    /// lease or a promise that a future acquisition will succeed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<u64>,
+    /// The demand that superseded this ownership claim, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preempted_by: Option<String>,
+    /// Readiness was proven for this member; multi-service reservations commit
+    /// every member Ready together only after all checks have succeeded.
+    #[serde(default)]
+    pub ready_checked: bool,
+    /// Bounded lifetime call admission counter. It is a documented reservation
+    /// capacity, not a retained-evidence accident.
+    #[serde(default)]
+    pub accepted_calls: u64,
     pub generation: String,
     pub access_key: String,
     pub created: u64,
@@ -99,10 +123,13 @@ pub struct Inference {
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InvocationState {
-    Accepted,
-    Started,
+    #[serde(alias = "accepted")]
+    Queued,
+    #[serde(alias = "started")]
+    Running,
     Completed,
     Cancelled,
+    Failed,
     Expired,
     Uncertain,
 }
@@ -118,6 +145,10 @@ pub struct Invocation {
     pub owner: String,
     pub request: Inference,
     pub state: InvocationState,
+    /// Monotonic local queue position. Dispatch is FIFO within one owned
+    /// logical service and never uses global reservation priority.
+    #[serde(default)]
+    pub queue_order: u64,
     #[serde(alias = "deadline")]
     pub waiting_deadline: u64,
     #[serde(default)]
@@ -128,6 +159,12 @@ pub struct Invocation {
     pub cancellation: Option<CancellationIntent>,
     #[serde(default)]
     pub late_result: Option<serde_json::Value>,
+    /// Content digests preserve audit/reconciliation after bounded terminal
+    /// payload compaction without pretending the original response is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_result_digest: Option<String>,
     pub started: Option<u64>,
     pub activation: Option<String>,
     pub result: Option<serde_json::Value>,
@@ -141,8 +178,24 @@ pub struct State {
     pub gateway_port: Option<u16>,
     pub demands: BTreeMap<String, Demand>,
     pub invocations: BTreeMap<String, Invocation>,
+    /// Monotonic sequencing survives a receiver restart. Legacy records that
+    /// lack a sequence retain their deterministic id tie-breaker.
+    #[serde(default)]
+    pub next_invocation_order: u64,
+    /// Short-lived, bounded negative acquisition decisions. They are control
+    /// plane cache entries rather than reservations or retained work evidence.
+    #[serde(default)]
+    pub acquisition_decisions: BTreeMap<String, AcquisitionDecision>,
     #[serde(default)]
     pub workspace_scopes: BTreeMap<String, crate::workspace_scope::WorkspaceScope>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AcquisitionDecision {
+    pub owner: String,
+    pub environment: String,
+    pub reason: String,
+    pub retry_after: u64,
+    pub expires_at: u64,
 }
 pub type Document = rack_ai_infrastructure::managed_authority::AuthorityDocument<State>;
 pub fn now() -> u64 {
@@ -173,14 +226,20 @@ impl Invocation {
     pub fn cancel(&mut self) {
         if matches!(
             self.state,
-            InvocationState::Accepted | InvocationState::Started | InvocationState::Uncertain
+            InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
         ) {
             self.cancellation.get_or_insert(CancellationIntent {
                 requested_at: now(),
             });
-            if self.state == InvocationState::Accepted {
+            if self.state == InvocationState::Queued {
                 self.state = InvocationState::Cancelled;
             }
+        }
+    }
+    pub fn cancel_queued_as_superseded(&mut self) {
+        if self.state == InvocationState::Queued {
+            self.state = InvocationState::Cancelled;
+            self.error = Some("reservation_superseded_by_higher_priority".into());
         }
     }
 }

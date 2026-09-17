@@ -30,7 +30,7 @@ impl ReservationControl<'_> {
     }
     pub(crate) fn apply(&self, s: &mut Document, c: ControlContext<'_>) -> Result<Demand, String> {
         let current = owned(s, c.owner, c.id)?;
-        if current.state == DemandState::Denied {
+        if current.state == DemandState::Unavailable {
             return Ok(current.clone());
         }
         if current.generation != c.request.generation {
@@ -39,7 +39,10 @@ impl ReservationControl<'_> {
         let d = s.data.demands.get_mut(c.id).ok_or("not_found")?;
         match c.request.action {
             Action::Renew { ttl_seconds } => {
-                if d.released || d.deadline <= now() || d.state == DemandState::Denied {
+                if d.released
+                    || d.deadline <= now()
+                    || matches!(d.state, DemandState::Unavailable | DemandState::Preempted)
+                {
                     return Err("reservation_terminal".into());
                 }
                 if ttl_seconds == 0 || ttl_seconds > self.service.config.max_ttl_seconds {
@@ -50,7 +53,7 @@ impl ReservationControl<'_> {
             Action::Release | Action::Cancel => {
                 d.released = true;
                 d.transition_deadline = now() + d.profile.drain_seconds;
-                if d.state != DemandState::Denied {
+                if d.state != DemandState::Unavailable {
                     d.state = DemandState::Releasing;
                 }
                 if d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT) {
@@ -64,7 +67,7 @@ impl ReservationControl<'_> {
                 }
                 for i in s.data.invocations.values_mut().filter(|i| {
                     i.request.reservation_id == c.id
-                        && (i.state == InvocationState::Accepted
+                        && (i.state == InvocationState::Queued
                             || matches!(c.request.action, Action::Cancel))
                 }) {
                     i.cancel();

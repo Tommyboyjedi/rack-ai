@@ -53,3 +53,40 @@ pub fn select<'a>(s: &'a Document, input: (&str, &str, &str)) -> Result<&'a Dema
         parent.services.get(tag).ok_or("service_not_reserved")?,
     )
 }
+
+/// Mark a reservation usable. Multi-service reservations publish readiness only
+/// when every member has safely transferred ownership, started, and independently
+/// passed its backend readiness check. Until then every member remains preparing
+/// and no scoped gateway can submit work.
+pub fn commit_ready(s: &mut Document, d: &Demand) -> Result<(), String> {
+    let root = root(s, d)?.clone();
+    let ids = members(s, &root)?;
+    let atomic = root
+        .reserve_request
+        .as_ref()
+        .is_some_and(|request| request.services.len() > 1);
+    if atomic
+        && !ids.iter().all(|id| {
+            s.data.demands.get(id).is_some_and(|member| {
+                member.state == DemandState::Preparing
+                    && member.ready_checked
+                    && member.process.is_some()
+                    && active(member)
+                    && owns(s, member)
+            })
+        })
+    {
+        return Ok(());
+    }
+    for id in ids {
+        let member = s
+            .data
+            .demands
+            .get_mut(&id)
+            .ok_or("missing_reservation_member")?;
+        if member.state == DemandState::Preparing && member.ready_checked {
+            member.state = DemandState::Ready;
+        }
+    }
+    Ok(())
+}

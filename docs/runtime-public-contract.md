@@ -2,6 +2,21 @@
 
 # RackAI runtime contract v1
 
+## Reservation ownership v2 override
+
+The current reservation semantics are defined by
+[reservation-work.md](reservation-work.md) and
+[reservation-ownership-preemption-v2.md](reservation-ownership-preemption-v2.md).
+They supersede compatibility text below that names `denied`, `draining`, `held`,
+accepted work during a hold, or automatic restoration. New public states are
+`unavailable`, `preparing`, `ready`, `preempting`, `preempted`, `releasing`,
+`released`, `expired`, and `recovery_required`; invocations are `queued`,
+`running`, `completed`, `cancelled`, `failed`, `expired`, or `uncertain`. Priority
+belongs only to acquisition. A Ready reservation owns its logical service
+exclusively; queued work is strictly local to that ownership. Preemption cancels
+queued work, drains running work, and never automatically reacquires the displaced
+reservation.
+
 The service accepts authenticated POST requests at `/runtime/v1`. The schema identifier is
 `rack-ai/runtime/v1`. See `config/runtime/request.schema.json`, the synthetic requests in
 `config/runtime/fixtures`, and the executable clients in `tests/runtime`. The receiver takes

@@ -14,10 +14,17 @@ pub fn eligible(s: &Document, i: &Invocation) -> bool {
                 && crate::work_payload::is_workspace(other)
                 && matches!(
                     other.state,
-                    InvocationState::Started | InvocationState::Uncertain
+                    InvocationState::Running | InvocationState::Uncertain
                 )
         }))
-        && i.state == InvocationState::Accepted
+        && i.state == InvocationState::Queued
+        // FIFO is local to a currently owned logical service. No reservation
+        // priority is consulted at dispatch time.
+        && !s.data.invocations.values().any(|other| {
+            other.request.reservation_id == i.request.reservation_id
+                && other.state == InvocationState::Queued
+                && (other.queue_order, &other.id) < (i.queue_order, &i.id)
+        })
         && i.waiting_deadline > now()
         && crate::workspace_scope::permits(s, &i.request)
         && s.data

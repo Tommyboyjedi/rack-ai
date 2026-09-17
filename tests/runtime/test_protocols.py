@@ -38,7 +38,8 @@ class ProtocolTests(unittest.TestCase):
                 forwarded=json.loads(Path(str(r.events)+'.requests').read_text().splitlines()[-1])
                 self.assertEqual(forwarded['max_tokens'],r.config['profiles'][0]['max_output_tokens'])
                 chat = r.wait(r.acquire('cb','local-fun-chat','paramount'))
-                r.release(chat); new = r.wait(d)
+                r.wait(d,'preempted');r.release(chat);r.wait(chat,'released')
+                new=r.wait(r.acquire('athba','local-primary','low',identity='protocol-explicit-reacquire'))
                 self.assertNotEqual(new['gateway_path'],d['gateway_path'])
                 with self.assertRaises(urllib.error.HTTPError) as caught:
                     call(url,dict(body,messages=[{'role':'user','content':'stale'}]))
@@ -54,9 +55,9 @@ class ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='rack-pr35-gateway-pressure-') as root:
             r=Rack(root,configure=lambda c:c.update(limits=dict(max_gateway_waiters=1)))
             try:
-                p=r.wait(r.acquire('athba','local-primary','low'));chat=r.wait(r.acquire('cb','local-fun-chat','paramount'))
-                p=r.wait(p,'held');url=f'http://{r.address}'+p['gateway_path']+'/chat/completions'
-                body=dict(model='local-primary',messages=[dict(role='user',content='held')],max_tokens=16)
+                p=r.wait(r.acquire('athba','local-primary','low'));r.controls('local-primary',delay=2)
+                url=f'http://{r.address}'+p['gateway_path']+'/chat/completions'
+                body=dict(model='local-primary',messages=[dict(role='user',content='bounded')],max_tokens=16)
                 def call(key):
                     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Idempotency-Key':key})
                     try:response=urllib.request.urlopen(req,timeout=10)
@@ -73,9 +74,9 @@ class ProtocolTests(unittest.TestCase):
                     status,error=call('two');self.assertEqual(status,429);self.assertEqual(error['error'],'capacity_gateway_waiters')
                     started=time.monotonic();r.inspect(p)
                     r.call('athba','cancel',invocation_id=next(iter(invocations)))
-                    r.release(chat);self.assertLess(time.monotonic()-started,2)
+                    self.assertLess(time.monotonic()-started,2)
                     status,error=first.result(timeout=3);self.assertEqual(status,409);self.assertIn('Cancelled',error['error'])
-                self.assertEqual(r.counts('dispatch')['local-primary'],0)
+                self.assertLessEqual(r.counts('dispatch')['local-primary'],1)
             finally:r.close()
 
 if __name__=='__main__':

@@ -16,7 +16,7 @@ pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
         let member = owned(s, input.0, &id)?;
         states.push(member.state);
         let mut view = crate::api::public(member.clone())?;
-        if member.state == DemandState::Denied {
+        if member.state == DemandState::Unavailable {
             view["state"] = json!("unavailable");
             view.as_object_mut()
                 .ok_or("invalid_public_record")?
@@ -31,14 +31,14 @@ pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
                 DemandState::Released
                     | DemandState::Cancelled
                     | DemandState::Expired
-                    | DemandState::Denied
+                    | DemandState::Unavailable
             )
         }) {
             json!(closed)
         } else {
             json!(DemandState::Releasing)
         }
-    } else if states.iter().all(|s| *s == DemandState::Denied) {
+    } else if states.iter().all(|s| *s == DemandState::Unavailable) {
         json!("unavailable")
     } else if states.iter().all(|s| Some(s) == states.first()) {
         json!(states[0])

@@ -66,6 +66,10 @@ pub fn admit(s: &Document, context: (&Demand, &Inference)) -> Result<(), String>
                 .payload
                 .as_ref()
                 .is_some_and(|p| p.protocol == Protocol::Speech)
+                && matches!(
+                    i.state,
+                    InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
+                )
         })
         .count() as u64
         * MAX_WAV_BYTES;
@@ -84,7 +88,7 @@ pub fn admit(s: &Document, context: (&Demand, &Inference)) -> Result<(), String>
         i.request.reservation_id == d.id
             && matches!(
                 i.state,
-                InvocationState::Accepted | InvocationState::Started | InvocationState::Uncertain
+                InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
             )
     }) {
         return Err("capacity_speech_active".into());

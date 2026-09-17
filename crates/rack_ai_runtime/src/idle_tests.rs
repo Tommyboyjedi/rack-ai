@@ -68,7 +68,12 @@ impl Fixture {
         self.service
             .authority
             .update(|s| {
-                s.data.demands.get_mut(&d.id).unwrap().state = DemandState::Ready;
+                let demand = s.data.demands.get_mut(&d.id).unwrap();
+                demand.state = DemandState::Ready;
+                demand.ready_checked = true;
+                for resource in demand.profile.resources.clone() {
+                    s.claims.insert(resource, demand.id.clone());
+                }
                 Ok(())
             })
             .unwrap();
@@ -224,7 +229,7 @@ fn admitted_inference_updates_only_its_resource_and_replay_is_read_only() {
 }
 #[test]
 fn started_and_uncertain_work_keep_claims_and_restart_evidence() {
-    for state in [InvocationState::Started, InvocationState::Uncertain] {
+    for state in [InvocationState::Running, InvocationState::Uncertain] {
         let f = Fixture::new();
         let d = f.acquire(("cb", "local-primary", Priority::Paramount));
         f.ready(&d);
@@ -259,7 +264,7 @@ fn idle_release_reacquisition_and_athba_priority_are_normal_admission() {
     assert_eq!(
         f.acquire(("athba", "local-primary", Priority::Medium))
             .state,
-        DemandState::Denied
+        DemandState::Unavailable
     );
     let source = f
         .service
@@ -277,7 +282,7 @@ fn idle_release_reacquisition_and_athba_priority_are_normal_admission() {
     .acquire(paramount)
     .unwrap();
     assert_eq!(admitted.priority, Priority::Paramount);
-    assert_eq!(admitted.state, DemandState::Denied);
+    assert_eq!(admitted.state, DemandState::Unavailable);
     f.reap(cb.created + 1800);
     f.retire(&cb);
     let athba = f.acquire(("athba", "local-primary", Priority::Medium));
@@ -287,7 +292,7 @@ fn idle_release_reacquisition_and_athba_priority_are_normal_admission() {
     assert_eq!(fresh.victims, vec![athba.id]);
     assert_ne!(fresh.id, cb.id);
     let tie = f.acquire(("cb", "local-primary", Priority::Paramount));
-    assert_eq!(tie.state, DemandState::Denied);
+    assert_eq!(tie.state, DemandState::Unavailable);
 }
 #[test]
 fn explicit_release_works_and_does_not_erase_idle_reason() {

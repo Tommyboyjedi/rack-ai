@@ -55,7 +55,7 @@ impl Service {
                 .data
                 .invocations
                 .values_mut()
-                .filter(|i| i.state == InvocationState::Started)
+                .filter(|i| i.state == InvocationState::Running)
             {
                 i.state = InvocationState::Uncertain;
                 i.error = Some(
@@ -97,7 +97,7 @@ pub fn inflight(s: &Document, id: &str) -> bool {
             && !crate::work_payload::is_workspace(i)
             && matches!(
                 i.state,
-                InvocationState::Started | InvocationState::Uncertain
+                InvocationState::Running | InvocationState::Uncertain
             )
     })
 }

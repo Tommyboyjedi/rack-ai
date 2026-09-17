@@ -20,7 +20,7 @@ pub fn refresh(service: &Service, input: (&str, &str)) -> Result<Value, String> 
         for tag in &request.services {
             let id = root.services.get(tag).ok_or("service_not_reserved")?;
             let mut d = owned(s, input.0, id)?.clone();
-            if d.state != DemandState::Denied || d.released {
+            if d.state != DemandState::Unavailable || d.released {
                 continue;
             }
             if let Some(profile) = service.config.profiles.iter().find(|p| &p.tag == tag) {

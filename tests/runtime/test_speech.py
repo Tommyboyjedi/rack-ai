@@ -26,21 +26,20 @@ def speech(r,d,key='one',body=None,owner='cb',path='speech'):
     return response.status,response.read()
 
 class SpeechTests(unittest.TestCase):
-    def test_resident_speech_preemption_replay_and_restoration(self):
+    def test_resident_speech_preemption_replay_and_explicit_reacquisition(self):
         with tempfile.TemporaryDirectory() as tmp:
             r=Rack(tmp,configure)
             try:
                 coder=r.wait(r.acquire('athba','local-coder','low'))
                 tts=r.wait(r.acquire('cb','local-tts','paramount'))
-                r.wait(coder,'held')
+                r.wait(coder,'preempted')
                 raw=r.call('cb','infer',status=400,request=dict(schema=VERSION,
                     submission_id='raw-speech',reservation_id=tts['id'],
                     generation=tts['generation'],profile_hash=tts['profile_hash'],
                     prompt='',max_tokens=1,timeout_seconds=5,
                     payload={'protocol':'speech','body':{'text':'hello','voice':'approved'}}))
                 self.assertEqual(raw['error'],'use_scoped_speech_gateway')
-
-                self.assertEqual(r.acquire('other','local-tts','paramount')['state'],'denied')
+                self.assertEqual(r.acquire('other','local-tts','paramount')['state'],'unavailable')
                 self.assertEqual(speech(r,tts,owner='athba')[0],409)
                 self.assertEqual(speech(r,tts,body={'text':'hello','voice':'../escape'})[0],409)
                 self.assertEqual(speech(r,tts,body={'text':'hello','voice':'missing'})[0],409)
@@ -52,13 +51,12 @@ class SpeechTests(unittest.TestCase):
                 self.assertEqual(speech(r,tts,body={'text':'changed','voice':'approved'})[0],409)
                 self.assertEqual(speech(r,tts,'two')[0],200)
                 self.assertEqual(r.counts('dispatch')[tts['model']],2)
-                self.assertEqual(r.counts('start')[tts['model']],1)
                 r.release(tts); r.wait(tts,'released')
-                restored=r.wait(coder)
-                self.assertNotEqual(restored['generation'],coder['generation'])
-                self.assertEqual(r.result(r.infer(restored))['state'],'completed')
+                self.assertEqual(r.inspect(coder)['state'],'preempted')
+                replacement=r.wait(r.acquire('athba','local-coder','low',identity='speech-explicit-reacquire'))
+                self.assertEqual(r.result(r.infer(replacement))['state'],'completed')
                 self.assertEqual(speech(r,tts,'three')[0],409)
-                r.release(restored);r.wait(restored,'released')
+                r.release(replacement);r.wait(replacement,'released')
             finally:r.close()
 
     def test_one_active_and_invalid_wav_stays_uncertain(self):
@@ -124,11 +122,11 @@ class SpeechTests(unittest.TestCase):
                                 if record:break
                                 time.sleep(.02)
                             self.assertIsNotNone(record)
-                            self.assertEqual(record['state'],'accepted')
+                            self.assertEqual(record['state'],'queued')
                             if key=='queued':
                                 time.sleep(1.2)
                                 current=json.loads(state_path.read_text())['data']['invocations'][record['id']]
-                                self.assertEqual(current['state'],'accepted')
+                                self.assertEqual(current['state'],'queued')
                             else:
                                 # Persist an old one-second request that expired before dispatch.
                                 with (authority/'authority.lock').open('a') as lock:
@@ -152,43 +150,32 @@ class SpeechTests(unittest.TestCase):
                 r.release(tts);r.wait(tts,'released')
             finally:r.close()
 
-    def test_multi_service_reservation_preemption_and_independent_refresh(self):
+    def test_multi_service_reservation_is_atomic_and_preempts_without_restoration(self):
         def reserve(r,owner,services,priority):
             return r.call(owner,'reserve',request=dict(acquisition_id=__import__('uuid').uuid4().hex,
                 work_id='speech-reservation',services=services,priority=priority,ttl_seconds=60))
         with tempfile.TemporaryDirectory() as tmp:
             r=Rack(tmp,configure)
             try:
-                blocker=reserve(r,'other',['local-coder'],'paramount')
-                r.wait(blocker['services']['local-coder'])
-                combined=reserve(r,'cb',['local-primary','comfyui','local-tts'],'paramount')
-                self.assertEqual(combined['services']['local-tts']['state'],'unavailable')
+                coder=reserve(r,'athba',['local-coder'],'low')
+                before=r.wait(coder['services']['local-coder'])
+                combined=reserve(r,'cb',['local-primary','local-tts'],'paramount')
                 primary=r.wait(combined['services']['local-primary'])
-                r.wait(combined['services']['comfyui'])
+                tts=r.wait(combined['services']['local-tts'])
+                self.assertEqual(r.wait(before,'preempted')['state'],'preempted')
+                self.assertEqual(speech(r,tts,'preempt')[0],200)
                 work=r.call('cb','submit_work',request=dict(reservation_id=combined['id'],
                     service='local-primary',work_id='ready-peer',payload=dict(kind='inference',
                     prompt='hello',max_tokens=8,timeout_seconds=5)))
                 self.assertEqual(r.result(dict(id=work['invocation_id'],owner='cb'))['state'],'completed')
-                r.call('other','release_reservation',reservation_id=blocker['id'])
-                r.wait(blocker['services']['local-coder'],'released')
-                refreshed=r.call('cb','refresh_reservation',reservation_id=combined['id'])
-                self.assertEqual(refreshed['services']['local-primary']['generation'],primary['generation'])
-                tts=r.wait(refreshed['services']['local-tts'])
-                self.assertEqual(speech(r,tts,'multi')[0],200)
                 r.call('cb','release_reservation',reservation_id=combined['id'])
-                for member in refreshed['services'].values():r.wait(member,'released')
-                coder=reserve(r,'athba',['local-coder'],'low')
-                before=r.wait(coder['services']['local-coder'])
-                combined=reserve(r,'cb',['local-primary','comfyui','local-tts'],'paramount')
-                tts=r.wait(combined['services']['local-tts'])
-                r.wait(before,'held')
-                self.assertEqual(speech(r,tts,'preempt')[0],200)
-                r.call('cb','release_reservation',reservation_id=combined['id'])
-                r.wait(tts,'released')
-                restored=r.wait(before)
-                self.assertNotEqual(restored['generation'],before['generation'])
-                r.call('athba','release_reservation',reservation_id=coder['id'])
-                r.wait(restored,'released')
+                for member in combined['services'].values():r.wait(member,'released')
+                self.assertEqual(r.inspect(before)['state'],'preempted')
+                replacement=reserve(r,'athba',['local-coder'],'low')
+                replacement=r.wait(replacement['services']['local-coder'])
+                self.assertNotEqual(replacement['id'],before['id'])
+                r.call('athba','release_reservation',reservation_id=replacement['reservation_id'] or replacement['id'])
+                r.wait(replacement,'released')
             finally:r.close()
 
 if __name__=='__main__':unittest.main()

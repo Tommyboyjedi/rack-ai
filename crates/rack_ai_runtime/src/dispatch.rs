@@ -17,8 +17,7 @@ impl Dispatch<'_> {
                 .ok_or("missing_reservation")?;
             Ok((i.clone(), d.clone()))
         })?;
-        if candidate.0.state != InvocationState::Accepted || candidate.1.state != DemandState::Ready
-        {
+        if candidate.0.state != InvocationState::Queued || candidate.1.state != DemandState::Ready {
             return Ok(());
         }
         (BackendAccess {
@@ -39,7 +38,7 @@ impl Dispatch<'_> {
                 .get(&i.request.reservation_id)
                 .ok_or("missing_reservation")?
                 .clone();
-            if i.state != InvocationState::Accepted {
+            if i.state != InvocationState::Queued {
                 return Ok(None);
             }
             if i.waiting_deadline <= now() || !active(&d) {
@@ -64,7 +63,7 @@ impl Dispatch<'_> {
             if crate::work_payload::is_workspace(i) {
                 i.scope_access_hash = Some(digest(d.access_key.as_bytes()));
             }
-            i.state = InvocationState::Started;
+            i.state = InvocationState::Running;
             i.started = Some(now());
             i.execution_deadline = i.started.map(|started| started + i.request.timeout_seconds);
             i.activation = Some(d.generation.clone());
@@ -110,11 +109,11 @@ impl Completion<'_> {
                         .is_some_and(|scope| scope.invocation_id.as_ref() == Some(id))
                         && matches!(
                             child.state,
-                            InvocationState::Started | InvocationState::Uncertain
+                            InvocationState::Running | InvocationState::Uncertain
                         )
                 });
             let i = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
-            if i.state != InvocationState::Started || i.activation != invocation.activation {
+            if i.state != InvocationState::Running || i.activation != invocation.activation {
                 return Err("late_invocation_callback".into());
             }
             if unknown_child {
@@ -166,6 +165,7 @@ impl Completion<'_> {
             if i.state != InvocationState::Uncertain {
                 crate::idle::touch(s, &demand.id, now())?;
             }
+            crate::capacity::retention(s, &self.service.config.limits)?;
             Ok(())
         })
     }
@@ -178,7 +178,7 @@ pub(crate) fn workspace_slot(service: &Service, s: &Document, i: &Invocation) ->
             .invocations
             .values()
             .filter(|other| {
-                crate::work_payload::is_workspace(other) && other.state == InvocationState::Started
+                crate::work_payload::is_workspace(other) && other.state == InvocationState::Running
             })
             .count()
             < service.config.limits.max_dispatch_workers.saturating_sub(1)

@@ -80,3 +80,95 @@ ATHBA owns the decision to resubmit cancelled semantic work or request the servi
 ## Implementation target
 
 Refactor the current RackAI runtime/reservation/invocation logic to preserve existing authentication, provenance, durable evidence and safe uncertainty handling while implementing the ownership rules above. Existing accepted/running work must remain fail-safe. Migration/compatibility behavior must be explicit and tested before production cutover.
+
+
+## Implemented state machine
+
+`ready` is the only state that can accept a new invocation. Submission assigns a
+monotonic local queue position and a dispatch worker starts only the oldest queued
+call for that logical service. Dispatch does not read or compare priority: the
+reservation acquisition was the sole priority decision.
+
+A new lower/equal acquisition returns `unavailable` with an `incumbent_priority`
+or safety reason and a bounded `retry_after` hint. It creates neither an
+invocation nor a retained demand. A short-lived cache is keyed by authenticated
+caller plus the material logical-service request (not the caller's rotating
+acquisition id) and the current relevant claim environment. The cache is bounded
+to 128 entries, expires after two seconds, and is bypassed automatically when a
+claim, incumbent generation, state, priority, or requested physical mapping
+changes.
+
+Higher priority acquisition first records the incumbent as `preempting`, cancels
+only its `queued` invocations with the exact terminal error
+`reservation_superseded_by_higher_priority`, and retains the incumbent's physical
+claim while `running` work drains. Once all running work has a known terminal
+outcome and the owned backend is stopped, its claim is removed, the old logical
+ownership becomes terminal `preempted`, and the incoming claim transfers. An
+`uncertain` invocation never proves a drain and therefore blocks transfer
+fail-closed. The supervisor contains no reconsideration path for `preempted`:
+release makes capacity available; only a client-created, new acquisition may use
+it.
+
+For a multi-service `reserve`, RackAI validates every logical service, its
+physical overlap, and every incumbent before changing any claim. A refusal makes
+the whole reservation `unavailable`. For a preemptible set, each member can stage
+its own safe stop/start work, but a member is not published `ready` until every
+member has a transferred claim, a started process, and an independent readiness
+probe. This prevents partial-ready gateway access. Conversely, preempting one
+member of an older multi-service reservation leaves its non-conflicting members
+ready and usable.
+
+## Capacity and evidence model
+
+There are three intentional, independently bounded capacities:
+
+1. `max_pending` and `max_pending_per_reservation` limit live queued/running
+   calls. These are the queue contract for a Ready reservation.
+2. `max_calls_per_reservation` limits the number of durable idempotency receipts
+   admitted over one reservation lifetime. It is explicit client-visible call
+   capacity, not a global scheduling or evidence-storage fallback.
+3. `terminal_evidence_bytes` bounds full terminal result payloads. Older
+   terminal payload bodies are compacted to durable SHA-256 receipt fields while
+   retaining the invocation identity, request, terminal state, error, and digest
+   for reconciliation. Queued, running, and uncertain records are never
+   compacted. `retention_admission_bytes` then reserves only active response
+   headroom and compact control data.
+
+This prevents completed historical output from causing
+`capacity_retained_evidence` for ordinary calls under an already Ready
+reservation. A compacted completed result deliberately reports no original body;
+the digest proves which retained body was compacted and prevents RackAI from
+pretending it can reproduce an output it no longer retains. The authority's
+existing 32 MiB hard write bound remains the final fail-safe corruption/storage
+fence.
+
+## Compatibility and cutover migration
+
+No historical authority is deleted or recreated. Deserialization translates only
+legacy spelling while preserving durable identities and evidence:
+
+| Legacy persisted value | v2 interpretation |
+| --- | --- |
+| `denied` | `unavailable` |
+| `draining` | `preempting` |
+| `held` | terminal `preempted`; never a restoration candidate |
+| invocation `accepted` | `queued` |
+| invocation `started` | `running` |
+
+On receiver recovery, any persisted running invocation is already changed to
+`uncertain` by the existing restart fence, so a legacy or v2 preempting transfer
+cannot occur until an operator-supported reconciliation establishes safety. A
+legacy `held` record is intentionally not reacquired. Existing claim maps,
+request identities, invocation evidence, workspace scopes, and unknown work stay
+in the authority; no migration clears them. Before a production cutover, inspect
+those records, reconcile unresolved Started/Uncertain work, and require an
+operator-approved deployment window. This PR does not deploy the receiver.
+
+## Qualification scope
+
+`tests/runtime/test_reservation_ownership_v2.py` uses only RackAI's disposable
+fixture receiver. It proves one running plus nine queued calls, typed queued
+cancellation, safe drain before Ready, no automatic restoration, explicit
+reacquisition, atomic all-or-unavailable membership, unaffected logical service
+ownership, decision-cache invalidation, and terminal evidence compaction. It
+does not call ATHBA, CB, or a live RackAI workload.

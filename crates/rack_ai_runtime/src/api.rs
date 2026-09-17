@@ -68,8 +68,12 @@ pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route("/runtime/v1", post(handle))
         .route("/runtime/v1/contract", get(crate::contract::handle))
-        .route("/runtime/v1/voices/register", post(crate::voice_registration::handle)
-            .layer(DefaultBodyLimit::max(crate::voice_registration::MAX_FORM_BYTES)))
+        .route(
+            "/runtime/v1/voices/register",
+            post(crate::voice_registration::handle).layer(DefaultBodyLimit::max(
+                crate::voice_registration::MAX_FORM_BYTES,
+            )),
+        )
         .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
@@ -131,13 +135,16 @@ async fn handle(
             let status = match error.as_str() {
                 "capacity_pending_global"
                 | "capacity_pending_reservation"
-                | "capacity_retained_evidence" => StatusCode::TOO_MANY_REQUESTS,
+                | "capacity_reservation_call_history"
+                | "capacity_active_evidence" => StatusCode::TOO_MANY_REQUESTS,
                 "not_found" => StatusCode::NOT_FOUND,
                 "source_spoofing" | "qualification_mode_denied" => StatusCode::FORBIDDEN,
                 "identity_conflict"
                 | "stale_generation"
                 | "stale_generation_or_profile"
                 | "reservation_not_dispatchable"
+                | "reservation_preempting"
+                | "reservation_preempted"
                 | "reservation_terminal" => StatusCode::CONFLICT,
                 _ => StatusCode::BAD_REQUEST,
             };
@@ -160,7 +167,8 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
         return Err("use_submit_work".into());
     }
     if matches!(&request, Request::Infer { request }
-        if request.payload.as_ref().is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech)) {
+        if request.payload.as_ref().is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech))
+    {
         return Err("use_scoped_speech_gateway".into());
     }
     let value = match request {
