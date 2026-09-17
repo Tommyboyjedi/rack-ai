@@ -62,12 +62,9 @@ impl Service {
                     "receiver_restart_after_dispatch_intent; never automatically replay".into(),
                 );
             }
-            for d in s
-                .data
-                .demands
-                .values_mut()
-                .filter(|d| d.effect_started && d.process.is_none())
-            {
+            for d in s.data.demands.values_mut().filter(|d| {
+                d.effect_started && d.process.is_none() && d.state != DemandState::RecoveryRequired
+            }) {
                 d.state = DemandState::RecoveryRequired;
                 d.reason = Some("interrupted_start_requires_owned_process_reconciliation".into());
             }

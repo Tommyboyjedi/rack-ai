@@ -44,6 +44,47 @@ Define the RackAI boundary for multi-application resource ownership, preemption 
 
 `queued` means accepted work waiting behind other calls for the same current owner. It must never mean that the application does not own the service.
 
+## Historical uncertainty and current ownership
+
+A historical uncertainty is durable evidence, not a perpetual assertion that a GPU
+is physically occupied. RackAI records historical start and invocation outcomes
+separately from its conclusion about the effect that exists now.
+
+A recovery_required demand whose original start result is
+start_outcome_unknown remains fenced by default. RackAI may release its
+**current physical claim** only through the bounded effect-absence
+reconciliation path. That path requires all of the following current,
+authoritative observations to succeed under the media operation lock:
+
+1. the owning reservation is released, cancelled, or expired and is no longer
+   active;
+2. no queued or running invocation for any member of that reservation remains;
+3. the demand has no recorded owned process and no process/generation evidence
+   indicates a replacement;
+4. the bound systemd activation is inactive with no pending job or populated
+   cgroup;
+5. the configured GPU probe reports no allocation;
+6. media state has no lease, activation, backend generation, restart intent,
+   pending job, or active native/ComfyUI session; and
+7. no overlapping active ownership or lifecycle/preemption transition can create
+   or restore the effect.
+
+Each host, process, systemd, media-store, and GPU probe must be readable and
+match the configured ownership binding. Missing, foreign, changed, or
+inaccessible evidence is ambiguous and keeps the demand recovery_required with
+its claim fenced. Age, a missing PID, and an HTTP health result alone are never
+enough.
+
+When every check succeeds, RackAI atomically persists a reconciliation record:
+
+    historical_outcome = start_outcome_unknown
+    current_effect = proven_absent
+    resource_claim = released
+
+The demand and invocation identities, the original unknown outcome, and all
+terminal evidence remain durable. RackAI does not invent a terminal outcome for
+uncertain work, replay it, recreate the old reservation, or reacquire capacity
+for the previous owner. A subsequent acquisition is a new application decision.
 ## Preemption example
 
 ATHBA Low owns `local-primary` and has one running call plus nine queued calls. CB Paramount requests an atomic set including `local-primary`.

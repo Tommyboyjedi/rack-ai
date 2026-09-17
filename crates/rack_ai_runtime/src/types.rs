@@ -52,6 +52,11 @@ pub struct Demand {
     pub reserve_result: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reservation_closed: Option<DemandState>,
+    /// Durable evidence that an historically uncertain start no longer has a
+    /// current physical effect. It never changes the historical invocation or
+    /// start outcome into a success, failure, cancellation, or replay.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_reconciliation: Option<RecoveryReconciliation>,
     pub id: String,
     pub owner: String,
     pub request: Acquire,
@@ -217,6 +222,45 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+}
+
+/// The result of the original start attempt. This is historical evidence and is
+/// deliberately independent of whether the physical effect is still present.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoricalOutcome {
+    StartOutcomeUnknown,
+}
+
+/// The current physical-effect conclusion made by an evidence-backed recovery
+/// probe. Additional values must never be inferred from a missing PID alone.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentEffect {
+    ProvenAbsent,
+}
+
+/// Every check is recorded only after all probes succeeded. The durable record
+/// distinguishes an unknown historical start result from an absent current
+/// effect, so receiver restart/resume cannot recreate a released claim.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RecoveryAbsenceChecks {
+    pub reservation_inactive: bool,
+    pub active_invocations_absent: bool,
+    pub recorded_process_absent: bool,
+    pub systemd_activation_absent: bool,
+    pub gpu_allocation_absent: bool,
+    pub media_session_absent: bool,
+    pub lifecycle_transition_absent: bool,
+    pub ownership_fence_intact: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct RecoveryReconciliation {
+    pub historical_outcome: HistoricalOutcome,
+    pub current_effect: CurrentEffect,
+    pub reconciled_at: u64,
+    pub checks: RecoveryAbsenceChecks,
 }
 
 fn legacy_response_bound() -> u64 {

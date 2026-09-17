@@ -109,6 +109,7 @@ impl Admission<'_> {
             reserve_request: None,
             reserve_result: None,
             reservation_closed: None,
+            recovery_reconciliation: None,
             id: identity()?,
             owner: self.source.source.clone(),
             request: request.clone(),
