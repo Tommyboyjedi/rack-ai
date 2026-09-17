@@ -1,4 +1,5 @@
 """Shared ComfyUI recovery uses real receiver transitions and isolated OS fixtures."""
+import hashlib
 import json
 import subprocess
 import sys
@@ -7,6 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import requests
 from support import Rack, ROOT
 sys.path.insert(0, str(ROOT/'tests/media'))
 from fixture import receiver, wait_for
@@ -17,6 +19,8 @@ from test_shared_media import native_config_hash
 @contextmanager
 def shared(root, legacy=False):
     def historical(c):
+        c['principals'].append(dict(id='cb',
+            token_sha256=hashlib.sha256(b'cb').hexdigest(), operator=False))
         if legacy:
             for principal in c['principals']:
                 principal['ceiling'] = 'low'
@@ -62,8 +66,18 @@ def mark_start_outcome_unknown(rack, media, demand, *, released=True,
     rack.process.wait(timeout=5)
     rack.log.close()
     if stop_effect:
-        stop_owned(media)
-        wait_for(lambda: status(media)['state'] == 'stopped')
+        if released:
+            headers = {'Authorization': 'Bearer cb'}
+            session = requests.get(media['api']+'/api/media/v1/status', headers=headers,
+                timeout=3).json()['session_id']
+            assert session
+            response = requests.post(media['api']+f'/api/media/v1/sessions/{session}/release',
+                json={}, headers=headers, timeout=3)
+            assert response.status_code == 202, response.text
+            wait_for(lambda: status(media)['state'] == 'stopped')
+        else:
+            stop_owned(media)
+        assert not json.loads((media['root']/'machine.json').read_text())['active']
     path = Path(rack.config['authority_root'])/'managed.json'
     doc = json.loads(path.read_text())
     saved = doc['data']['demands'][demand['id']]
@@ -82,6 +96,7 @@ def mark_start_outcome_unknown(rack, media, demand, *, released=True,
                 reservation_id=demand['id'], generation=demand['generation'],
                 profile_hash=demand['profile_hash'], prompt='retained historical evidence',
                 max_tokens=16, timeout_seconds=5))
+    doc['claims']['gpu-4080-super'] = demand['id']
     path.write_text(json.dumps(doc))
     return path
 
