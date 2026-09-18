@@ -30,24 +30,24 @@ class Principals(unittest.TestCase):
         self.assertEqual(a['priorities'], ['low','medium','high','paramount'])
         for owner in ['athba','cb']:
             d = r.acquire(owner, 'big-brain', 'paramount')
-            self.assertEqual(d['state'], 'denied')
+            self.assertEqual(d['state'], 'unavailable')
             self.assertEqual(d['reason'], 'unqualified_profile')
     def test_ties_independent_paramount_and_strict_preemption(self):
         r = self.rack
         low = r.wait(r.acquire('athba', 'local-primary', 'low'))
         high = r.wait(r.acquire('cb', 'local-fun-chat', 'paramount'))
-        r.wait(low, 'held')
+        r.wait(low, 'preempted')
         denied = r.acquire('athba', 'local-primary', 'paramount', identity='tie')
         self.assertEqual(denied['reason'], 'incumbent_priority:'+high['id'])
         independent = r.wait(r.acquire('athba', 'local-coder', 'paramount'))
         self.assertEqual(r.inspect(high)['state'], 'ready')
         r.release(high)
-        r.wait(low)
-        replay = r.acquire('athba', 'local-primary', 'paramount', identity='tie')
-        self.assertEqual(replay['id'], denied['id'])
-        self.assertEqual(replay['state'], 'denied')
-        fresh = r.wait(r.acquire('athba', 'local-primary', 'paramount'))
-        self.assertNotEqual(fresh['id'], denied['id'])
+        r.wait(high, 'released')
+        self.assertEqual(r.inspect(low)['state'], 'preempted')
+        # A changed claim environment invalidates the short denial cache. This is
+        # a new client decision; RackAI never restores the displaced record.
+        fresh = r.wait(r.acquire('athba', 'local-primary', 'paramount', identity='tie'))
+        self.assertNotEqual(fresh['id'], low['id'])
         self.assertEqual(r.inspect(independent)['state'], 'ready')
     def test_ownership_and_qualification_operator_remain(self):
         r = self.rack

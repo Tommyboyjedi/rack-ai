@@ -49,13 +49,13 @@ mod work;
 mod work_execution;
 pub mod work_payload;
 
+mod gpu_cleanup;
+mod reference_audio;
 mod speech;
 mod speech_backend;
 mod speech_gateway;
-mod reference_audio;
-mod voice_registry;
 mod voice_registration;
-mod gpu_cleanup;
+mod voice_registry;
 
 mod media_evidence;
 mod media_recovery;

@@ -10,7 +10,7 @@ Reservation and work operations below use the existing authenticated `POST /runt
 credentials as `POST /runtime/v1`. It is read-only and returns a JSON object:
 
 - `schema`: `rack-ai/runtime-contract/v1`.
-- `contract_version`: `1.1.0`, the published contract revision.
+- `contract_version`: `1.2.0`, the published contract revision.
 - `documentation`: the complete contents of this document as a string.
 - `request_schema`: `config/runtime/request.schema.json` as a JSON object.
 - `response_schema`: `config/runtime/response.schema.json` as a JSON object.
@@ -20,6 +20,36 @@ that deployed binary, independent of files on the runtime host. Missing or inval
 credentials return the existing HTTP 401 `{schema, error: "unauthorized"}` response.
 `discover` remains the dynamic service/capability discovery operation; this endpoint
 does not report live service availability or change discovery behavior.
+
+## v2 ownership rules (authoritative)
+
+This section supersedes older compatibility prose below that describes independent
+member acquisition, `Held` restoration, partial-ready use, or work waiting for a
+future claim. A `reserve` request is an atomic logical-service ownership decision:
+it returns `ready` only after every requested member is owned, activated and
+ready; if any member is blocked at acquisition, the reservation is
+`unavailable`, not partially usable. Services within an existing older
+reservation remain independent when only one has physical overlap, so an
+unaffected Ready member continues to work while its peer becomes `preempting`
+and then terminal `preempted`.
+
+Priority is evaluated only while acquiring a reservation. A Ready member accepts
+calls as local `queued` work in FIFO order; dispatch makes no further global
+priority decision. A lower/equal incumbent block returns typed `unavailable` and
+bounded `retry_after`, and does not create a queued invocation. A higher-priority
+acquisition marks the affected owner `preempting`, rejects new calls, cancels all
+not-started queued calls with
+`reservation_superseded_by_higher_priority`, permits already `running` calls to
+finish normally, then transfers ownership and makes the new reservation Ready.
+`preempted` is terminal: release merely makes capacity available and RackAI never
+reacquires it or replays cancelled work. The client must make a new acquisition.
+
+The durable invocation states are `queued`, `running`, `completed`, `cancelled`,
+`failed`, `expired`, and `uncertain`. Terminal response payloads are compacted to
+SHA-256 receipts within bounded `terminal_evidence_bytes`; active queued/running
+and uncertain calls are never compacted. See
+[reservation-ownership-preemption-v2.md](reservation-ownership-preemption-v2.md)
+for the state machine, migration and qualification details.
 
 ## Reserve services
 

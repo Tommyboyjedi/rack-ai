@@ -88,7 +88,6 @@ impl Transition<'_> {
             if saved.generation != d.generation
                 || saved.state != DemandState::Preparing
                 || !active(saved)
-                || !owns(s, saved)
             {
                 return Err("transition_fence_changed".into());
             }
@@ -110,6 +109,31 @@ struct VictimDrain<'a> {
 impl VictimDrain<'_> {
     fn advance(&self, d: &Demand) -> Result<bool, String> {
         let r = self.service;
+        // A multi-service reservation shares one incumbent set. Only the root
+        // member performs stop-and-mark-preempted; its peers wait for that
+        // durable fence before claiming their independent resources.
+        if d.reservation_id.as_deref().is_some_and(|root| root != d.id) {
+            let drained = r.authority.read(|s| {
+                let root = s
+                    .data
+                    .demands
+                    .get(
+                        d.reservation_id
+                            .as_deref()
+                            .ok_or("missing_reservation_root")?,
+                    )
+                    .ok_or("missing_reservation_root")?;
+                Ok(root.victims.iter().all(|id| {
+                    s.data
+                        .demands
+                        .get(id)
+                        .is_some_and(|victim| victim.state == DemandState::Preempted)
+                }))
+            })?;
+            if !drained {
+                return Ok(false);
+            }
+        }
         for id in &d.victims {
             let victim = r.authority.read(|s| {
                 let victim = s.data.demands.get(id).ok_or("missing_victim")?.clone();
@@ -124,8 +148,11 @@ impl VictimDrain<'_> {
             let Some(victim) = victim else {
                 return Ok(false);
             };
-            if victim.state == DemandState::Held {
+            if victim.state == DemandState::Preempted {
                 continue;
+            }
+            if victim.state != DemandState::Preempting {
+                return Err("victim_transition_changed".into());
             }
             Transition { service: r }.boundary(d)?;
             Hosting { config: &r.config }.stop(&victim)?;
@@ -133,20 +160,32 @@ impl VictimDrain<'_> {
                 .authority
                 .update(|s| {
                     let v = s.data.demands.get_mut(id).ok_or("missing_victim")?;
-                    if v.generation != victim.generation {
+                    if v.generation != victim.generation || v.state != DemandState::Preempting {
                         return Err("stale_victim_callback".into());
                     }
                     v.process = None;
                     v.effect_started = false;
-                    v.state = if active(v) {
-                        DemandState::Held
-                    } else {
-                        DemandState::Releasing
-                    };
+                    v.state = DemandState::Preempted;
+                    v.reason = Some("preempted_by_higher_priority".into());
+                    // The old owner is terminal. Remove every physical claim it held;
+                    // the incoming candidate claims only its own required resources.
+                    s.claims.retain(|_, owner| owner != id);
                     Ok(())
                 })
                 .map(|_| false);
         }
+        r.authority.update(|s| {
+            let candidate = s
+                .data
+                .demands
+                .get(&d.id)
+                .ok_or("missing_transition")?
+                .clone();
+            if candidate.generation != d.generation || candidate.state != DemandState::Preparing {
+                return Err("transition_fence_changed".into());
+            }
+            crate::planner::transfer(s, &candidate)
+        })?;
         Ok(true)
     }
 }
@@ -178,14 +217,11 @@ impl ReadinessCommit<'_> {
                     if !active(current(s, d)?) {
                         return Ok(());
                     }
-                    current(s, d)?.state = DemandState::Ready;
+                    current(s, d)?.ready_checked = true;
                     if let Some(p) = media_process {
                         current(s, d)?.process = Some(p);
                     }
-                    s.claims.retain(|resource, owner| {
-                        owner != &d.id || d.profile.resources.contains(resource)
-                    });
-                    Ok(())
+                    crate::reservation::commit_ready(s, d)
                 })
             }
             Err(_)

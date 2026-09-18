@@ -55,19 +55,16 @@ impl Service {
                 .data
                 .invocations
                 .values_mut()
-                .filter(|i| i.state == InvocationState::Started)
+                .filter(|i| i.state == InvocationState::Running)
             {
                 i.state = InvocationState::Uncertain;
                 i.error = Some(
                     "receiver_restart_after_dispatch_intent; never automatically replay".into(),
                 );
             }
-            for d in s
-                .data
-                .demands
-                .values_mut()
-                .filter(|d| d.effect_started && d.process.is_none())
-            {
+            for d in s.data.demands.values_mut().filter(|d| {
+                d.effect_started && d.process.is_none() && d.state != DemandState::RecoveryRequired
+            }) {
                 d.state = DemandState::RecoveryRequired;
                 d.reason = Some("interrupted_start_requires_owned_process_reconciliation".into());
             }
@@ -97,7 +94,7 @@ pub fn inflight(s: &Document, id: &str) -> bool {
             && !crate::work_payload::is_workspace(i)
             && matches!(
                 i.state,
-                InvocationState::Started | InvocationState::Uncertain
+                InvocationState::Running | InvocationState::Uncertain
             )
     })
 }

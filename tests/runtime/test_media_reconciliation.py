@@ -1,4 +1,5 @@
 """Shared ComfyUI recovery uses real receiver transitions and isolated OS fixtures."""
+import hashlib
 import json
 import subprocess
 import sys
@@ -7,16 +8,19 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
+import requests
 from support import Rack, ROOT
 sys.path.insert(0, str(ROOT/'tests/media'))
 from fixture import receiver, wait_for
-from test_recovery import fault
+from test_recovery import fault, status
 from test_shared_media import native_config_hash
 
 
 @contextmanager
 def shared(root, legacy=False):
     def historical(c):
+        c['principals'].append(dict(id='cb',
+            token_sha256=hashlib.sha256(b'cb').hexdigest(), operator=False))
         if legacy:
             for principal in c['principals']:
                 principal['ceiling'] = 'low'
@@ -55,6 +59,133 @@ def terminal(rack, demand):
     return wait_for(observed, timeout=20)
 
 
+
+def mark_start_outcome_unknown(rack, media, demand, *, released=True,
+    stop_effect=True, retain_uncertain=False):
+    rack.process.kill()
+    rack.process.wait(timeout=5)
+    rack.log.close()
+    if stop_effect:
+        if released:
+            headers = {'Authorization': 'Bearer cb'}
+            session = requests.get(media['api']+'/api/media/v1/status', headers=headers,
+                timeout=3).json()['session_id']
+            assert session
+            response = requests.post(media['api']+f'/api/media/v1/sessions/{session}/release',
+                json={}, headers=headers, timeout=3)
+            assert response.status_code == 202, response.text
+            wait_for(lambda: status(media)['state'] == 'stopped')
+        else:
+            stop_owned(media)
+        assert not json.loads((media['root']/'machine.json').read_text())['active']
+    path = Path(rack.config['authority_root'])/'managed.json'
+    doc = json.loads(path.read_text())
+    saved = doc['data']['demands'][demand['id']]
+    saved.update(state='recovery_required', reason='start_outcome_unknown',
+        process=None, effect_started=True, released=released)
+    root = doc['data']['demands'][saved.get('reservation_id') or demand['id']]
+    root['reservation_closed'] = 'released' if released else None
+    if retain_uncertain:
+        doc['data']['invocations']['historical-uncertain'] = dict(
+            id='historical-uncertain', owner='cb', state='uncertain', queue_order=1,
+            waiting_deadline=int(time.time())+60, execution_deadline=None,
+            response_bytes=0, cancellation=None, late_result=None, result_digest=None,
+            late_result_digest=None, started=int(time.time()), activation=demand['generation'],
+            result=None, error='simulated_lost_terminal_result', request=dict(
+                schema='rack-ai/runtime/v1', submission_id='historical-uncertain',
+                reservation_id=demand['id'], generation=demand['generation'],
+                profile_hash=demand['profile_hash'], prompt='retained historical evidence',
+                max_tokens=16, timeout_seconds=5))
+    doc['claims']['gpu-4080-super'] = demand['id']
+    path.write_text(json.dumps(doc))
+    return path
+
+
+def assert_fenced(rack, demand, path):
+    rack.start()
+    rack.wait(demand, 'recovery_required')
+    time.sleep(.3)
+    document = json.loads(path.read_text())
+    saved = document['data']['demands'][demand['id']]
+    assert document['claims']['gpu-4080-super'] == demand['id']
+    assert 'recovery_reconciliation' not in saved
+    return document
+
+
+def test_start_outcome_unknown_live_owned_process_keeps_claim_fenced(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'live-process')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, stop_effect=False)
+        assert_fenced(rack, demand, path)
+        assert json.loads((media['root']/'machine.json').read_text())['active']
+
+
+def test_start_outcome_unknown_gpu_process_keeps_claim_fenced(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'foreign-gpu')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand)
+        fault(media, machine={'foreign': True})
+        assert_fenced(rack, demand, path)
+
+
+def test_start_outcome_unknown_unreadable_gpu_probe_keeps_claim_fenced(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'unreadable-gpu')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand)
+        fault(media, machine={'gpu_probe_error': True})
+        assert_fenced(rack, demand, path)
+
+
+def test_start_outcome_unknown_active_reservation_keeps_claim_fenced(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'active-reservation')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, released=False)
+        assert_fenced(rack, demand, path)
+
+def test_start_outcome_unknown_releases_only_proven_absent_current_effect(tmp_path):
+    with shared(tmp_path, legacy=True) as (rack, media):
+        _, demand = reserve(rack, 'effect-absence')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, retain_uncertain=True)
+        rack.start()
+        terminal(rack, demand)
+        after = json.loads(path.read_text())
+        reconciled = after['data']['demands'][demand['id']]
+        assert reconciled['state'] == 'released'
+        assert reconciled['reason'] == 'start_outcome_unknown'
+        assert reconciled['effect_started'] is False
+        assert reconciled['process'] is None
+        assert reconciled['recovery_reconciliation'] == dict(
+            historical_outcome='start_outcome_unknown', current_effect='proven_absent',
+            reconciled_at=reconciled['recovery_reconciliation']['reconciled_at'],
+            checks=dict(reservation_inactive=True, active_invocations_absent=True,
+                recorded_process_absent=True, systemd_activation_absent=True,
+                gpu_allocation_absent=True, media_session_absent=True,
+                lifecycle_transition_absent=True, ownership_fence_intact=True))
+        assert after['data']['invocations']['historical-uncertain']['state'] == 'uncertain'
+        assert 'gpu-4080-super' not in after['claims']
+        starts_before_restart = sum('start' in args for args in json.loads(
+            (media['root']/'machine.json').read_text()).get('mutations', []))
+        rack.process.kill()
+        rack.process.wait(timeout=5)
+        rack.log.close()
+        rack.start()
+        assert rack.inspect(demand)['state'] == 'released'
+        restarted = json.loads(path.read_text())
+        assert restarted['data']['demands'][demand['id']]['recovery_reconciliation'] == reconciled['recovery_reconciliation']
+        assert restarted['data']['invocations']['historical-uncertain']['state'] == 'uncertain'
+        assert 'gpu-4080-super' not in restarted['claims']
+        starts_after_restart = sum('start' in args for args in json.loads(
+            (media['root']/'machine.json').read_text()).get('mutations', []))
+        assert starts_after_restart == starts_before_restart
+        fresh, next_demand = reserve(rack, 'fresh-after-reconciliation')
+        rack.wait(next_demand)
+        rack.call('cb', 'release_reservation', reservation_id=fresh['id'])
+        terminal(rack, next_demand)
 def test_transport_failure_then_clean_stop_releases_claim(tmp_path):
     with shared(tmp_path) as (rack, media):
         reservation, demand = reserve(rack, 'transport-stop')

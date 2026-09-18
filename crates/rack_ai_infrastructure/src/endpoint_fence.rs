@@ -18,11 +18,14 @@ struct Demand {
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum State {
-    Denied,
+    #[serde(alias = "denied")]
+    Unavailable,
     Preparing,
     Ready,
-    Draining,
-    Held,
+    #[serde(alias = "draining")]
+    Preempting,
+    #[serde(alias = "held")]
+    Preempted,
     Releasing,
     Released,
     Cancelled,
@@ -72,7 +75,7 @@ impl EndpointFence {
                 // A port published by this authority is never a legacy bypass, even
                 // while its model is temporarily unloaded or its grant is held.
                 for d in doc.data.demands.values() {
-                    if d.state != State::Denied && self::port(&d.profile.endpoint)? == port {
+                    if d.state != State::Unavailable && self::port(&d.profile.endpoint)? == port {
                         return Err("managed endpoint requires a scoped reservation".into());
                     }
                 }

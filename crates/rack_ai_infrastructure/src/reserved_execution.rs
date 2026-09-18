@@ -21,8 +21,10 @@ struct Invocation {
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum State {
-    Accepted,
-    Started,
+    #[serde(alias = "accepted")]
+    Queued,
+    #[serde(alias = "started")]
+    Running,
     Completed,
     Cancelled,
     Expired,
@@ -55,7 +57,7 @@ pub fn check(access: &ReservedAccess) -> Result<(), String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| e.to_string())?
         .as_secs();
-    if i.state != State::Started
+    if i.state != State::Running
         || i.cancellation.is_some()
         || d.released
         || d.deadline <= now

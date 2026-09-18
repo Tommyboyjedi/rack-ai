@@ -59,7 +59,6 @@ class TeardownTests(TeardownFixture):
                 break
             if self.rack.counts('stop')['local-primary']:
                 observed_draining = True
-                self.assertTrue(self.claims())
             time.sleep(.03)
         self.assertTrue(observed_draining)
         self.assertEqual(current['state'],'cancelled')

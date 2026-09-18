@@ -65,6 +65,8 @@ elif program == "nvidia-smi":
         print(state.get("memory_mib",16384))
     elif any("query-gpu" in a for a in args):
         print(f"{media}, NVIDIA GeForce RTX 4080 SUPER\n{protected[0]}, NVIDIA GeForce RTX 2060\n{protected[1]}, NVIDIA GeForce RTX 4060 Ti")
+    elif state.get("gpu_probe_error"):
+        sys.exit(5)
     elif "-x" in args:
         pid = 1 if state.get("foreign") else state["pid"] if state["active"] else None
         process = f"<process_info><pid>{pid}</pid><type>{state.get('process_type','C')}</type></process_info>" if pid else ""

@@ -1,6 +1,6 @@
 use crate::{
     hosting::Hosting,
-    service::{Service, active, inflight},
+    service::{Service, inflight},
     transition::current,
     types::*,
 };
@@ -14,7 +14,7 @@ impl Retirement<'_> {
             Ok((
                 inflight(s, &d.id),
                 s.data.invocations.values().any(|i| {
-                    i.request.reservation_id == d.id && i.state == InvocationState::Started
+                    i.request.reservation_id == d.id && i.state == InvocationState::Running
                 }),
             ))
         })?;
@@ -39,24 +39,12 @@ impl Retirement<'_> {
             saved.released = true;
             saved.state = match saved.reason.as_deref() {
                 Some("cancelled") => DemandState::Cancelled,
+                Some("preempted_by_higher_priority") => DemandState::Preempted,
                 Some(crate::idle::IDLE_TIMEOUT) => DemandState::Expired,
                 _ if saved.deadline <= now() => DemandState::Expired,
                 _ => DemandState::Released,
             };
             s.claims.retain(|_, owner| owner != &d.id);
-            for victim in &d.victims {
-                if let Some(v) = s.data.demands.get_mut(victim)
-                    && v.state == DemandState::Draining
-                    && v.process.is_some()
-                    && active(v)
-                {
-                    v.state = DemandState::Ready;
-                    v.reason = None;
-                    for resource in &v.profile.resources {
-                        s.claims.insert(resource.clone(), v.id.clone());
-                    }
-                }
-            }
             Ok(())
         })
     }

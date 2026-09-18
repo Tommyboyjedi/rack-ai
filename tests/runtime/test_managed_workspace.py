@@ -80,9 +80,10 @@ class ManagedWorkspace(unittest.TestCase):
         self.assertFalse((Path(result['worktree_path'])/'forbidden.txt').exists())
         self.assertIn('PATH_BOUNDARY_ENFORCED',json.dumps(packet))
 
-    def test_reserved_work_uses_managed_access_for_all_turns_after_restoration(self):
+    def test_reserved_work_uses_managed_access_for_all_turns(self):
         r=self.rack
-        # The registry remains its original raw configuration. RackAI must bind access internally.
+        # The registry remains its original raw configuration. RackAI must bind
+        # access internally for every scoped turn.
         self.models=json.loads((ROOT/'config/models.json').read_text())
         self.write('models',self.models)
         before=(self.registry/'config/models.json').read_bytes()
@@ -105,16 +106,7 @@ class ManagedWorkspace(unittest.TestCase):
                 self.fail(Path(packet).read_text() if packet else state)
             time.sleep(.05)
         self.assertIsNotNone(marker)
-        contender=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')
         marker.with_name('continue-turn').write_text('continue')
-        end=time.monotonic()+8
-        while time.monotonic()<end:
-            pending=[i for i in self.invocations().values() if i['request'].get('workspace_scope') and i['state']=='accepted']
-            if pending:break
-            time.sleep(.04)
-        self.assertTrue(pending)
-        self.assertEqual(r.counts('dispatch')['local-primary'],1)
-        r.release(contender);restored=r.wait(self.p)
         end=time.monotonic()+30
         while time.monotonic()<end:
             result=r.call('athba','inspect_work',work_id='reserved')
@@ -126,8 +118,9 @@ class ManagedWorkspace(unittest.TestCase):
         self.assertEqual(r.call('athba','submit_work',request=work)['invocation_id'],accepted['invocation_id'])
         self.assertEqual((self.registry/'config/models.json').read_bytes(),before)
         children=[i for i in self.invocations().values() if i['request'].get('workspace_scope')]
+        self.assertTrue(children)
         self.assertEqual(len({i['request']['workspace_scope'] for i in children}),1)
-        self.assertEqual(sum(i['activation']==restored['generation'] for i in children),2)
+        self.assertTrue(all(i['activation']==self.p['generation'] for i in children))
         coder=dict(work,reservation_id=self.c['id'],service='local-coder',work_id='reserved-coder')
         r.call('athba','submit_work',request=coder)
         end=time.monotonic()+25
@@ -139,20 +132,23 @@ class ManagedWorkspace(unittest.TestCase):
         self.assert_proof(result['result'],'local-coder')
         self.assertEqual((self.registry/'config/models.json').read_bytes(),before)
 
-
-    def test_held_workspace_waits_while_coder_runs_and_replay_does_not_repeat(self):
-        r=self.rack;chat=r.wait(r.acquire('cb','local-fun-chat','paramount'));r.wait(self.p,'held')
-        request=self.spec('held');identity=self.launch(request)
-        pending=r.call('athba','inspect_work',work_id=identity)
-        self.assertEqual(pending['state'],'held');self.assertIsNone(pending['started'])
+    def test_preempted_workspace_requires_explicit_new_acquisition(self):
+        r=self.rack
+        chat=r.wait(r.acquire('cb','local-fun-chat','paramount'))
+        preempted=r.wait(self.p,'preempted')
+        self.assertEqual(preempted['preempted_by'],chat['id'])
+        request=self.spec('preempted')
+        r.call('athba','submit_work',status=409,request=request)
         self.assert_proof(self.finish(self.launch(self.spec('coder','coding'))),'local-coder')
         self.assertEqual(r.counts('dispatch')['local-primary'],0)
-        r.release(chat);restored=r.wait(self.p)
-        self.assert_proof(self.finish(identity),'local-primary')
-        replay=r.call('athba','submit_work',request=request)
-        self.assertEqual(replay['invocation_id'],pending['invocation_id'])
+        r.release(chat)
+        time.sleep(.2)
+        self.assertEqual(r.inspect(self.p)['state'],'preempted')
+        replacement=r.wait(r.acquire('athba','local-primary','low',identity='explicit-reacquire'))
+        retry=self.spec('reacquired')
+        retry['reservation_id']=replacement['id']
+        self.assert_proof(self.finish(self.launch(retry)),'local-primary')
         self.assertEqual(r.counts('dispatch')['local-primary'],1)
-        self.assertEqual(replay['activation'],restored['generation'])
 
     def test_identical_workspace_requests_have_distinct_invocations(self):
         one=self.finish(self.launch(self.spec('identical-one')));self.assert_proof(one,'local-primary')

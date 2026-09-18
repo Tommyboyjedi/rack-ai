@@ -75,7 +75,7 @@ class ContractEndpointTests(unittest.TestCase):
                 status, body = self.get_contract(r, 'Bearer athba')
                 self.assertEqual(status, 200)
                 self.assertEqual(body, dict(
-                    schema='rack-ai/runtime-contract/v1', contract_version='1.1.0',
+                    schema='rack-ai/runtime-contract/v1', contract_version='1.2.0',
                     documentation=(ROOT/'docs/reservation-work.md').read_text(),
                     request_schema=json.loads((ROOT/'config/runtime/request.schema.json').read_text()),
                     response_schema=json.loads((ROOT/'config/runtime/response.schema.json').read_text())))

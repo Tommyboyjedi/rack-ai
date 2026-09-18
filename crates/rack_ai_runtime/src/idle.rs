@@ -15,19 +15,14 @@ pub fn touch(s: &mut Document, id: &str, at: u64) -> Result<(), String> {
 }
 pub fn due(d: &Demand, seconds: u64, at: u64) -> bool {
     !d.released
-        && matches!(
-            d.state,
-            DemandState::Ready | DemandState::Held | DemandState::Preparing
-        )
+        && matches!(d.state, DemandState::Ready | DemandState::Preparing)
         && at.saturating_sub(d.last_activity_at.unwrap_or(d.created)) >= seconds
 }
 fn eligible(s: &Document, d: &Demand, seconds: u64, at: u64) -> bool {
     due(d, seconds, at) && !inflight(s, &d.id)
-        && !s.data.invocations.values().any(|i| i.request.reservation_id == d.id && crate::work_payload::is_workspace(i) && i.state == InvocationState::Started)
+        && !s.data.invocations.values().any(|i| i.request.reservation_id == d.id && crate::work_payload::is_workspace(i) && i.state == InvocationState::Running)
         // Native admission must close atomically with the ComfyUI queue barrier.
-        && (d.profile.backend != Backend::Comfyui
-            || d.profile.driver == Driver::Fixture
-            || d.state == DemandState::Held)
+        && (d.profile.backend != Backend::Comfyui || d.profile.driver == Driver::Fixture)
 }
 pub fn pending(s: &Document, seconds: u64, at: u64) -> bool {
     s.data.demands.values().any(|d| eligible(s, d, seconds, at))

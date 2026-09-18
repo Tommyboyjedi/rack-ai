@@ -148,7 +148,7 @@ pub fn needs_cancel(s: &Document, i: &Invocation) -> bool {
     i.cancellation.is_none()
         && matches!(
             i.state,
-            InvocationState::Accepted | InvocationState::Started | InvocationState::Uncertain
+            InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
         )
         && !permits(s, &i.request)
 }
@@ -169,7 +169,7 @@ pub fn cancel_closed(s: &mut Document) {
 
 fn parent_open(i: &Invocation) -> bool {
     crate::work_payload::is_workspace(i)
-        && i.state == InvocationState::Started
+        && i.state == InvocationState::Running
         && i.cancellation.is_none()
         && i.execution_deadline
             .is_some_and(|deadline| deadline > now())

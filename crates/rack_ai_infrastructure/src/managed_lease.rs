@@ -21,13 +21,16 @@ struct Demand {
 #[derive(Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 enum State {
+    #[serde(alias = "denied")]
+    Unavailable,
     Preparing,
     Ready,
-    Draining,
-    Held,
+    #[serde(alias = "draining")]
+    Preempting,
+    #[serde(alias = "held")]
+    Preempted,
     Releasing,
     Released,
-    Denied,
     Cancelled,
     Expired,
     RecoveryRequired,
@@ -71,7 +74,7 @@ impl ManagedLease<'_> {
                 .get(resource)
                 .ok_or("managed resource no longer owned")?;
             let delegated_cleanup = !dispatch
-                && d.state == State::Draining
+                && d.state == State::Preempting
                 && doc
                     .data
                     .demands
@@ -125,7 +128,7 @@ impl ManagedLease<'_> {
             .data
             .demands
             .get(&handle.owner)
-            .is_some_and(|d| d.state == State::Draining)
+            .is_some_and(|d| d.state == State::Preempting)
         {
             return Ok(true);
         }

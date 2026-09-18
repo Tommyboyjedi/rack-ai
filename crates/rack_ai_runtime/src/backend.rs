@@ -8,7 +8,9 @@ pub struct BackendAccess<'a> {
 }
 impl BackendAccess<'_> {
     pub fn ready(&self, d: &Demand) -> Result<(), String> {
-        if d.profile.backend == Backend::Chatterbox { return crate::speech_backend::ready(d); }
+        if d.profile.backend == Backend::Chatterbox {
+            return crate::speech_backend::ready(d);
+        }
         if d.profile.backend == Backend::Comfyui
             && d.profile.driver != crate::config::Driver::Fixture
         {

@@ -18,6 +18,32 @@ impl Reconsideration<'_> {
         self.service.authority.update(|s| {
             crate::workspace_scope::cancel_closed(s);
             crate::idle::reap(s, self.service.config.idle_timeout_seconds, now());
+            // If the incoming candidate is cancelled, expires, or fails while
+            // its incumbent is draining, there is deliberately no restoration.
+            // Complete the incumbent's retirement as a terminal preemption so a
+            // stranded Preempting record cannot retain a physical claim forever.
+            let abandoned_preemptors = s
+                .data
+                .demands
+                .values()
+                .filter(|candidate| {
+                    !candidate.victims.is_empty() && candidate.state != DemandState::Preparing
+                })
+                .map(|candidate| candidate.id.clone())
+                .collect::<std::collections::BTreeSet<_>>();
+            for demand in s.data.demands.values_mut() {
+                if demand.state == DemandState::Preempting
+                    && demand
+                        .preempted_by
+                        .as_ref()
+                        .is_some_and(|id| abandoned_preemptors.contains(id))
+                {
+                    demand.released = true;
+                    demand.state = DemandState::Releasing;
+                    demand.reason = Some("preempted_by_higher_priority".into());
+                    demand.transition_deadline = now() + demand.profile.drain_seconds;
+                }
+            }
             for d in s.data.demands.values_mut() {
                 let receipt = self
                     .service
@@ -38,10 +64,7 @@ impl Reconsideration<'_> {
                 if !active(d)
                     && matches!(
                         d.state,
-                        DemandState::Held
-                            | DemandState::Ready
-                            | DemandState::Preparing
-                            | DemandState::Draining
+                        DemandState::Ready | DemandState::Preparing | DemandState::Preempting
                     )
                 {
                     d.state = DemandState::Releasing;
@@ -49,7 +72,7 @@ impl Reconsideration<'_> {
                 }
             }
             for i in s.data.invocations.values_mut() {
-                if i.state == InvocationState::Accepted
+                if i.state == InvocationState::Queued
                     && (i.waiting_deadline <= now()
                         || !s
                             .data
@@ -58,25 +81,6 @@ impl Reconsideration<'_> {
                             .is_some_and(active))
                 {
                     i.state = InvocationState::Expired;
-                }
-            }
-            let mut held: Vec<_> = s
-                .data
-                .demands
-                .values()
-                .filter(|d| d.state == DemandState::Held && active(d))
-                .cloned()
-                .collect();
-            held.sort_by_key(|d| (std::cmp::Reverse(d.priority), d.order, d.id.clone()));
-            for mut d in held {
-                if (crate::planner::Planner {
-                    service: self.service,
-                })
-                .refusal(s, &d)
-                .is_none()
-                {
-                    crate::planner::fence(s, &mut d)?;
-                    s.data.demands.insert(d.id.clone(), d);
                 }
             }
             Ok(())
@@ -157,8 +161,12 @@ impl Supervisor {
                         // A late read-only probe or rejected boundary must not erase a release.
                         if (fresh.state == DemandState::Ready
                             && current.state != DemandState::Ready)
+                            // A second group-member callback can race the
+                            // atomic Ready publication. Once another callback
+                            // has moved this record out of Preparing, its stale
+                            // transition is harmless evidence, not recovery.
                             || (error == "transition_fence_changed"
-                                && current.state == DemandState::Releasing)
+                                && current.state != DemandState::Preparing)
                         {
                             return Ok(());
                         }
@@ -202,7 +210,7 @@ fn pending_changes(service: &Service, s: &Document) -> bool {
     crate::idle::pending(s, service.config.idle_timeout_seconds, now())
         || s.data.invocations.values().any(|i| {
             crate::workspace_scope::needs_cancel(s, i)
-                || i.state == InvocationState::Accepted
+                || i.state == InvocationState::Queued
                     && (i.waiting_deadline <= now()
                         || !s
                             .data
@@ -221,15 +229,8 @@ fn pending_changes(service: &Service, s: &Document) -> bool {
                 || (!active(d)
                     && matches!(
                         d.state,
-                        DemandState::Held
-                            | DemandState::Ready
-                            | DemandState::Preparing
-                            | DemandState::Draining
+                        DemandState::Ready | DemandState::Preparing | DemandState::Preempting
                     ))
-                || (d.state == DemandState::Held
-                    && active(d)
-                    && (crate::planner::Planner { service })
-                        .refusal(s, d)
-                        .is_none())
+                || d.state == DemandState::Preempting
         })
 }

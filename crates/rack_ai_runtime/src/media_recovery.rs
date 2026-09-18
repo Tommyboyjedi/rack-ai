@@ -10,7 +10,65 @@ pub struct MediaRecovery<'a> {
     pub service: &'a Service,
 }
 impl MediaRecovery<'_> {
+    /// Release only the current claim after every independent absence probe
+    /// succeeds. The original start remains historically uncertain in the
+    /// durable reconciliation record and is never replayed.
+    pub fn reconcile_effect_absent(&self, d: &Demand) -> Result<bool, String> {
+        if d.state != DemandState::RecoveryRequired
+            || d.reason.as_deref() != Some("start_outcome_unknown")
+            || d.process.is_some()
+        {
+            return Ok(false);
+        }
+        let runtime = media_evidence::runtime(self.service, d)?;
+        let _operation = rack_ai_media::operation::lock(&runtime.store.root)?;
+        let checks = MediaEvidence {
+            service: self.service,
+            runtime: &runtime,
+        }
+        .effect_absent(d)?;
+        self.service.authority.update(|s| {
+            media_evidence::absence_authority_document(s, d)?;
+            let terminal = {
+                let saved = s.data.demands.get(&d.id).ok_or("missing_transition")?;
+                if saved.process.is_some() || !saved.effect_started {
+                    return Err("media_recovery_claim_changed".into());
+                }
+                let root = crate::reservation::root(s, saved)?;
+                match root.reservation_closed {
+                    Some(DemandState::Cancelled) | None if root.state == DemandState::Cancelled => {
+                        DemandState::Cancelled
+                    }
+                    Some(DemandState::Expired) | None if root.state == DemandState::Expired => {
+                        DemandState::Expired
+                    }
+                    Some(DemandState::Released) | None if root.state == DemandState::Released => {
+                        DemandState::Released
+                    }
+                    _ if saved.deadline <= now() => DemandState::Expired,
+                    _ => DemandState::Released,
+                }
+            };
+            let saved = crate::transition::current(s, d)?;
+            saved.process = None;
+            saved.effect_started = false;
+            saved.released = true;
+            saved.state = terminal;
+            saved.recovery_reconciliation = Some(RecoveryReconciliation {
+                historical_outcome: HistoricalOutcome::StartOutcomeUnknown,
+                current_effect: CurrentEffect::ProvenAbsent,
+                reconciled_at: now(),
+                checks,
+            });
+            s.claims.retain(|_, owner| owner != &d.id);
+            Ok(())
+        })?;
+        Ok(true)
+    }
     pub fn retire_stopped(&self, d: &Demand) -> Result<bool, String> {
+        if self.reconcile_effect_absent(d)? {
+            return Ok(true);
+        }
         let runtime = media_evidence::runtime(self.service, d)?;
         let operation = rack_ai_media::operation::lock(&runtime.store.root)?;
         let evidence = MediaEvidence {

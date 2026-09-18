@@ -49,7 +49,7 @@ class HostingTests(unittest.TestCase):
                     (root/'faults.json').write_text(json.dumps({'foreign_pid':os.getpid()}))
                     r.release(d); failed=r.wait(d,'recovery_required')
                     self.assertIn('gpu_cleanup',failed['reason'])
-                    self.assertEqual(r.acquire('cb','local-fun-chat','paramount')['state'],'denied')
+                    self.assertEqual(r.acquire('cb','local-fun-chat','paramount')['state'],'unavailable')
                     self.assertEqual(r.counts('start')['local-fun-chat'],0)
                     return
                 r.release(d);r.wait(d,'released')
