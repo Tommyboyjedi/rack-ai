@@ -149,11 +149,11 @@ def count_probe(delta):
         probe_counter.write_text(json.dumps(counts))
 count_probe(1)
 atexit.register(count_probe, -1)
-time.sleep(0.2)
+time.sleep(0.9)
 """
         probe.write_text(original.replace('root = Path(os.environ["RACK_MEDIA_FIXTURE"])', instrumentation + '\nroot = Path(os.environ["RACK_MEDIA_FIXTURE"])'))
         with concurrent.futures.ThreadPoolExecutor(max_workers=96) as pool:
-            futures = [pool.submit(requests.get,env["native"]+f"/assets/module-{i}.js",headers=owner,timeout=8) for i in range(96)]
+            futures = [pool.submit(requests.get,env["native"]+f"/assets/module-{i}.js",headers=owner,timeout=20) for i in range(96)]
             assert requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).status_code == 200
             assert {future.result().status_code for future in futures} == {200}
         counts = json.loads((env["root"] / "probe-count.json").read_text())

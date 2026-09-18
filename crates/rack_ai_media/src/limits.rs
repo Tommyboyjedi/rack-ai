@@ -19,7 +19,8 @@ pub const AUTHORITY_SECONDS: u64 = 20;
 pub const HEARTBEAT_SECONDS: u64 = 2;
 pub const IMAGE_MAX_EDGE: u32 = 1024;
 pub const NATIVE_WAITERS: usize = 128;
-pub const NATIVE_WAIT_SECONDS: u64 = 5;
+// Allow the bounded asset queue to drain at the native task budget.
+pub const NATIVE_WAIT_SECONDS: u64 = 15;
 
 pub const ACCOUNT_BODY_BYTES: usize = 16 * 1024;
 
