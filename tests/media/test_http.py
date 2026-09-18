@@ -135,7 +135,31 @@ def test_native_module_burst_queues_without_starving_status(tmp_path):
         requests.post(env["api"]+"/api/media/v1/sessions",
             json={"schema":"rack-ai/media/v1","idempotency_key":"module-burst"},headers=owner,timeout=3).raise_for_status()
         wait_for(lambda: requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=3).json()["state"] == "ready")
+        probe = env["root"] / "bin/nvidia-smi"
+        original = probe.read_text()
+        instrumentation = """import atexit, fcntl, time
+probe_counter = Path(os.environ["RACK_MEDIA_FIXTURE"]) / "probe-count.json"
+probe_lock = probe_counter.with_suffix(".lock")
+def count_probe(delta):
+    with probe_lock.open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        counts = json.loads(probe_counter.read_text()) if probe_counter.exists() else {"active": 0, "peak": 0}
+        counts["active"] += delta
+        counts["peak"] = max(counts["peak"], counts["active"])
+        probe_counter.write_text(json.dumps(counts))
+count_probe(1)
+atexit.register(count_probe, -1)
+time.sleep(0.2)
+"""
+        probe.write_text(original.replace('root = Path(os.environ["RACK_MEDIA_FIXTURE"])', instrumentation + '\nroot = Path(os.environ["RACK_MEDIA_FIXTURE"])'))
         with concurrent.futures.ThreadPoolExecutor(max_workers=96) as pool:
             futures = [pool.submit(requests.get,env["native"]+f"/assets/module-{i}.js",headers=owner,timeout=8) for i in range(96)]
             assert requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).status_code == 200
             assert {future.result().status_code for future in futures} == {200}
+        counts = json.loads((env["root"] / "probe-count.json").read_text())
+        # Sixteen native checks plus the independent lifecycle supervisor.
+        assert 1 < counts["peak"] <= 17, counts
+        assert requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).json()["state"] == "ready"
+        session = requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).json()["session_id"]
+        requests.post(env["api"]+"/api/media/v1/sessions/"+session+"/release",headers=owner,json={},timeout=3).raise_for_status()
+        wait_for(lambda: requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=3).json()["state"] == "stopped")
