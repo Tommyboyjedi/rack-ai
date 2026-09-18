@@ -504,3 +504,100 @@ fn historical_speech_record_reads_unchanged_and_invalid_payload_is_rejected() {
     );
     assert_eq!(fs::read(&path).unwrap(), original);
 }
+
+fn grouped_models(f: &Fixture) -> Vec<Demand> {
+    let source = f
+        .service
+        .config
+        .sources
+        .iter()
+        .find(|s| s.source == "cb")
+        .unwrap();
+    let result = (crate::reservation_admission::ReservationAdmission {
+        service: &f.service,
+        source,
+    })
+    .reserve(crate::reservation::Reserve {
+        acquisition_id: identity().unwrap(),
+        work_id: "shared-idle".into(),
+        services: vec!["local-primary".into(), "local-coder".into()],
+        priority: Priority::Low,
+        ttl_seconds: 86400,
+    })
+    .unwrap();
+    let parent = f
+        .service
+        .inspect("cb", result["id"].as_str().unwrap())
+        .unwrap();
+    let mut members: Vec<_> = parent
+        .services
+        .values()
+        .map(|id| f.service.inspect("cb", id).unwrap())
+        .collect();
+    members.sort_by_key(|d| d.profile.tag.clone());
+    for d in &members {
+        f.ready(d);
+    }
+    members
+}
+
+#[test]
+fn grouped_model_activity_retains_idle_peer_until_shared_threshold() {
+    for active_member in 0..2 {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let origin = members.iter().map(|d| d.created).max().unwrap();
+        f.service
+            .authority
+            .update(|s| idle::touch(s, &members[active_member].id, origin + 1200))
+            .unwrap();
+        f.reap(origin + 1800);
+        assert!(members.iter().all(|d| !f.inspect(d).released));
+        f.reap(origin + 2999);
+        assert!(members.iter().all(|d| !f.inspect(d).released));
+        f.reap(origin + 3000);
+        assert!(
+            members
+                .iter()
+                .all(|d| f.inspect(d).reason.as_deref() == Some("idle_timeout"))
+        );
+    }
+}
+
+#[test]
+fn grouped_inflight_inference_protects_all_members_without_extending_deadlines() {
+    for state in [InvocationState::Running, InvocationState::Uncertain] {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let invocation = (Submission {
+            service: &f.service,
+        })
+        .submit("cb", request(&members[0]))
+        .unwrap();
+        f.service
+            .authority
+            .update(|s| {
+                s.data.invocations.get_mut(&invocation.id).unwrap().state = state;
+                Ok(())
+            })
+            .unwrap();
+        f.reap(members[0].created + 3600);
+        for d in &members {
+            assert!(!f.inspect(d).released);
+            assert_eq!(f.inspect(d).deadline, d.deadline);
+        }
+    }
+}
+
+#[test]
+fn grouped_recent_activity_does_not_override_explicit_release() {
+    let f = Fixture::new();
+    let members = grouped_models(&f);
+    f.service
+        .authority
+        .update(|s| idle::touch(s, &members[0].id, now()))
+        .unwrap();
+    let parent = members[0].reservation_id.as_ref().unwrap();
+    crate::control::reservation_control(&f.service, ("cb", parent, Action::Release)).unwrap();
+    assert!(members.iter().all(|d| f.inspect(d).released));
+}

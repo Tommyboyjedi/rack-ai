@@ -286,6 +286,12 @@ impl ReadyMonitor<'_> {
         ready?;
         if media {
             crate::media_idle::MediaIdle { service: r }.observe(d)?;
+            // Idle admission may just have closed and started normal teardown.
+            if !r.authority.read(|s| {
+                Ok(crate::reservation::ready(s, crate::service::owned(s, &d.owner, &d.id)?))
+            })? {
+                return Ok(());
+            }
             let process = adapter.observe(d)?.1;
             r.authority.update(|s| {
                 let saved = current(s, d)?;

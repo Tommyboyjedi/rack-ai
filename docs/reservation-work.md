@@ -228,3 +228,8 @@ cgroup, the recorded process generations are gone, and the media GPU is clear.
 The supervisor also revisits retained ComfyUI recovery records after receiver
 restart. Conflicting or missing ownership evidence retains the claim and
 `recovery_required`; reconciliation never replays or deletes invocation history.
+
+
+## Shared reservation inactivity
+
+Services in one public reservation share the inactivity window (30 minutes by default). Recent accepted/executed model activity or unresolved running work on any member protects the other members from idle retirement. The group becomes idle only after every member has been inactive for the full window and no member has unresolved work. Separate reservations remain independent. Inspection, refresh and renewal do not count as model activity; explicit release/cancel, ownership TTL, preemption and backend-failure cleanup retain their existing authority. Native media activity is observed through its authenticated queue barrier. A native member is closed only when the group is idle, and its peers wait for that close before idle retirement.
