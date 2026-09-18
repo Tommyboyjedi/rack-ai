@@ -17,6 +17,7 @@ impl Reconsideration<'_> {
         }
         self.service.authority.update(|s| {
             crate::workspace_scope::cancel_closed(s);
+            crate::recovery::quarantine(s);
             crate::idle::reap(s, self.service.config.idle_timeout_seconds, now());
             // If the incoming candidate is cancelled, expires, or fails while
             // its incumbent is draining, there is deliberately no restoration.
@@ -107,12 +108,14 @@ impl Supervisor {
                             d.state,
                             DemandState::Preparing | DemandState::Ready | DemandState::Releasing
                         ) || (d.state == DemandState::RecoveryRequired
-                            && crate::media_evidence::supported(d))
+                            && (d.recovery_error.is_none() || d.transition_deadline <= now()))
                     })
                     .filter(|d| {
-                        !s.data.demands.values().any(|parent| {
-                            parent.state == DemandState::Preparing && parent.victims.contains(&d.id)
-                        })
+                        d.state == DemandState::RecoveryRequired
+                            || !s.data.demands.values().any(|parent| {
+                                parent.state == DemandState::Preparing
+                                    && parent.victims.contains(&d.id)
+                            })
                     })
                     .cloned()
                     .collect::<Vec<_>>(),
@@ -172,8 +175,10 @@ impl Supervisor {
                         }
                         if current.state != DemandState::RecoveryRequired {
                             current.state = DemandState::RecoveryRequired;
-                            current.reason = Some(crate::capacity::diagnostic(error));
+                            current.reason = Some(crate::capacity::diagnostic(error.clone()));
                         }
+                        current.recovery_error = Some(crate::capacity::diagnostic(error));
+                        current.transition_deadline = now() + crate::recovery::RETRY_SECONDS;
                         Ok(())
                     });
                     if let Err(e) = saved {
@@ -207,7 +212,8 @@ impl Supervisor {
 // This read-only hint avoids locking/serializing stable retained history every tick.
 // Every mutation and priority/ownership decision is rechecked under update's lock.
 fn pending_changes(service: &Service, s: &Document) -> bool {
-    crate::idle::pending(s, service.config.idle_timeout_seconds, now())
+    crate::recovery::pending(s)
+        || crate::idle::pending(s, service.config.idle_timeout_seconds, now())
         || s.data.invocations.values().any(|i| {
             crate::workspace_scope::needs_cancel(s, i)
                 || i.state == InvocationState::Queued

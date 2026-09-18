@@ -23,6 +23,7 @@ def alive():
 def launch(command,activation):
     child=subprocess.Popen(command,env=dict(os.environ,RACK_RUNTIME_ACTIVATION=activation),stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
     s.update(pid=child.pid,activation=activation,invocation=activation)
+    s.pop('stop_issued',None); s.pop('removed',None)
 
 def stop():
     s.setdefault('stop_issued', time.monotonic())
@@ -49,7 +50,12 @@ elif name=='systemd-run':
     s['unit']=unit
     launch(args[args.index('--')+1:],activation)
 elif name=='systemctl':
-    if 'show' in args:
+    if 'list-units' in args:
+        if s.get('unit') == args[-1]: print(s['unit']+' loaded '+('active running' if alive() else 'inactive dead')+' fixture')
+    elif 'list-unit-files' in args: pass
+    elif 'show' in args and 'Transient' in args:
+        print('Transient=yes\nRestart=no\nEnvironment=RACK_RUNTIME_ACTIVATION='+faults.get('systemd_activation',s.get('activation','')))
+    elif 'show' in args:
         active=alive()
         cgroup=Path(f'/proc/{s["pid"]}/cgroup').read_text().split('::',1)[1].strip() if active else ''
         tearing_down = not active and 'stop_issued' in s and time.monotonic() - s['stop_issued'] < faults.get('teardown_seconds', 0)
@@ -77,14 +83,32 @@ elif name=='docker':
         launch([sys.executable,*args[args.index(image)+1:]],activation)
         print(s['id'])
     elif args[0]=='inspect':
-        assert args[1]==s['id']
-        print(json.dumps([dict(Id=s['id'],Image=s['image'],State=dict(Pid=s['pid'] if alive() else 0,Running=alive()),Config=dict(Labels={'rack.activation':s['activation']}))]))
+        assert args[1]==s['id'] and not s.get('removed')
+        print(json.dumps([dict(Id=s['id'],Name='/rack-runtime-'+s['activation'],Image=s['image'],
+            State=dict(Pid=s['pid'] if alive() else 0,Running=alive(),Restarting=False,Paused=False),
+            Config=dict(Labels={'rack.activation':faults.get('container_activation',s['activation'])},Env=['RACK_RUNTIME_ACTIVATION='+s['activation']]),
+            HostConfig=dict(RestartPolicy=dict(Name='no')))]))
     elif args[0]=='top':
         print('PID\n'+str(s['pid']))
     elif args[0]=='exec':
         for descriptor in Path(f'/proc/{s["pid"]}/fd').iterdir():
             try: print(os.readlink(descriptor))
             except FileNotFoundError: pass
+    elif args[0]=='ps':
+        if s.get('id') and not s.get('removed'):
+            selected=args[args.index('--filter')+1]
+            if selected in ('id='+s['id'], 'name=^/rack-runtime-'+s['activation']+'$',
+                'label=rack.activation='+faults.get('container_activation',s['activation'])): print(s['id'])
+    elif args[0]=='rm':
+        assert args[1]==s['id'] and not alive()
+        s['removed']=True
+        print(s['id'])
+    elif args[0]=='stop':
+        assert args[-1]==s['id']
+        stop()
+        deadline=time.monotonic()+int(args[args.index('--time')+1])
+        while alive() and time.monotonic()<deadline: time.sleep(.01)
+        if alive(): os.kill(s['pid'],signal.SIGKILL)
     elif args[0]=='kill': stop()
     else: sys.exit(5)
 else: sys.exit(6)

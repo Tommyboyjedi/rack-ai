@@ -113,25 +113,36 @@ impl HostedCleanup<'_> {
         if process.activation != d.generation {
             return Err("activation_mismatch".into());
         }
-        if process::gone(process)? {
-            return self.released(d);
+        let gone = process::gone(process)?;
+        if !gone {
+            process::verify(process, &d.profile)?;
         }
-        process::verify(process, &d.profile)?;
         if let Some(unit) = &process.unit {
             if unit != &format!("rack-runtime-{}.service", d.generation) {
                 return Err("systemd_activation_changed".into());
             }
             let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;
+            if gone
+                && observed.invocation.is_empty()
+                && observed.pid == 0
+                && !observed.pending_job
+                && matches!(observed.active.as_str(), "inactive" | "failed")
+            {
+                return self.released(d);
+            }
             if process.invocation.as_deref().is_none_or(str::is_empty)
                 || process.invocation.as_ref() != Some(&observed.invocation)
             {
                 return Err("systemd_invocation_changed".into());
             }
-            if observed.pid != process.pid {
+            if observed.pid != process.pid && !(gone && observed.pid == 0) {
                 return Err("systemd_process_changed".into());
             }
             run("systemctl", &["--user", "stop", "--no-block", unit])?;
         } else {
+            if gone {
+                return self.released(d);
+            }
             run("/bin/kill", &["-TERM", &process.pid.to_string()])?;
         }
         self.released(d)

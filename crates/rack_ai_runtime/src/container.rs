@@ -2,6 +2,8 @@ use crate::{config::Config, types::*};
 use rack_ai_media::command::run;
 use serde::Deserialize;
 use std::collections::BTreeMap;
+const STOP_COMMAND_MAX_SECONDS: u64 = 3600;
+const STOP_COMMAND_MARGIN_SECONDS: u64 = 2;
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Container {
@@ -91,13 +93,19 @@ impl ContainerHosting<'_> {
         let id = p.container.as_ref().ok_or("container_identity_missing")?;
         verify(p, &d.profile)?;
         if inspect(id, &d.profile.executable)?.state.running {
-            run(
-                d.profile
+            let grace = d
+                .profile
+                .stop_seconds
+                .min(STOP_COMMAND_MAX_SECONDS - STOP_COMMAND_MARGIN_SECONDS);
+            rack_ai_media::command::run_bounded(rack_ai_media::command::CommandSpec {
+                program: d
+                    .profile
                     .executable
                     .to_str()
                     .ok_or("invalid_container_executable")?,
-                &["kill", "--signal=TERM", id],
-            )?;
+                args: &["stop", "--time", &grace.to_string(), id],
+                seconds: grace + STOP_COMMAND_MARGIN_SECONDS,
+            })?;
         }
         let deadline =
             std::time::Instant::now() + std::time::Duration::from_secs(d.profile.stop_seconds);
