@@ -8,7 +8,7 @@ class ManagedWorkspace(unittest.TestCase):
         self.directory=tempfile.TemporaryDirectory(prefix='rack-pr35-workspace-')
         self.root=Path(self.directory.name)
         def configure(c):
-            c['limits']=dict(max_wait_seconds=45)
+            c['limits']=dict(max_wait_seconds=45,max_response_bytes=4*1024*1024,retention_admission_bytes=30*1024*1024)
             for p in c['profiles']:
                 p['inference_seconds']=1
                 if p['tag'] in ['local-primary','local-coder']:
