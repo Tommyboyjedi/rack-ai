@@ -52,13 +52,14 @@ impl ChangeImplementer for JCodeChangeImplementer {
     fn implement(&self, request: &ImplementChangeRequest) -> Result<ImplementChangeResult, String> {
         self.check_execution()?;
         let runtime = self.resolve_runtime(request)?;
-        let output = JCodeProcessRunner::run_with_allowed_paths(
+        let output = JCodeProcessRunner::run_with_allowed_paths_and_environment(
             &runtime,
             request.task(),
             request.worktree_path(),
             request.timeout_seconds(),
             request.network_disabled(),
             request.allowed_paths()?,
+            request.environment_resources(),
         );
         match output {
             Ok(result) => {
