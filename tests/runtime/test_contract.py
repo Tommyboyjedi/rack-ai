@@ -36,6 +36,18 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(result.stdout.strip(),'RUNTIME_CONFIG_VALID')
             self.assertEqual(list(Path(root).iterdir()),[path])
 
+    def test_local_coder_runtime_capabilities_match_workspace_qualification(self):
+        runtime = json.loads((ROOT/'config/runtime/config.example.json').read_text())
+        models = json.loads((ROOT/'config/models.json').read_text())
+        workers = json.loads((ROOT/'config/workers.json').read_text())
+        coder_profile = next(p for p in runtime['profiles'] if p['tag'] == 'local-coder')
+        coder_worker = next(w for w in workers['workers'] if w['id'] == 'local-coder')
+        coder_model = next(m for m in models['models'] if m['id'] == coder_worker['model_id'])
+        qualified = coder_model['eligibility_profile']['capabilities']
+        self.assertEqual(coder_profile['capabilities'], ['coding'])
+        self.assertEqual(qualified, ['coding'])
+        self.assertLessEqual(set(coder_profile['capabilities']), set(qualified))
+
 class ContractEndpointTests(unittest.TestCase):
     def get_contract(self, rack, authorization=None):
         headers = {} if authorization is None else {'Authorization': authorization}
