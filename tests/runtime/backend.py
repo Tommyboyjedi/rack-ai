@@ -55,7 +55,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply({'id':activation,'model':model,'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'fixture'}]}]})
             event('complete'); return
         if request.get('stream'):
-            body = 'data: '+json.dumps({'model':model,'choices':[{'delta':{'content':'fixture'}}]})+'\n\ndata: [DONE]\n\n'
+            body = 'data: '+json.dumps({'model':model,'choices':[{'delta':{'content':control().get('content','fixture')}}]})+'\n\ndata: [DONE]\n\n'
             data = body.encode()
             self.send_response(200); self.send_header('Content-Type','text/event-stream'); self.send_header('Content-Length',str(len(data))); self.end_headers()
             self.wfile.write(data); event('complete'); return
