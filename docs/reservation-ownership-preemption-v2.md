@@ -50,41 +50,34 @@ A historical uncertainty is durable evidence, not a perpetual assertion that a G
 is physically occupied. RackAI records historical start and invocation outcomes
 separately from its conclusion about the effect that exists now.
 
-A recovery_required demand whose original start result is
-start_outcome_unknown remains fenced by default. RackAI may release its
-**current physical claim** only through the bounded effect-absence
-reconciliation path. That path requires all of the following current,
-authoritative observations to succeed under the media operation lock:
+RecoveryRequired is an automatically supervised, stop-only cleanup state for every
+managed backend. It is not a permanent physical ownership state. RackAI closes
+admission, cancels queued calls with `reservation_recovery_cleanup`, and waits
+for known running calls to finish. Uncertain invocation outcomes remain durable.
+Unknown workspace executor effects remain fenced until their absence is proven.
 
-1. the owning reservation is released, cancelled, or expired and is no longer
-   active;
-2. no queued or running invocation for any member of that reservation remains;
-3. the demand has no recorded owned process and no process/generation evidence
-   indicates a replacement;
-4. the bound systemd activation is inactive with no pending job or populated
-   cgroup;
-5. the configured GPU probe reports no allocation;
-6. media state has no lease, activation, backend generation, restart intent,
-   pending job, or active native/ComfyUI session; and
-7. no overlapping active ownership or lifecycle/preemption transition can create
-   or restore the effect.
+RackAI resolves effects using the exact reservation and generation: process boot
+and start identity, transient unit and invocation identity, container ID, pinned
+image, activation label and environment, or the bound media lease and backend
+generation. It stops only attributed effects, closes native admission, cancels
+owned recreation intents, and cleans owned sessions and jobs without replay.
+It verifies process/container/unit disappearance and an empty configured GPU
+allocation before atomically recording `current_effect=proven_absent` and
+releasing the claim. Historical reasons, invocation identities and uncertain
+results are preserved; the verified cleanup process is retained as evidence.
 
-Each host, process, systemd, media-store, and GPU probe must be readable and
-match the configured ownership binding. Missing, foreign, changed, or
-inaccessible evidence is ambiguous and keeps the demand recovery_required with
-its claim fenced. Age, a missing PID, and an HTTP health result alone are never
-enough.
+Missing, unreadable, foreign or contradictory ownership evidence retains the
+claim and exposes `recovery_error`. Cleanup attempts are bounded and retried at
+a two-second minimum interval so a temporarily unavailable probe or delayed
+cleanup can recover. RackAI never recreates the old reservation or replays old
+work. Capacity becomes available to a new explicit acquisition. A client renew
+or release cannot bypass the recovery fence or replace the original failure.
 
-When every check succeeds, RackAI atomically persists a reconciliation record:
+A stopped receiver with stale recovery metadata can normalize itself only after
+all unit, process, GPU and ownership checks pass and no foreign session or job
+can recreate the effect. No offline authority migration or manual record deletion
+is part of this recovery path.
 
-    historical_outcome = start_outcome_unknown
-    current_effect = proven_absent
-    resource_claim = released
-
-The demand and invocation identities, the original unknown outcome, and all
-terminal evidence remain durable. RackAI does not invent a terminal outcome for
-uncertain work, replay it, recreate the old reservation, or reacquire capacity
-for the previous owner. A subsequent acquisition is a new application decision.
 ## Preemption example
 
 ATHBA Low owns `local-primary` and has one running call plus nine queued calls. CB Paramount requests an atomic set including `local-primary`.

@@ -11,8 +11,8 @@ pub struct Transition<'a> {
 impl Transition<'_> {
     pub fn advance(&self, d: &Demand) -> Result<(), String> {
         let r = self.service;
-        if d.state == DemandState::RecoveryRequired && crate::media_evidence::supported(d) {
-            return (crate::media_recovery::MediaRecovery { service: r }).advance(d, None);
+        if d.state == DemandState::RecoveryRequired {
+            return (crate::recovery::Recovery { service: r }).advance(d);
         }
         if !active(d) || d.state == DemandState::Releasing {
             return crate::retirement::Retirement { service: r }.run(d);
@@ -137,7 +137,7 @@ impl VictimDrain<'_> {
         for id in &d.victims {
             let victim = r.authority.read(|s| {
                 let victim = s.data.demands.get(id).ok_or("missing_victim")?.clone();
-                if inflight(s, id) {
+                if victim.state != DemandState::Preempted && inflight(s, id) {
                     if now() >= victim.transition_deadline {
                         return Err("drain_deadline_invocation_uncertain".into());
                     }
@@ -286,6 +286,12 @@ impl ReadyMonitor<'_> {
         ready?;
         if media {
             crate::media_idle::MediaIdle { service: r }.observe(d)?;
+            // Idle admission may just have closed and started normal teardown.
+            if !r.authority.read(|s| {
+                Ok(crate::reservation::ready(s, crate::service::owned(s, &d.owner, &d.id)?))
+            })? {
+                return Ok(());
+            }
             let process = adapter.observe(d)?.1;
             r.authority.update(|s| {
                 let saved = current(s, d)?;

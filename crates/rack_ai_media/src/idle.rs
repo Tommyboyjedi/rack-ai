@@ -22,6 +22,16 @@ impl IdleCheck<'_> {
             "/rack-gate/idle",
             &serde_json::json!({"activation":service.activation,"idle_timeout_seconds":seconds}),
         )?;
+        self.validate(service, value)
+    }
+    pub fn activity(&self, service: &Service) -> Result<Observation, String> {
+        let value = self
+            .runtime
+            .backend
+            .post("/rack-gate/status", &serde_json::json!({}))?;
+        self.validate(service, value)
+    }
+    fn validate(&self, service: &Service, value: Observation) -> Result<Observation, String> {
         if value.gate.activation != service.activation
             || service.invocation.as_ref() != Some(&value.gate.invocation)
             || value.gate.protocol != "rack-gate/v1"

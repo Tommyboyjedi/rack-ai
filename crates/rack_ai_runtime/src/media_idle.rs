@@ -15,13 +15,31 @@ impl MediaIdle<'_> {
         if service.activation != d.generation {
             return Err("media_activation_mismatch".into());
         }
-        let value = (rack_ai_media::idle::IdleCheck { runtime: &runtime })
-            .observe(&service, self.service.config.idle_timeout_seconds)?;
+        let idle = rack_ai_media::idle::IdleCheck { runtime: &runtime };
         self.service.authority.update(|s| {
-            let saved = crate::transition::current(s, d)?;
-            if saved.state != DemandState::Ready || !active(saved) {
+            // Keep the shared activity decision atomic with inference admission.
+            // Both native probes are bounded and use only the backend queue barrier.
+            {
+                let saved = crate::transition::current(s, d)?;
+                if saved.state != DemandState::Ready || !active(saved) {
+                    return Ok(());
+                }
+                let activity = idle.activity(&service)?;
+                saved.last_activity_at = Some(saved.last_activity_at.unwrap_or(saved.created).max(
+                    if activity.busy {
+                        now()
+                    } else {
+                        activity.last_activity_at
+                    },
+                ));
+            }
+            let seconds = self.service.config.idle_timeout_seconds;
+            crate::activity_retention::refresh(s, (seconds, now()))?;
+            if crate::idle::group_active(s, (d, seconds, now())) {
                 return Ok(());
             }
+            let value = idle.observe(&service, seconds)?;
+            let saved = crate::transition::current(s, d)?;
             saved.last_activity_at = Some(
                 saved
                     .last_activity_at

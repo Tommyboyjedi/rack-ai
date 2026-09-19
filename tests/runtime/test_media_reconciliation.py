@@ -104,7 +104,7 @@ def mark_start_outcome_unknown(rack, media, demand, *, released=True,
 def assert_fenced(rack, demand, path):
     rack.start()
     rack.wait(demand, 'recovery_required')
-    time.sleep(.3)
+    wait_for(lambda: rack.inspect(demand).get('recovery_error'), timeout=10)
     document = json.loads(path.read_text())
     saved = document['data']['demands'][demand['id']]
     assert document['claims']['gpu-4080-super'] == demand['id']
@@ -112,13 +112,22 @@ def assert_fenced(rack, demand, path):
     return document
 
 
-def test_start_outcome_unknown_live_owned_process_keeps_claim_fenced(tmp_path):
+def test_start_outcome_unknown_recovers_unrecorded_owned_media_process(tmp_path):
     with shared(tmp_path) as (rack, media):
         _, demand = reserve(rack, 'live-process')
         demand = rack.wait(demand)
         path = mark_start_outcome_unknown(rack, media, demand, stop_effect=False)
-        assert_fenced(rack, demand, path)
-        assert json.loads((media['root']/'machine.json').read_text())['active']
+        rack.start()
+        terminal(rack, demand)
+        after = json.loads(path.read_text())
+        recovered = after['data']['demands'][demand['id']]
+        assert recovered['reason'] == 'start_outcome_unknown'
+        assert recovered['recovery_reconciliation']['current_effect'] == 'proven_absent'
+        assert recovered['recovery_reconciliation']['cleanup_process']['pid'] == demand['process']['pid']
+        assert 'gpu-4080-super' not in after['claims']
+        machine = json.loads((media['root']/'machine.json').read_text())
+        assert not machine['active']
+        assert any('stop' in args for args in machine['mutations'])
 
 
 def test_start_outcome_unknown_gpu_process_keeps_claim_fenced(tmp_path):
@@ -139,12 +148,21 @@ def test_start_outcome_unknown_unreadable_gpu_probe_keeps_claim_fenced(tmp_path)
         assert_fenced(rack, demand, path)
 
 
-def test_start_outcome_unknown_active_reservation_keeps_claim_fenced(tmp_path):
+def test_start_outcome_unknown_closes_active_reservation_and_cleans_owned_effect(tmp_path):
     with shared(tmp_path) as (rack, media):
         _, demand = reserve(rack, 'active-reservation')
         demand = rack.wait(demand)
-        path = mark_start_outcome_unknown(rack, media, demand, released=False)
-        assert_fenced(rack, demand, path)
+        path = mark_start_outcome_unknown(rack, media, demand, released=False, stop_effect=False)
+        rack.start()
+        terminal(rack, demand)
+        after = json.loads(path.read_text())
+        saved = after['data']['demands'][demand['id']]
+        assert saved['released'] is True
+        assert saved['recovery_reconciliation']['current_effect'] == 'proven_absent'
+        assert 'gpu-4080-super' not in after['claims']
+        media_state = json.loads((media['root']/'state/state.json').read_text())
+        assert media_state['service']['state'] == 'stopped'
+        assert all(session['stopped'] for session in media_state['sessions'])
 
 def test_start_outcome_unknown_releases_only_proven_absent_current_effect(tmp_path):
     with shared(tmp_path, legacy=True) as (rack, media):
@@ -291,3 +309,104 @@ def test_initial_start_waits_for_gate_identity_without_quarantine(tmp_path):
         rack.wait(demand, seconds=15)
         rack.call('cb', 'release_reservation', reservation_id=reservation['id'])
         terminal(rack, demand)
+
+
+def stop_media_writer(media):
+    media['process'].kill()
+    media['process'].wait(timeout=5)
+
+
+def test_blank_stale_media_recovery_self_heals_when_physical_effect_is_absent(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'stale-blank-media')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, retain_uncertain=True)
+        stop_media_writer(media)
+        media_path = media['root']/'state/state.json'
+        retained = json.loads(media_path.read_text())
+        retained['service'].update(state='recovery_required', error='start_outcome_unknown')
+        assert retained['service']['lease'] is None
+        assert retained['service']['generation'] is None
+        assert not retained['service']['activation']
+        media_path.write_text(json.dumps(retained))
+        rack.start()
+        terminal(rack, demand)
+        after = json.loads(path.read_text())
+        assert 'gpu-4080-super' not in after['claims']
+        assert after['data']['invocations']['historical-uncertain']['state'] == 'uncertain'
+        assert after['data']['demands'][demand['id']]['reason'] == 'start_outcome_unknown'
+        assert json.loads(media_path.read_text())['service']['state'] == 'stopped'
+
+
+def foreign_job():
+    request = json.loads((ROOT/'config/media/fixtures/job-request.json').read_text())
+    request.update(submission_id='foreign-work', idempotency_key='foreign-work')
+    now = int(time.time())
+    return dict(id='foreign-job', owner='foreign-owner', request=request,
+        state='running', created_at=now, updated_at=now, deadline=now+60,
+        cleanup_pending=True, cancel_requested=False, prompt_id='foreign-prompt',
+        activation='foreign-activation', workflow={}, workflow_sha256='0'*64,
+        model_identity='', dispatched_at=now, artifacts=[], error=None)
+
+
+@pytest.mark.parametrize('foreign_kind', ['session', 'job'])
+def test_foreign_media_ownership_fences_recovery_without_stop(tmp_path, foreign_kind):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'foreign-media-'+foreign_kind)
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, stop_effect=False)
+        stop_media_writer(media)
+        media_path = media['root']/'state/state.json'
+        retained = json.loads(media_path.read_text())
+        if foreign_kind == 'session':
+            retained['sessions'].append(dict(id='foreign-session', owner='foreign-owner',
+                request=dict(schema='rack-ai/media/v1', idempotency_key='foreign-session'),
+                created_at=int(time.time()), release_requested=False, stopped=False,
+                terminal_reason=None))
+        else:
+            retained['jobs'].append(foreign_job())
+        media_path.write_text(json.dumps(retained))
+        assert_fenced(rack, demand, path)
+        machine = json.loads((media['root']/'machine.json').read_text())
+        assert machine['active']
+        assert not any('stop' in args for args in machine['mutations'])
+        after = json.loads(media_path.read_text())
+        assert after['sessions'] == retained['sessions']
+        assert after['jobs'] == retained['jobs']
+
+
+def test_refused_owned_stop_keeps_claim_until_retry_proves_cleanup(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'stop-refused')
+        demand = rack.wait(demand)
+        path = mark_start_outcome_unknown(rack, media, demand, stop_effect=False)
+        fault(media, machine={'stop_ignored': True})
+        rack.start()
+        wait_for(lambda: rack.inspect(demand).get('recovery_error') == 'media_recovery_cleanup_deadline',
+            timeout=12)
+        blocked = json.loads(path.read_text())
+        assert blocked['claims']['gpu-4080-super'] == demand['id']
+        assert 'recovery_reconciliation' not in blocked['data']['demands'][demand['id']]
+        machine = json.loads((media['root']/'machine.json').read_text())
+        assert machine['active']
+        assert any('stop' in args for args in machine['mutations'])
+        fault(media, machine={'stop_ignored': False})
+        terminal(rack, demand)
+        assert 'gpu-4080-super' not in json.loads(path.read_text())['claims']
+        assert not json.loads((media['root']/'machine.json').read_text())['active']
+
+
+def test_changed_recorded_media_process_generation_never_stops_live_backend(tmp_path):
+    with shared(tmp_path) as (rack, media):
+        _, demand = reserve(rack, 'recorded-generation-changed')
+        demand = rack.wait(demand)
+        stop_media_writer(media)
+        path = mark_start_outcome_unknown(rack, media, demand, stop_effect=False)
+        retained = json.loads(path.read_text())
+        recorded = dict(demand['process'], start='wrong-start-ticks')
+        retained['data']['demands'][demand['id']]['process'] = recorded
+        path.write_text(json.dumps(retained))
+        assert_fenced(rack, demand, path)
+        machine = json.loads((media['root']/'machine.json').read_text())
+        assert machine['active']
+        assert not any('stop' in args for args in machine['mutations'])

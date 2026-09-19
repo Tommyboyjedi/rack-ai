@@ -36,12 +36,22 @@ impl ReservationControl<'_> {
         if current.generation != c.request.generation {
             return Err("stale_generation".into());
         }
+        if current.recovery_reconciliation.is_some()
+            && !matches!(c.request.action, Action::Renew { .. })
+        {
+            return Ok(current.clone());
+        }
         let d = s.data.demands.get_mut(c.id).ok_or("not_found")?;
         match c.request.action {
             Action::Renew { ttl_seconds } => {
                 if d.released
                     || d.deadline <= now()
-                    || matches!(d.state, DemandState::Unavailable | DemandState::Preempted)
+                    || matches!(
+                        d.state,
+                        DemandState::Unavailable
+                            | DemandState::Preempted
+                            | DemandState::RecoveryRequired
+                    )
                 {
                     return Err("reservation_terminal".into());
                 }
@@ -52,11 +62,21 @@ impl ReservationControl<'_> {
             }
             Action::Release | Action::Cancel => {
                 d.released = true;
+                d.reservation_closed = Some(if matches!(c.request.action, Action::Cancel) {
+                    DemandState::Cancelled
+                } else {
+                    DemandState::Released
+                });
                 d.transition_deadline = now() + d.profile.drain_seconds;
-                if d.state != DemandState::Unavailable {
+                if !matches!(
+                    d.state,
+                    DemandState::Unavailable | DemandState::RecoveryRequired
+                ) {
                     d.state = DemandState::Releasing;
                 }
-                if d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT) {
+                if d.state != DemandState::RecoveryRequired
+                    && d.reason.as_deref() != Some(crate::idle::IDLE_TIMEOUT)
+                {
                     d.reason = Some(
                         match c.request.action {
                             Action::Cancel => "cancelled",

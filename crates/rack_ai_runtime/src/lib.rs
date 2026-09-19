@@ -8,6 +8,7 @@ pub mod control;
 pub mod dispatch;
 pub mod hosting;
 pub mod idle;
+mod activity_retention;
 pub mod inference;
 pub mod media;
 mod media_idle;
@@ -59,3 +60,7 @@ mod voice_registry;
 
 mod media_evidence;
 mod media_recovery;
+mod owned_effect;
+mod recovery;
+mod recovery_media;
+mod recovery_media_group;

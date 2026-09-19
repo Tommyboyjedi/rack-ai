@@ -55,6 +55,7 @@ impl MediaRecovery<'_> {
             saved.released = true;
             saved.state = terminal;
             saved.recovery_reconciliation = Some(RecoveryReconciliation {
+                cleanup_process: None,
                 historical_outcome: HistoricalOutcome::StartOutcomeUnknown,
                 current_effect: CurrentEffect::ProvenAbsent,
                 reconciled_at: now(),

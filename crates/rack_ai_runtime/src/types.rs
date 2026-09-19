@@ -57,6 +57,9 @@ pub struct Demand {
     /// start outcome into a success, failure, cancellation, or replay.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_reconciliation: Option<RecoveryReconciliation>,
+    /// Latest cleanup blocker, separate from the original historical failure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recovery_error: Option<String>,
     pub id: String,
     pub owner: String,
     pub request: Acquire,
@@ -94,7 +97,7 @@ pub struct Demand {
     pub preflight_done: bool,
     pub released: bool,
 }
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct Process {
     pub pid: u32,
     pub boot: String,
@@ -230,6 +233,7 @@ pub fn valid_id(id: &str) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum HistoricalOutcome {
     StartOutcomeUnknown,
+    RecoveryOutcomeUnknown,
 }
 
 /// The current physical-effect conclusion made by an evidence-backed recovery
@@ -261,6 +265,8 @@ pub struct RecoveryReconciliation {
     pub current_effect: CurrentEffect,
     pub reconciled_at: u64,
     pub checks: RecoveryAbsenceChecks,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cleanup_process: Option<Process>,
 }
 
 fn legacy_response_bound() -> u64 {

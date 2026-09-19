@@ -240,7 +240,10 @@ drain policy or permit replay of uncertain work.
 ## External GPU inactivity policy
 
 The common reservation lifecycle now has a server-configured 1800-second default GPU
-inactivity limit, independent of ownership TTL/renewal. See
+inactivity limit. Public reservation groups automatically extend their live ownership
+deadlines while any owned Ready member has recent workload activity or unresolved
+running work; the initial TTL is not a hard cap on active use. Control polling does
+not count as workload activity. See
 [activity, idle expiry, media barriers, CB policy and deployment limits](external-reservation-idle.md).
 New activity is recorded per reservation as `last_activity_at`; polling and renewal do
 not refresh it. Idle expiry retains `reason=idle_timeout`, fences new work, and returns

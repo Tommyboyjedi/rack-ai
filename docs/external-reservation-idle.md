@@ -59,17 +59,21 @@ sends release/cancel. Cleanup failure retains claims and recovery evidence.
 
 Started and Uncertain runtime invocations block idle reclamation. Started work is never
 killed by the idle reaper. Unknown outcomes remain fenced rather than treating a clock
-as proof that a GPU is free. Explicit release/cancel and ownership TTL retain their
-existing, separately bounded retirement behavior. This distinction is deliberate.
+as proof that a GPU is free. Explicit release/cancel retains its separately bounded
+retirement behavior. Public reservation groups extend the persisted ownership deadlines
+of owned Ready members while any member has recent activity or unresolved running work.
+Initial TTL expiry still applies before activity; terminal or elapsed members are not revived.
 
 The inference transaction and the idle transaction serialize on `authority.lock:
 new execution admission winning refreshes activity; expiry winning rejects new work.
 The final dispatch transaction still verifies owner, current generation, complete claims,
 profile, waiting deadline and workspace scope. There is no second ownership mechanism.
 
-Renewal extends the existing ownership TTL only. Clients still need timely lease renewal
-and should explicitly release when done. Idle expiry neither renews a lease nor replaces
-shutdown cleanup.
+Explicit renewal extends the ownership deadline without recording workload activity.
+Public reservation activity also keeps ownership ahead of the inactivity decision, so
+an active group cannot be retired by its initial TTL. Legacy standalone acquisitions
+and inactive/held reservations retain their explicit renewal requirements. Clients
+should explicitly release when done; idle expiry still requires verified shutdown cleanup.
 
 ## ComfyUI activity and the manual workflow
 

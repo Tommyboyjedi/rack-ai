@@ -504,3 +504,239 @@ fn historical_speech_record_reads_unchanged_and_invalid_payload_is_rejected() {
     );
     assert_eq!(fs::read(&path).unwrap(), original);
 }
+
+fn grouped_models(f: &Fixture) -> Vec<Demand> {
+    let source = f
+        .service
+        .config
+        .sources
+        .iter()
+        .find(|s| s.source == "cb")
+        .unwrap();
+    let result = (crate::reservation_admission::ReservationAdmission {
+        service: &f.service,
+        source,
+    })
+    .reserve(crate::reservation::Reserve {
+        acquisition_id: identity().unwrap(),
+        work_id: "shared-idle".into(),
+        services: vec!["local-primary".into(), "local-coder".into()],
+        priority: Priority::Low,
+        ttl_seconds: 86400,
+    })
+    .unwrap();
+    let parent = f
+        .service
+        .inspect("cb", result["id"].as_str().unwrap())
+        .unwrap();
+    let mut members: Vec<_> = parent
+        .services
+        .values()
+        .map(|id| f.service.inspect("cb", id).unwrap())
+        .collect();
+    members.sort_by_key(|d| d.profile.tag.clone());
+    for d in &members {
+        f.ready(d);
+    }
+    members
+}
+
+#[test]
+fn grouped_model_activity_retains_idle_peer_until_shared_threshold() {
+    for active_member in 0..2 {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let origin = members.iter().map(|d| d.created).max().unwrap();
+        f.service
+            .authority
+            .update(|s| idle::touch(s, &members[active_member].id, origin + 1200))
+            .unwrap();
+        f.reap(origin + 1800);
+        assert!(members.iter().all(|d| !f.inspect(d).released));
+        f.reap(origin + 2999);
+        assert!(members.iter().all(|d| !f.inspect(d).released));
+        f.reap(origin + 3000);
+        assert!(
+            members
+                .iter()
+                .all(|d| f.inspect(d).reason.as_deref() == Some("idle_timeout"))
+        );
+    }
+}
+
+#[test]
+fn grouped_inflight_inference_protects_all_members_without_extending_deadlines() {
+    for state in [InvocationState::Running, InvocationState::Uncertain] {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let invocation = (Submission {
+            service: &f.service,
+        })
+        .submit("cb", request(&members[0]))
+        .unwrap();
+        f.service
+            .authority
+            .update(|s| {
+                s.data.invocations.get_mut(&invocation.id).unwrap().state = state;
+                Ok(())
+            })
+            .unwrap();
+        f.reap(members[0].created + 3600);
+        for d in &members {
+            assert!(!f.inspect(d).released);
+            assert_eq!(f.inspect(d).deadline, d.deadline);
+        }
+    }
+}
+
+#[test]
+fn grouped_recent_activity_does_not_override_explicit_release() {
+    let f = Fixture::new();
+    let members = grouped_models(&f);
+    f.service
+        .authority
+        .update(|s| idle::touch(s, &members[0].id, now()))
+        .unwrap();
+    let parent = members[0].reservation_id.as_ref().unwrap();
+    crate::control::reservation_control(&f.service, ("cb", parent, Action::Release)).unwrap();
+    assert!(members.iter().all(|d| f.inspect(d).released));
+}
+
+#[test]
+fn activity_retention_extends_group_not_other_reservations() {
+    let f = Fixture::new();
+    let members = grouped_models(&f);
+    let at = now();
+    let unrelated = f.acquire(("athba", "comfyui", Priority::Low));
+    f.ready(&unrelated);
+    f.service
+        .authority
+        .update(|s| {
+            for d in &members {
+                s.data.demands.get_mut(&d.id).unwrap().deadline = at + 15;
+            }
+            idle::touch(s, &members[0].id, at + 10)?;
+            crate::activity_retention::refresh(s, (30, at + 10))?;
+            for d in &members {
+                assert_eq!(s.data.demands[&d.id].deadline, at + 40);
+            }
+            assert_eq!(s.data.demands[&unrelated.id].deadline, unrelated.deadline);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn activity_retention_protects_long_running_and_uncertain_work() {
+    for state in [InvocationState::Running, InvocationState::Uncertain] {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let invocation = (Submission {
+            service: &f.service,
+        })
+        .submit("cb", request(&members[0]))
+        .unwrap();
+        let at = now();
+        f.service
+            .authority
+            .update(|s| {
+                for d in &members {
+                    s.data.demands.get_mut(&d.id).unwrap().deadline = at + 5;
+                }
+                s.data.invocations.get_mut(&invocation.id).unwrap().state = state;
+                for elapsed in [1, 4, 7, 10] {
+                    crate::activity_retention::refresh(s, (5, at + elapsed))?;
+                    for d in &members {
+                        assert_eq!(s.data.demands[&d.id].deadline, at + elapsed + 5);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn activity_retention_does_not_revive_terminal_unowned_or_elapsed_members() {
+    for state in [
+        DemandState::Released,
+        DemandState::Cancelled,
+        DemandState::Expired,
+        DemandState::Preempted,
+        DemandState::RecoveryRequired,
+        DemandState::Preparing,
+    ] {
+        let f = Fixture::new();
+        let members = grouped_models(&f);
+        let at = now();
+        f.service
+            .authority
+            .update(|s| {
+                for d in &members {
+                    s.data.demands.get_mut(&d.id).unwrap().deadline = at + 5;
+                }
+                idle::touch(s, &members[0].id, at)?;
+                s.data.demands.get_mut(&members[1].id).unwrap().state = state;
+                crate::activity_retention::refresh(s, (30, at))?;
+                assert_eq!(s.data.demands[&members[1].id].deadline, at + 5);
+                s.data.demands.get_mut(&members[1].id).unwrap().state = DemandState::Ready;
+                crate::activity_retention::refresh(s, (30, at + 5))?;
+                assert_eq!(s.data.demands[&members[1].id].deadline, at + 5);
+                s.data.demands.get_mut(&members[1].id).unwrap().deadline = at + 10;
+                s.claims.retain(|_, id| id != &members[1].id);
+                crate::activity_retention::refresh(s, (30, at + 5))?;
+                assert_eq!(s.data.demands[&members[1].id].deadline, at + 10);
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn activity_retention_requires_activity_and_respects_closed_group() {
+    let f = Fixture::new();
+    let members = grouped_models(&f);
+    let at = now();
+    f.service
+        .authority
+        .update(|s| {
+            for d in &members {
+                s.data.demands.get_mut(&d.id).unwrap().deadline = at + 5;
+            }
+            crate::activity_retention::refresh(s, (30, at))?;
+            for d in &members {
+                assert_eq!(s.data.demands[&d.id].deadline, at + 5);
+            }
+            idle::touch(s, &members[0].id, at)?;
+            let root = members[0].reservation_id.as_ref().unwrap();
+            s.data.demands.get_mut(root).unwrap().reservation_closed = Some(DemandState::Released);
+            crate::activity_retention::refresh(s, (30, at))?;
+            for d in &members {
+                assert_eq!(s.data.demands[&d.id].deadline, at + 5);
+            }
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn activity_retention_does_not_renew_old_activity() {
+    let f = Fixture::new();
+    let members = grouped_models(&f);
+    let at = now();
+    f.service
+        .authority
+        .update(|s| {
+            for d in &members {
+                s.data.demands.get_mut(&d.id).unwrap().deadline = at + 50;
+            }
+            idle::touch(s, &members[0].id, at)?;
+            crate::activity_retention::refresh(s, (30, at + 40))?;
+            for d in &members {
+                assert_eq!(s.data.demands[&d.id].deadline, at + 50);
+            }
+            assert!(!crate::activity_retention::pending(s, (30, at + 40)));
+            Ok(())
+        })
+        .unwrap();
+}

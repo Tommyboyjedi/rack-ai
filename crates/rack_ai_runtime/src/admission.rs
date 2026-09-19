@@ -104,6 +104,7 @@ impl Admission<'_> {
             .clone();
         let hash = digest(&serde_json::to_vec(&profile).map_err(|e| e.to_string())?);
         Ok(Demand {
+            recovery_error: None,
             reservation_id: None,
             services: Default::default(),
             reserve_request: None,

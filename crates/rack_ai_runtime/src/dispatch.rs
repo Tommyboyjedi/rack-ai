@@ -59,6 +59,10 @@ impl Dispatch<'_> {
                 return Ok(None);
             }
             crate::idle::touch(s, &d.id, now())?;
+            crate::activity_retention::refresh(
+                s,
+                (self.service.config.idle_timeout_seconds, now()),
+            )?;
             let i = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
             if crate::work_payload::is_workspace(i) {
                 i.scope_access_hash = Some(digest(d.access_key.as_bytes()));
@@ -164,6 +168,10 @@ impl Completion<'_> {
             }
             if i.state != InvocationState::Uncertain {
                 crate::idle::touch(s, &demand.id, now())?;
+                crate::activity_retention::refresh(
+                    s,
+                    (self.service.config.idle_timeout_seconds, now()),
+                )?;
             }
             crate::capacity::retention(s, &self.service.config.limits)?;
             Ok(())
