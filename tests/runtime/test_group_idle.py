@@ -13,10 +13,11 @@ class GroupIdle(unittest.TestCase):
             try:
                 group = rack.call("athba", "reserve", request=dict(
                     acquisition_id="group", work_id="group", services=["local-primary", "local-coder"],
-                    priority="low", ttl_seconds=60))
+                    priority="low", ttl_seconds=4))
                 for member in group["services"].values():
                     rack.wait(member)
-                deadline = time.monotonic() + 6
+                original_deadlines = {member["id"]: rack.inspect(member)["deadline"] for member in group["services"].values()}
+                deadline = time.monotonic() + 7
                 sequence = 0
                 while time.monotonic() < deadline:
                     sequence += 1
@@ -27,6 +28,7 @@ class GroupIdle(unittest.TestCase):
                     self.assertTrue(all(member["state"] == "ready" for member in current["services"].values()), current)
                     time.sleep(.5)
                 for member in group["services"].values():
+                    self.assertGreater(rack.inspect(member)["deadline"], original_deadlines[member["id"]])
                     expired = rack.wait(member, "expired")
                     self.assertEqual(expired["reason"], "idle_timeout")
             finally:

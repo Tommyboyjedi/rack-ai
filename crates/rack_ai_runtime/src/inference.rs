@@ -147,6 +147,10 @@ impl Submission<'_> {
                 error: None,
             };
             crate::idle::touch(s, &invocation.request.reservation_id, now())?;
+            crate::activity_retention::refresh(
+                s,
+                (self.service.config.idle_timeout_seconds, now()),
+            )?;
             s.data
                 .invocations
                 .insert(invocation.id.clone(), invocation.clone());

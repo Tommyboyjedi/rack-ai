@@ -25,14 +25,16 @@ impl MediaIdle<'_> {
                     return Ok(());
                 }
                 let activity = idle.activity(&service)?;
-                saved.last_activity_at = Some(
-                    saved
-                        .last_activity_at
-                        .unwrap_or(saved.created)
-                        .max(activity.last_activity_at),
-                );
+                saved.last_activity_at = Some(saved.last_activity_at.unwrap_or(saved.created).max(
+                    if activity.busy {
+                        now()
+                    } else {
+                        activity.last_activity_at
+                    },
+                ));
             }
             let seconds = self.service.config.idle_timeout_seconds;
+            crate::activity_retention::refresh(s, (seconds, now()))?;
             if crate::idle::group_active(s, (d, seconds, now())) {
                 return Ok(());
             }

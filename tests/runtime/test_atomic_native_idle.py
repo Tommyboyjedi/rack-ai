@@ -32,10 +32,10 @@ class AtomicNativeIdleTests(unittest.TestCase):
                 r=Rack(root/"runtime",configure=configure,environment=media["environment"])
                 try:
                     group=r.call("cb","reserve",request=dict(acquisition_id="atomic",work_id="atomic",
-                        services=["local-image","local-primary"],priority="paramount",ttl_seconds=60))
+                        services=["local-image","local-primary"],priority="paramount",ttl_seconds=12))
                     image=r.wait(group["services"]["local-image"],seconds=20)
                     primary=r.wait(group["services"]["local-primary"],seconds=20)
-                    requests.post(media["backend"]+"/fixture/control",json={"render_delay":10},timeout=3).raise_for_status()
+                    requests.post(media["backend"]+"/fixture/control",json={"render_delay":16},timeout=3).raise_for_status()
                     job=json.loads((ROOT/"config/media/fixtures/job-request.json").read_text())
                     job.update(priority="paramount",reservation=dict(id=image["id"],generation=image["generation"]))
                     headers={"Authorization":"Bearer cb"}
@@ -54,6 +54,7 @@ class AtomicNativeIdleTests(unittest.TestCase):
                     self.assertEqual(completed["state"],"completed",completed)
                     current=r.inspect(image)
                     self.assertIsNotNone(current["last_activity_at"])
+                    self.assertGreater(current["deadline"], image["deadline"])
                     expired_image=r.wait(image,"expired",seconds=25)
                     self.assertEqual(expired_image["reason"],"idle_timeout")
                     self.assertTrue(expired_image["released"])
@@ -89,10 +90,10 @@ class AtomicNativeIdleTests(unittest.TestCase):
                 r=Rack(root/"runtime",configure=configure,environment=media["environment"])
                 try:
                     group=r.call("cb","reserve",request=dict(acquisition_id="atomic",work_id="atomic",
-                        services=["local-image","local-primary"],priority="paramount",ttl_seconds=60))
+                        services=["local-image","local-primary"],priority="paramount",ttl_seconds=12))
                     image=r.wait(group["services"]["local-image"],seconds=20)
                     primary=r.wait(group["services"]["local-primary"],seconds=20)
-                    deadline=time.monotonic()+6
+                    deadline=time.monotonic()+14
                     sequence=0
                     while time.monotonic()<deadline:
                         sequence+=1

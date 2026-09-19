@@ -8,6 +8,7 @@ pub mod control;
 pub mod dispatch;
 pub mod hosting;
 pub mod idle;
+mod activity_retention;
 pub mod inference;
 pub mod media;
 mod media_idle;

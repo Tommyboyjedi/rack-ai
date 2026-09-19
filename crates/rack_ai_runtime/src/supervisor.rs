@@ -18,6 +18,10 @@ impl Reconsideration<'_> {
         self.service.authority.update(|s| {
             crate::workspace_scope::cancel_closed(s);
             crate::recovery::quarantine(s);
+            crate::activity_retention::refresh(
+                s,
+                (self.service.config.idle_timeout_seconds, now()),
+            )?;
             crate::idle::reap(s, self.service.config.idle_timeout_seconds, now());
             // If the incoming candidate is cancelled, expires, or fails while
             // its incumbent is draining, there is deliberately no restoration.
@@ -212,7 +216,8 @@ impl Supervisor {
 // This read-only hint avoids locking/serializing stable retained history every tick.
 // Every mutation and priority/ownership decision is rechecked under update's lock.
 fn pending_changes(service: &Service, s: &Document) -> bool {
-    crate::recovery::pending(s)
+    crate::activity_retention::pending(s, (service.config.idle_timeout_seconds, now()))
+        || crate::recovery::pending(s)
         || crate::idle::pending(s, service.config.idle_timeout_seconds, now())
         || s.data.invocations.values().any(|i| {
             crate::workspace_scope::needs_cancel(s, i)
