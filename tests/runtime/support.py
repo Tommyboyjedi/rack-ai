@@ -99,6 +99,8 @@ class Rack:
             if d['state']==state:
                 return d
             if d['state']=='recovery_required' and state!='recovery_required':
+                if d.get('released') and not d.get('recovery_error'):
+                    time.sleep(.03); continue
                 raise AssertionError(d)
             time.sleep(.03)
         raise AssertionError(d)

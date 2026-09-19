@@ -7,8 +7,15 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
         if saved.unit.is_some() || saved.container.is_some() {
             return Err("recovery_fixture_identity_ambiguous".into());
         }
-        if process::gone(saved)? {
-            return match process::capture(saved.pid, &d.generation) {
+        let gone = process::gone(saved).map_err(|error| {
+            if error == "process_generation_changed" {
+                "recovery_fixture_process_changed".to_string()
+            } else {
+                error
+            }
+        })?;
+        if gone {
+            return match process::capture(saved.pid, d.backend_activation()) {
                 Ok(_) => Err("recovery_fixture_process_changed".into()),
                 Err(error) if error == "process_is_zombie" => Ok(None),
                 Err(error) => {
@@ -35,7 +42,7 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
         .canonicalize()
         .map_err(|e| e.to_string())?;
     let uid = fs::metadata("/proc/self").map_err(|e| e.to_string())?.uid();
-    let expected = format!("RACK_RUNTIME_ACTIVATION={}", d.generation);
+    let expected = format!("RACK_RUNTIME_ACTIVATION={}", d.backend_activation());
     let mut found = None;
     for entry in fs::read_dir("/proc").map_err(|e| e.to_string())? {
         let entry = entry.map_err(|e| e.to_string())?;
@@ -69,7 +76,7 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
         {
             continue;
         }
-        let p = process::capture(pid, &d.generation)?;
+        let p = process::capture(pid, d.backend_activation())?;
         process::verify(&p, &d.profile)?;
         if found.is_some() {
             return Err("recovery_fixture_process_ambiguous".into());

@@ -28,6 +28,7 @@ pub struct ContainerHosting<'a> {
 }
 impl ContainerHosting<'_> {
     pub fn start(&self, d: &Demand) -> Result<Process, String> {
+        let activation = d.backend_activation();
         let image = d
             .profile
             .container_image
@@ -45,8 +46,8 @@ impl ContainerHosting<'_> {
             "--detach".into(),
             "--pull=never".into(),
             "--restart=no".into(),
-            format!("--name=rack-runtime-{}", d.generation),
-            format!("--label=rack.activation={}", d.generation),
+            format!("--name=rack-runtime-{}", activation),
+            format!("--label=rack.activation={}", activation),
             "--network=host".into(),
             "--gpus".into(),
             format!("device={devices}"),
@@ -56,7 +57,7 @@ impl ContainerHosting<'_> {
             format!("--cpus={}", d.profile.cpu_percent as f64 / 100.0),
             "--env=HF_HUB_OFFLINE=1".into(),
             "--env=TRANSFORMERS_OFFLINE=1".into(),
-            format!("--env=RACK_RUNTIME_ACTIVATION={}", d.generation),
+            format!("--env=RACK_RUNTIME_ACTIVATION={}", activation),
         ];
         for (source, target) in &d.profile.container_mounts {
             args.extend([
@@ -78,11 +79,16 @@ impl ContainerHosting<'_> {
         let observed = inspect(&id, &d.profile.executable)?;
         if !observed.state.running
             || observed.image != *image
-            || observed.config.labels.get("rack.activation") != Some(&d.generation)
+            || observed
+                .config
+                .labels
+                .get("rack.activation")
+                .map(String::as_str)
+                != Some(activation)
         {
             return Err("container_start_identity_unproven".into());
         }
-        let mut p = crate::process::capture(observed.state.pid, &d.generation)?;
+        let mut p = crate::process::capture(observed.state.pid, activation)?;
         p.container = Some(id);
         Ok(p)
     }

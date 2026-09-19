@@ -3,7 +3,7 @@ use rack_ai_media::{command::run, systemd::Systemd};
 use std::{collections::BTreeMap, path::Path};
 
 pub(super) fn wait_absent(d: &Demand, invocation: &str) -> Result<(), String> {
-    let unit = format!("rack-runtime-{}.service", d.generation);
+    let unit = format!("rack-runtime-{}.service", d.backend_activation());
     let deadline =
         std::time::Instant::now() + std::time::Duration::from_secs(d.profile.stop_seconds);
     loop {

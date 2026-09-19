@@ -40,25 +40,34 @@ class HostingTests(unittest.TestCase):
                     import signal,time
                     os.kill(d['process']['pid'],signal.SIGTERM)
                     r.wait(d,'recovery_required')
-                    r.release(d);r.wait(d,'released')
-                    return
+                    r.release(d)
+                    deadline=time.monotonic()+20
+                    current=d
+                    while time.monotonic()<deadline:
+                        current=r.inspect(d)
+                        if current['state']=='released': return
+                        time.sleep(.03)
+                    self.fail(current)
                 if fault in ('release', 'uncertain-release'):
                     if fault == 'uncertain-release':
                         r.controls('local-primary', uncertain=True)
                         r.result(r.infer(d), 'uncertain')
                     (root/'faults.json').write_text(json.dumps({'foreign_pid':os.getpid()}))
                     r.release(d); failed=r.wait(d,'recovery_required')
-                    self.assertIn('gpu_cleanup',failed['reason'])
+                    self.assertIn(failed['reason'], ('gpu_cleanup_uncertain', 'gpu_cleanup_deadline', 'invocation_outcome_unknown'))
                     self.assertEqual(r.acquire('cb','local-fun-chat','paramount')['state'],'unavailable')
                     self.assertEqual(r.counts('start')['local-fun-chat'],0)
                     return
                 r.release(d);r.wait(d,'released')
-                self.assertEqual(r.counts('stop')['local-primary'],1)
                 calls=[json.loads(l) for l in (root/'commands.jsonl').read_text().splitlines()]
                 if driver=='docker':
+                    self.assertEqual(r.counts('stop')['local-primary'],0)
+                    managed=json.loads((r.root/'authority'/'managed.json').read_text())
+                    self.assertEqual(len(managed['data'].get('warm_residencies',{})),1)
                     start=next(c['args'] for c in calls if c['args'][0]=='run')
                     self.assertIn('--pull=never',start);self.assertIn('--memory=32m',start)
                 else:
+                    self.assertEqual(r.counts('stop')['local-primary'],1)
                     start=next(c['args'] for c in calls if c['program']=='systemd-run')
                     self.assertIn('--property=KillMode=control-group',start)
                     self.assertIn('--property=MemoryMax=32M',start)

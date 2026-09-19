@@ -243,6 +243,7 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     object.remove("reserve_result");
     object.remove("reservation_closed");
     object.remove("access_key");
+    object.remove("backend_activation");
     if d.profile.backend != crate::config::Backend::Comfyui {
         object.insert(
             "gateway_path".into(),

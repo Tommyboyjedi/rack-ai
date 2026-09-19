@@ -13,7 +13,7 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
         require_saved_gone(d)?;
         return Ok(None);
     }
-    let mut p = process::capture(observed.state.pid, &d.generation)?;
+    let mut p = process::capture(observed.state.pid, d.backend_activation())?;
     p.container = Some(observed.id);
     if let Some(saved) = &d.process
         && *saved != p
@@ -62,8 +62,8 @@ fn command(d: &Demand, args: &[&str]) -> Result<String, String> {
 
 fn observe(d: &Demand) -> Result<Option<identity::Container>, String> {
     let mut filters = vec![
-        format!("name=^/rack-runtime-{}$", d.generation),
-        format!("label=rack.activation={}", d.generation),
+        format!("name=^/rack-runtime-{}$", d.backend_activation()),
+        format!("label=rack.activation={}", d.backend_activation()),
     ];
     if let Some(saved) = &d.process {
         let id = saved

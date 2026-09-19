@@ -31,6 +31,9 @@ impl Retirement<'_> {
         if d.effect_started && d.process.is_none() {
             return Err("start_outcome_unknown".into());
         }
+        if crate::residency::cache_after_release(r, d).unwrap_or(false) {
+            return Ok(());
+        }
         Hosting { config: &r.config }.stop(d)?;
         r.authority.update(|s| {
             let saved = current(s, d)?;

@@ -69,7 +69,8 @@ impl Service {
                 d.reason = Some("interrupted_start_requires_owned_process_reconciliation".into());
             }
             Ok(())
-        })
+        })?;
+        crate::residency::reconcile_on_start(self)
     }
 }
 pub fn owned<'a>(s: &'a Document, owner: &str, id: &str) -> Result<&'a Demand, String> {

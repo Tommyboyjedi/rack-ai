@@ -49,9 +49,8 @@ pub fn verify(process: &Process, profile: &Profile) -> Result<(), String> {
     Ok(())
 }
 pub fn gone(process: &Process) -> Result<bool, String> {
-    if fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e| e.to_string())?
-        != process.boot
-    {
+    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e| e.to_string())?;
+    if boot != process.boot {
         return Ok(true);
     }
     if !PathBuf::from(format!("/proc/{}", process.pid))
@@ -61,7 +60,8 @@ pub fn gone(process: &Process) -> Result<bool, String> {
         return Ok(true);
     }
     match capture(process.pid, &process.activation) {
-        Ok(p) => Ok(p.start != process.start),
+        Ok(p) if p.start != process.start => Err("process_generation_changed".into()),
+        Ok(_) => Ok(false),
         Err(e) if e == "process_is_zombie" => Ok(true),
         Err(e) => Err(e),
     }

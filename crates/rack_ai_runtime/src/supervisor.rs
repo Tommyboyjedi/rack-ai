@@ -111,8 +111,7 @@ impl Supervisor {
                         matches!(
                             d.state,
                             DemandState::Preparing | DemandState::Ready | DemandState::Releasing
-                        ) || (d.state == DemandState::RecoveryRequired
-                            && (d.recovery_error.is_none() || d.transition_deadline <= now()))
+                        ) || recovery_due(s, d)
                     })
                     .filter(|d| {
                         d.state == DemandState::RecoveryRequired
@@ -243,5 +242,27 @@ fn pending_changes(service: &Service, s: &Document) -> bool {
                         DemandState::Ready | DemandState::Preparing | DemandState::Preempting
                     ))
                 || d.state == DemandState::Preempting
+                || recovery_due(s, d)
         })
+}
+
+fn recovery_due(s: &Document, d: &Demand) -> bool {
+    if d.state != DemandState::RecoveryRequired {
+        return false;
+    }
+    let start_recovery = matches!(
+        d.reason.as_deref(),
+        Some("start_outcome_unknown" | "interrupted_start_requires_owned_process_reconciliation")
+    );
+    if !start_recovery && d.transition_deadline > now() {
+        return false;
+    }
+    let restart_uncertain = s.data.invocations.values().any(|i| {
+        i.request.reservation_id == d.id
+            && i.state == InvocationState::Uncertain
+            && i.error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("receiver_restart_after_dispatch_intent"))
+    });
+    !restart_uncertain || !active(d) || d.released || d.reservation_closed.is_some()
 }

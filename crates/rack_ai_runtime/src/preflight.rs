@@ -9,6 +9,15 @@ pub struct Preflight<'a> {
 }
 impl Preflight<'_> {
     pub fn check(&self, d: &Demand, victims: &[Demand]) -> Result<(), String> {
+        self.check_with_resident_processes(d, victims, &[])
+    }
+
+    pub fn check_with_resident_processes(
+        &self,
+        d: &Demand,
+        victims: &[Demand],
+        resident_processes: &[Process],
+    ) -> Result<(), String> {
         rack_ai_infrastructure::endpoint_fence::EndpointFence::quiescent(
             &self.config.authority_root,
             &d.profile.endpoint,
@@ -52,6 +61,16 @@ impl Preflight<'_> {
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .flatten()
+            .collect::<Vec<_>>();
+        let resident_allowed = resident_processes
+            .iter()
+            .map(process::pids)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .flatten();
+        let allowed = allowed
+            .into_iter()
+            .chain(resident_allowed)
             .collect::<Vec<_>>();
         for resource in &d.profile.resources {
             if self
