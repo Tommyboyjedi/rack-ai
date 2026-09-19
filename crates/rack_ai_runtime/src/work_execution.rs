@@ -10,6 +10,7 @@ use rack_ai_infrastructure::{
     RegistryWorkspaceWorkerSelector, RepositoryPaths,
 };
 pub const MAX_WORKSPACE_SECONDS: u64 = 3600;
+pub const WORKSPACE_RESPONSE_BYTES: u64 = 64 * 1024;
 pub fn selection(
     service: &Service,
     input: (&Demand, &Work),

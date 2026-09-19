@@ -118,7 +118,9 @@ impl Submission<'_> {
                 .accepted_calls = accepted_calls.saturating_add(1);
             let queue_order = s.data.next_invocation_order;
             s.data.next_invocation_order = s.data.next_invocation_order.saturating_add(1);
-            let response_bytes = if request
+            let response_bytes = if workspace {
+                crate::work_execution::WORKSPACE_RESPONSE_BYTES
+            } else if request
                 .payload
                 .as_ref()
                 .is_some_and(|p| p.protocol == crate::protocol::Protocol::Speech)
