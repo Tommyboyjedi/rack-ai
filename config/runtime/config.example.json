@@ -114,7 +114,6 @@
       "qualified": false,
       "evidence": [],
       "capabilities": [
-        "reasoning",
         "coding"
       ],
       "context_tokens": 4096,
