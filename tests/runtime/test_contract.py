@@ -47,6 +47,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(coder_profile['capabilities'], ['coding'])
         self.assertEqual(qualified, ['coding'])
         self.assertLessEqual(set(coder_profile['capabilities']), set(qualified))
+        self.assertIn('chat_completions', coder_profile['protocols'])
+        self.assertTrue(coder_profile['streaming'])
 
 class ContractEndpointTests(unittest.TestCase):
     def get_contract(self, rack, authorization=None):

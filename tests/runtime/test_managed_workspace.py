@@ -9,7 +9,10 @@ class ManagedWorkspace(unittest.TestCase):
         self.root=Path(self.directory.name)
         def configure(c):
             c['limits']=dict(max_wait_seconds=45)
-            for p in c['profiles']:p['inference_seconds']=1
+            for p in c['profiles']:
+                p['inference_seconds']=1
+                if p['tag'] in ['local-primary','local-coder']:
+                    p['streaming']=True
             next(p for p in c['profiles'] if p['tag']=='local-coder')['capabilities']=['coding']
         self.rack=Rack(self.root/'runtime',configure=configure)
         self.fixture=self.root/'fixture';(self.fixture/'src').mkdir(parents=True)
