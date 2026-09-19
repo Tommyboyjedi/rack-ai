@@ -40,7 +40,8 @@ struct RestartPolicy {
 impl Container {
     pub fn verify(&self, d: &Demand, id: &str) -> Result<(), String> {
         valid_id(id)?;
-        let expected_env = format!("RACK_RUNTIME_ACTIVATION={}", d.generation);
+        let activation = d.backend_activation();
+        let expected_env = format!("RACK_RUNTIME_ACTIVATION={}", activation);
         let activation_env: Vec<_> = self
             .config
             .env
@@ -48,9 +49,14 @@ impl Container {
             .filter(|entry| entry.starts_with("RACK_RUNTIME_ACTIVATION="))
             .collect();
         if self.id != id
-            || self.name != format!("/rack-runtime-{}", d.generation)
+            || self.name != format!("/rack-runtime-{}", activation)
             || d.profile.container_image.as_ref() != Some(&self.image)
-            || self.config.labels.get("rack.activation") != Some(&d.generation)
+            || self
+                .config
+                .labels
+                .get("rack.activation")
+                .map(String::as_str)
+                != Some(activation)
             || activation_env != vec![&expected_env]
             || self.host_config.restart_policy.name != "no"
             || self.state.restarting

@@ -55,6 +55,7 @@ impl Planner<'_> {
             })
             .map(|x| x.profile.host_mib)
             .sum();
+        let occupied_host = occupied_host.saturating_add(crate::residency::retained_host_mib(s, d));
         if occupied_host.saturating_add(d.profile.host_mib) > self.service.config.host_capacity_mib
         {
             return Some("insufficient_host_memory".into());
@@ -114,6 +115,7 @@ pub fn fence(s: &mut Document, d: &mut Demand) -> Result<(), String> {
     }
     d.generation = identity()?;
     d.access_key = identity()?;
+    d.backend_activation = Some(crate::residency::backend_activation_for(s, d)?);
     d.transition_deadline = now()
         + d.profile.startup_seconds
         + d.victims
@@ -209,6 +211,7 @@ pub fn fence_group(s: &mut Document, root_id: &str, demands: &mut [Demand]) -> R
         demand.victims = shared_victims.clone();
         demand.generation = identity()?;
         demand.access_key = identity()?;
+        demand.backend_activation = Some(crate::residency::backend_activation_for(s, demand)?);
         demand.transition_deadline = now()
             + demand.profile.startup_seconds
             + demand

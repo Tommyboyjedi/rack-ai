@@ -25,6 +25,7 @@ impl Hosting<'_> {
             .start(d);
         }
         let p = &d.profile;
+        let activation = d.backend_activation();
         let bytes = std::fs::read(&p.executable).map_err(|e| e.to_string())?;
         if digest(&bytes) != p.executable_sha256 {
             return Err("executable_hash_mismatch".into());
@@ -32,19 +33,19 @@ impl Hosting<'_> {
         if p.driver == Driver::Fixture {
             let mut child = Command::new(&p.executable)
                 .args(&p.args)
-                .env("RACK_RUNTIME_ACTIVATION", &d.generation)
+                .env("RACK_RUNTIME_ACTIVATION", activation)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
                 .map_err(|e| e.to_string())?;
-            let observed = process::capture(child.id(), &d.generation);
+            let observed = process::capture(child.id(), activation);
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
             return observed;
         }
-        let unit = format!("rack-runtime-{}.service", d.generation);
+        let unit = format!("rack-runtime-{}.service", activation);
         let devices = p
             .resources
             .iter()
@@ -63,7 +64,7 @@ impl Hosting<'_> {
             format!("--property=CPUQuota={}%", p.cpu_percent),
             format!("--property=TimeoutStopSec={}", p.stop_seconds),
             format!("--setenv=CUDA_VISIBLE_DEVICES={devices}"),
-            format!("--setenv=RACK_RUNTIME_ACTIVATION={}", d.generation),
+            format!("--setenv=RACK_RUNTIME_ACTIVATION={}", activation),
             "--".into(),
             p.executable.to_string_lossy().into_owned(),
         ];
@@ -73,7 +74,7 @@ impl Hosting<'_> {
             &args.iter().map(String::as_str).collect::<Vec<_>>(),
         )?;
         let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;
-        let mut result = process::capture(observed.pid, &d.generation)?;
+        let mut result = process::capture(observed.pid, activation)?;
         result.unit = Some(unit);
         result.invocation = Some(observed.invocation);
         Ok(result)
@@ -110,7 +111,7 @@ impl HostedCleanup<'_> {
         let Some(process) = &d.process else {
             return Ok(());
         };
-        if process.activation != d.generation {
+        if process.activation != d.backend_activation() {
             return Err("activation_mismatch".into());
         }
         let gone = process::gone(process)?;
@@ -118,7 +119,7 @@ impl HostedCleanup<'_> {
             process::verify(process, &d.profile)?;
         }
         if let Some(unit) = &process.unit {
-            if unit != &format!("rack-runtime-{}.service", d.generation) {
+            if unit != &format!("rack-runtime-{}.service", process.activation) {
                 return Err("systemd_activation_changed".into());
             }
             let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;

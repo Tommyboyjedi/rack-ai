@@ -28,10 +28,10 @@ pub fn absent(d: &Demand) -> Result<(), String> {
 }
 
 fn validate(d: &Demand) -> Result<(), String> {
-    if d.generation.is_empty()
-        || d.generation.len() > 128
-        || !d
-            .generation
+    let activation = d.backend_activation();
+    if activation.is_empty()
+        || activation.len() > 128
+        || !activation
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
     {
@@ -39,7 +39,7 @@ fn validate(d: &Demand) -> Result<(), String> {
     }
     if d.process
         .as_ref()
-        .is_some_and(|p| p.activation != d.generation)
+        .is_some_and(|p| p.activation != activation)
     {
         return Err("recovery_activation_changed".into());
     }

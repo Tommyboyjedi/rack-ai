@@ -125,6 +125,7 @@ impl Admission<'_> {
             accepted_calls: 0,
             generation: identity()?,
             access_key: identity()?,
+            backend_activation: None,
             created: now(),
             last_activity_at: None,
             order,

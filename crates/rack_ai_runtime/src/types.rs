@@ -85,6 +85,9 @@ pub struct Demand {
     pub accepted_calls: u64,
     pub generation: String,
     pub access_key: String,
+    /// RackAI-owned backend/process identity. Legacy records fall back to generation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend_activation: Option<String>,
     pub created: u64,
     #[serde(default)]
     pub last_activity_at: Option<u64>,
@@ -107,6 +110,28 @@ pub struct Process {
     #[serde(default)]
     pub container: Option<String>,
     pub invocation: Option<String>,
+}
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmResidencyState {
+    Resident,
+    Evicting,
+    RecoveryRequired,
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct WarmResidency {
+    pub id: String,
+    pub profile_hash: String,
+    pub profile: crate::config::Profile,
+    pub backend: crate::config::Backend,
+    pub driver: crate::config::Driver,
+    pub model: String,
+    pub resources: Vec<String>,
+    pub endpoint: String,
+    pub process: Process,
+    pub cached_at: u64,
+    pub last_ready_at: u64,
+    pub state: WarmResidencyState,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -196,6 +221,8 @@ pub struct State {
     pub acquisition_decisions: BTreeMap<String, AcquisitionDecision>,
     #[serde(default)]
     pub workspace_scopes: BTreeMap<String, crate::workspace_scope::WorkspaceScope>,
+    #[serde(default)]
+    pub warm_residencies: BTreeMap<String, WarmResidency>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct AcquisitionDecision {
@@ -225,6 +252,14 @@ pub fn valid_id(id: &str) -> bool {
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+}
+
+impl Demand {
+    pub fn backend_activation(&self) -> &str {
+        self.backend_activation
+            .as_deref()
+            .unwrap_or(&self.generation)
+    }
 }
 
 /// The result of the original start attempt. This is historical evidence and is

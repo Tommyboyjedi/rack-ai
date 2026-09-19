@@ -6,7 +6,7 @@ pub(super) use probe::validate_metadata;
 use probe::{cgroup_empty, loaded, require_saved_gone, wait_absent};
 
 pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
-    let unit = format!("rack-runtime-{}.service", d.generation);
+    let unit = format!("rack-runtime-{}.service", d.backend_activation());
     if let Some(saved) = &d.process
         && (saved.unit.as_ref() != Some(&unit) || saved.container.is_some())
     {
@@ -32,7 +32,7 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
             "Environment",
         ],
     )?;
-    validate_metadata(&raw, &d.generation)?;
+    validate_metadata(&raw, d.backend_activation())?;
     if let Some(saved) = &d.process
         && !observed.invocation.is_empty()
         && saved.invocation.as_ref() != Some(&observed.invocation)
@@ -64,7 +64,7 @@ pub(super) fn resolve(d: &Demand) -> Result<Option<Process>, String> {
     if observed.invocation.is_empty() {
         return Err("recovery_systemd_invocation_missing".into());
     }
-    let mut p = process::capture(observed.pid, &d.generation)?;
+    let mut p = process::capture(observed.pid, d.backend_activation())?;
     p.unit = Some(unit);
     p.invocation = Some(observed.invocation.clone());
     if let Some(saved) = &d.process

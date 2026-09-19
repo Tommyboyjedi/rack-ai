@@ -67,7 +67,18 @@ impl ReservationControl<'_> {
                 } else {
                     DemandState::Released
                 });
-                d.transition_deadline = now() + d.profile.drain_seconds;
+                if d.state == DemandState::RecoveryRequired {
+                    let retrying_cleanup = d.recovery_error.is_some();
+                    d.recovery_error = None;
+                    d.transition_deadline = now()
+                        + if retrying_cleanup {
+                            0
+                        } else {
+                            d.profile.drain_seconds
+                        };
+                } else {
+                    d.transition_deadline = now() + d.profile.drain_seconds;
+                }
                 if !matches!(
                     d.state,
                     DemandState::Unavailable | DemandState::RecoveryRequired

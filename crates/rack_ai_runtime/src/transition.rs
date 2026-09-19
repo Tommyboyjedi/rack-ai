@@ -31,14 +31,20 @@ impl Transition<'_> {
         }
         self.boundary(d)?;
         if !d.preflight_done {
-            let victims = r.authority.read(|s| {
-                Ok(d.victims
-                    .iter()
-                    .filter_map(|v| s.data.demands.get(v))
-                    .cloned()
-                    .collect::<Vec<_>>())
+            crate::residency::evict_incompatible(r, d)?;
+            let (victims, residents) = r.authority.read(|s| {
+                Ok((
+                    d.victims
+                        .iter()
+                        .filter_map(|v| s.data.demands.get(v))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                    crate::residency::matching_processes(s, d),
+                ))
             })?;
-            if let Err(e) = (Preflight { config: &r.config }).check(d, &victims) {
+            if let Err(e) = (Preflight { config: &r.config })
+                .check_with_resident_processes(d, &victims, &residents)
+            {
                 if e == "legacy_dispatch_still_draining" && now() < d.transition_deadline {
                     return Ok(());
                 }
@@ -61,6 +67,9 @@ impl Transition<'_> {
             return Ok(());
         }
         if d.process.is_none() {
+            if crate::residency::adopt_or_evict(r, d)? {
+                return Ok(());
+            }
             Preflight { config: &r.config }.empty(&d.profile)?;
             let allowed = r.authority.update(|s| {
                 let saved = s.data.demands.get(&d.id).ok_or("missing_transition")?;
@@ -288,7 +297,10 @@ impl ReadyMonitor<'_> {
             crate::media_idle::MediaIdle { service: r }.observe(d)?;
             // Idle admission may just have closed and started normal teardown.
             if !r.authority.read(|s| {
-                Ok(crate::reservation::ready(s, crate::service::owned(s, &d.owner, &d.id)?))
+                Ok(crate::reservation::ready(
+                    s,
+                    crate::service::owned(s, &d.owner, &d.id)?,
+                ))
             })? {
                 return Ok(());
             }
