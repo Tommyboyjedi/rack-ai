@@ -124,7 +124,16 @@ fn socket_and_home_cleanup_on_success_failure_timeout_spawn_and_setup_errors() {
         } else {
             path.clone()
         };
-        let result = run_with_root(&runtime, "fixture only", &workdir, 1, true, &path, None);
+        let result = run_with_root(
+            &runtime,
+            "fixture only",
+            &workdir,
+            1,
+            true,
+            &path,
+            None,
+            &[],
+        );
         assert!(!path.join(SOCKET_NAME).exists(), "socket leaked: {outcome}");
         match outcome {
             "success" => assert!(result.unwrap().stdout().contains("SOCKET_READY")),

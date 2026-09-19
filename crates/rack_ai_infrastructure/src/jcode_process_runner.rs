@@ -28,6 +28,7 @@ use std::time::SystemTime;
 #[cfg(test)]
 use std::time::UNIX_EPOCH;
 
+use rack_ai_application::EnvironmentResourceMount;
 use rack_ai_application::ImplementWorkerRuntime;
 
 use crate::jcode_execution_config::JCodeExecutionConfig;
@@ -105,6 +106,7 @@ impl JCodeProcessRunner {
             timeout_seconds,
             network_disabled,
             None,
+            &[],
         )
     }
 
@@ -123,6 +125,27 @@ impl JCodeProcessRunner {
             timeout_seconds,
             network_disabled,
             Some(allowed_paths),
+            &[],
+        )
+    }
+
+    pub fn run_with_allowed_paths_and_environment(
+        runtime: &ImplementWorkerRuntime,
+        task: &str,
+        workdir: &Path,
+        timeout_seconds: u32,
+        network_disabled: bool,
+        allowed_paths: &AllowedPaths,
+        environment_resources: &[EnvironmentResourceMount],
+    ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
+        Self::run_internal(
+            runtime,
+            task,
+            workdir,
+            timeout_seconds,
+            network_disabled,
+            Some(allowed_paths),
+            environment_resources,
         )
     }
 
@@ -133,6 +156,7 @@ impl JCodeProcessRunner {
         timeout_seconds: u32,
         network_disabled: bool,
         allowed_paths: Option<&AllowedPaths>,
+        environment_resources: &[EnvironmentResourceMount],
     ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
         let root = JCodeRuntimeRoot::create().map_err(|error| {
             JCodeProcessFailure::new(error.to_string(), String::new(), String::new())
@@ -145,6 +169,7 @@ impl JCodeProcessRunner {
             network_disabled,
             root.path(),
             allowed_paths,
+            environment_resources,
         )
     }
 }
@@ -157,6 +182,7 @@ fn run_with_root(
     network_disabled: bool,
     root: &Path,
     allowed_paths: Option<&AllowedPaths>,
+    environment_resources: &[EnvironmentResourceMount],
 ) -> Result<JCodeProcessOutput, JCodeProcessFailure> {
     let _direct_dispatch = if network_disabled {
         None
@@ -205,6 +231,7 @@ fn run_with_root(
             &execution_config,
             network_disabled,
             allowed_paths,
+            environment_resources,
         )
         .map_err(|error| JCodeProcessFailure::new(error, String::new(), String::new()))?;
         run_prepared(
@@ -300,6 +327,7 @@ fn build_command(
     execution_config: &JCodeExecutionConfig,
     network_disabled: bool,
     allowed_paths: Option<&AllowedPaths>,
+    environment_resources: &[EnvironmentResourceMount],
 ) -> Result<PreparedCommand, String> {
     let mut prepared = if network_disabled {
         prepare_bubblewrap_command(runtime, workdir, root, allowed_paths)?
@@ -331,6 +359,7 @@ fn build_command(
         .arg(runtime.provider_profile())
         .arg("--model")
         .arg(runtime.api_model_id());
+    apply_environment_resources(&mut prepared.command, environment_resources)?;
     if let Some(tool_profile) = runtime.tool_profile() {
         prepared.command.arg("--tool-profile").arg(tool_profile);
     }
@@ -349,6 +378,38 @@ fn build_command(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     Ok(prepared)
+}
+
+fn apply_environment_resources(
+    command: &mut Command,
+    environment_resources: &[EnvironmentResourceMount],
+) -> Result<(), String> {
+    let mut path_entries = Vec::new();
+    let mut virtual_environment = None;
+    for resource in environment_resources {
+        let source_bin = resource.source_path().join("bin");
+        if source_bin.is_dir() {
+            path_entries.push(resource.container_path().join("bin"));
+        }
+        if virtual_environment.is_none()
+            && resource.source_path().join("pyvenv.cfg").is_file()
+            && source_bin.is_dir()
+        {
+            virtual_environment = Some(resource.container_path().to_path_buf());
+        }
+    }
+    if path_entries.is_empty() {
+        return Ok(());
+    }
+    if let Some(existing) = std::env::var_os("PATH") {
+        path_entries.extend(std::env::split_paths(&existing));
+    }
+    let path = std::env::join_paths(path_entries).map_err(|error| error.to_string())?;
+    command.env("PATH", path);
+    if let Some(virtual_environment) = virtual_environment {
+        command.env("VIRTUAL_ENV", virtual_environment);
+    }
+    Ok(())
 }
 
 fn prepare_bubblewrap_command(
@@ -835,6 +896,7 @@ mod tests {
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
 
+    use rack_ai_application::EnvironmentResourceMount;
     use rack_ai_application::ImplementWorkerRuntime;
     use rack_ai_domain::AllowedPath;
     use rack_ai_domain::AllowedPaths;
@@ -1022,6 +1084,55 @@ printf 'COMPLETE\n'
             fs::read_to_string(workdir.join("Cargo.toml")).unwrap(),
             "[package]\nname = \"fixture\"\n"
         );
+    }
+
+    #[test]
+    fn prepends_authorized_environment_resource_bin_to_jcode_path() {
+        let root = temp_root();
+        let workdir = root.join("worktree");
+        fs::create_dir_all(&workdir).unwrap();
+        let env_root = env_resource_root("runtime-env");
+        fs::create_dir_all(env_root.join("bin")).unwrap();
+        fs::write(env_root.join("pyvenv.cfg"), "home = /usr/bin\n").unwrap();
+        write_script(
+            &env_root.join("bin/runtime-tool"),
+            r#"#!/bin/bash
+set -euo pipefail
+printf 'ENV_READY:%s\n' "$VIRTUAL_ENV"
+"#,
+        );
+        let script = root.join("fake-jcode.sh");
+        write_script(
+            &script,
+            r#"#!/bin/bash
+set -euo pipefail
+runtime-tool
+printf 'COMPLETE\n'
+"#,
+        );
+        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+        let allowed_paths =
+            AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap();
+        let environment_resources =
+            vec![EnvironmentResourceMount::same_path(env_root.clone()).unwrap()];
+
+        let output = JCodeProcessRunner::run_with_allowed_paths_and_environment(
+            &runtime,
+            env_root.to_str().unwrap(),
+            &workdir,
+            10,
+            true,
+            &allowed_paths,
+            &environment_resources,
+        )
+        .unwrap();
+
+        assert!(
+            output
+                .stdout()
+                .contains(&format!("ENV_READY:{}", env_root.display()))
+        );
+        assert!(output.stdout().contains("COMPLETE"));
     }
 
     #[test]
@@ -1268,6 +1379,20 @@ PY
         permissions.set_mode(0o755);
         fs::set_permissions(&temporary, permissions).unwrap();
         fs::rename(&temporary, path).unwrap();
+    }
+
+    fn env_resource_root(label: &str) -> PathBuf {
+        let counter = super::TEMP_ROOT_COUNTER.fetch_add(1, super::Ordering::SeqCst);
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::current_dir()
+            .unwrap()
+            .join("target/jcode-env-resources")
+            .join(format!("{label}-{nanos}-{counter}"));
+        fs::create_dir_all(&root).unwrap();
+        root
     }
 
     fn temp_root() -> PathBuf {

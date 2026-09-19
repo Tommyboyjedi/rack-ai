@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use rack_ai_domain::AllowedPaths;
 
 use crate::ChangeLayout;
+use crate::EnvironmentResourceMount;
 use crate::ImplementWorkerRuntime;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -17,6 +18,7 @@ pub struct ImplementChangeRequest {
     max_turns: usize,
     network_disabled: bool,
     worker: Option<ImplementWorkerRuntime>,
+    environment_resources: Vec<EnvironmentResourceMount>,
 }
 
 impl ImplementChangeRequest {
@@ -29,6 +31,7 @@ impl ImplementChangeRequest {
             max_turns: ChangeLayout::coder_max_turns(),
             network_disabled: false,
             worker: None,
+            environment_resources: Vec::new(),
         }
     }
 
@@ -50,6 +53,14 @@ impl ImplementChangeRequest {
 
     pub fn with_worker(mut self, worker: ImplementWorkerRuntime) -> Self {
         self.worker = Some(worker);
+        self
+    }
+
+    pub fn with_environment_resources(
+        mut self,
+        environment_resources: Vec<EnvironmentResourceMount>,
+    ) -> Self {
+        self.environment_resources = environment_resources;
         self
     }
 
@@ -98,12 +109,17 @@ impl ImplementChangeRequest {
     pub fn worker(&self) -> Option<&ImplementWorkerRuntime> {
         self.worker.as_ref()
     }
+
+    pub fn environment_resources(&self) -> &[EnvironmentResourceMount] {
+        self.environment_resources.as_slice()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::ImplementChangeRequest;
     use crate::ChangeLayout;
+    use crate::EnvironmentResourceMount;
     use rack_ai_domain::AllowedPath;
     use rack_ai_domain::AllowedPaths;
     use std::path::PathBuf;
@@ -116,10 +132,15 @@ mod tests {
                     AllowedPaths::new(vec![AllowedPath::new("src".to_string()).unwrap()]).unwrap(),
                     120,
                 )
-                .with_network_disabled(true);
+                .with_network_disabled(true)
+                .with_environment_resources(vec![
+                    EnvironmentResourceMount::same_path(PathBuf::from("/srv/runtime/.venv"))
+                        .unwrap(),
+                ]);
         assert_eq!(request.timeout_seconds(), 120);
         assert_eq!(request.task(), "Add a feature.");
         assert_eq!(request.max_turns(), ChangeLayout::coder_max_turns());
         assert!(request.network_disabled());
+        assert_eq!(request.environment_resources().len(), 1);
     }
 }

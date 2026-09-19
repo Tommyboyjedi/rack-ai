@@ -214,6 +214,7 @@ impl<'a> ExecuteChange<'a> {
             request.limits().network(),
             rack_ai_domain::NetworkPolicy::Disabled
         ))
+        .with_environment_resources(request.environment_resources().to_vec())
         .with_max_turns(ChangeLayout::coder_max_turns());
         let implement_request = if let Some(worker) = selected_worker {
             implement_request.with_worker(worker.clone())
@@ -654,6 +655,33 @@ mod tests {
         assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
         assert_eq!(
             executor.seen_environment_resources(),
+            vec![vec!["/srv/ATHBA/.venv".to_string()]]
+        );
+    }
+
+    #[test]
+    fn forwards_environment_resources_to_implementer() {
+        let git =
+            FakeGit::matching("a".repeat(40)).with_after_paths(vec!["src/lib.rs".to_string()]);
+        let manifests = FakeManifests::default();
+        let executor = FakeExecutor::succeeding();
+        let implementer = FakeImplementer::successful("COMPLETE");
+        let mut document = sample_document(Some("a".repeat(40)));
+        document.environment_resources = vec!["/srv/ATHBA/.venv".to_string()];
+        let registry = EnvironmentRegistry;
+        let result = execute_with_registry(
+            &registry,
+            document,
+            &git,
+            &manifests,
+            ChangeExecutionMode::ImplementAndVerify,
+            Some(&executor),
+            Some(&implementer),
+        )
+        .unwrap();
+        assert_eq!(result.packet.status(), &ChangeStatus::ChecksPassed);
+        assert_eq!(
+            implementer.seen_environment_resources(),
             vec![vec!["/srv/ATHBA/.venv".to_string()]]
         );
     }
@@ -1425,6 +1453,7 @@ mod tests {
         output: String,
         worker_error: Option<String>,
         hard_error: Option<String>,
+        seen_environment_resources: RefCell<Vec<Vec<String>>>,
     }
 
     impl FakeImplementer {
@@ -1433,6 +1462,7 @@ mod tests {
                 output: output.to_string(),
                 worker_error: None,
                 hard_error: None,
+                seen_environment_resources: RefCell::new(Vec::new()),
             }
         }
 
@@ -1441,6 +1471,7 @@ mod tests {
                 output: "partial output".to_string(),
                 worker_error: Some(error.to_string()),
                 hard_error: None,
+                seen_environment_resources: RefCell::new(Vec::new()),
             }
         }
 
@@ -1449,15 +1480,27 @@ mod tests {
                 output: String::new(),
                 worker_error: None,
                 hard_error: Some(error.to_string()),
+                seen_environment_resources: RefCell::new(Vec::new()),
             }
+        }
+
+        fn seen_environment_resources(&self) -> Vec<Vec<String>> {
+            self.seen_environment_resources.borrow().clone()
         }
     }
 
     impl ChangeImplementer for FakeImplementer {
         fn implement(
             &self,
-            _request: &ImplementChangeRequest,
+            request: &ImplementChangeRequest,
         ) -> Result<ImplementChangeResult, String> {
+            self.seen_environment_resources.borrow_mut().push(
+                request
+                    .environment_resources()
+                    .iter()
+                    .map(|item| item.source_path().display().to_string())
+                    .collect(),
+            );
             if let Some(error) = &self.hard_error {
                 return Err(error.clone());
             }
