@@ -68,7 +68,7 @@
         "chat_completions",
         "responses"
       ],
-      "streaming": false,
+      "streaming": true,
       "host_mib": 8192,
       "cpu_percent": 400,
       "executable": "/usr/bin/docker",
