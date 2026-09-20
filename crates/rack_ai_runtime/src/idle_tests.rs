@@ -408,6 +408,47 @@ fn legacy_missing_activity_is_not_refreshed_by_read_or_recovery() {
 }
 
 #[test]
+fn historical_profile_without_max_input_tokens_recovers_but_config_stays_strict() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let path = f.service.config.authority_root.join("managed.json");
+    let mut value: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    value["data"]["demands"][&d.id]["profile"]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_input_tokens");
+    fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+
+    f.service.recover().unwrap();
+    let historical = f.inspect(&d);
+    assert_eq!(historical.profile.max_input_tokens, 0);
+    assert_eq!(
+        historical.profile.effective_max_input_tokens(),
+        historical
+            .profile
+            .context_tokens
+            .saturating_sub(historical.profile.max_output_tokens)
+    );
+    assert_eq!(
+        crate::api::public(historical.clone()).unwrap()["max_input_tokens"],
+        historical.profile.effective_max_input_tokens()
+    );
+
+    let mut config_value: serde_json::Value =
+        serde_json::from_str(include_str!("../../../config/runtime/config.example.json")).unwrap();
+    config_value["profiles"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("max_input_tokens");
+    let config: Config = serde_json::from_value(config_value).unwrap();
+    assert_eq!(config.profiles[0].max_input_tokens, 0);
+    assert_eq!(
+        crate::validation::validate(&config).unwrap_err(),
+        format!("invalid runtime profile: {}", config.profiles[0].tag)
+    );
+}
+
+#[test]
 fn idle_policy_defaults_and_invalid_values_fail_validation() {
     let original: serde_json::Value =
         serde_json::from_str(include_str!("../../../config/runtime/config.example.json")).unwrap();

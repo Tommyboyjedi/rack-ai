@@ -175,7 +175,7 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
         Request::Discover => {
             json!({"tags": service.config.profiles.iter().map(|p| json!({
             "tag":p.tag,"version":p.version,"qualified":p.qualified,"capabilities":p.capabilities,
-              "context_tokens":p.context_tokens,"max_input_tokens":p.max_input_tokens,
+              "context_tokens":p.context_tokens,"max_input_tokens":p.effective_max_input_tokens(),
               "max_output_tokens":p.max_output_tokens
         })).collect::<Vec<_>>(), "priorities":["low","medium","high","paramount"],"default_priority":"low"})
         }
@@ -264,7 +264,10 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     }
     object.insert("profile_version".into(), json!(d.profile.version));
     object.insert("context_tokens".into(), json!(d.profile.context_tokens));
-    object.insert("max_input_tokens".into(), json!(d.profile.max_input_tokens));
+    object.insert(
+        "max_input_tokens".into(),
+        json!(d.profile.effective_max_input_tokens()),
+    );
     object.insert(
         "max_output_tokens".into(),
         json!(d.profile.max_output_tokens),
