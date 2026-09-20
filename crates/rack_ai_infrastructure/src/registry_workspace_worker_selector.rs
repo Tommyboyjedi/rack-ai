@@ -23,6 +23,7 @@ pub struct RegistryWorkspaceWorkerSelector {
     catalog: FileSystemWorkerCatalog,
     resolver: JCodeWorkerConfigResolver,
     reserved_worker: Option<String>,
+    reserved_context_window: Option<u32>,
 }
 
 impl RegistryWorkspaceWorkerSelector {
@@ -32,6 +33,7 @@ impl RegistryWorkspaceWorkerSelector {
             repository: FileSystemRegistryRepository::new(paths.clone()),
             catalog: FileSystemWorkerCatalog::new(paths.clone()),
             resolver: JCodeWorkerConfigResolver::new(paths),
+            reserved_context_window: None,
         }
     }
 }
@@ -64,6 +66,7 @@ impl WorkspaceWorkerSelector for RegistryWorkspaceWorkerSelector {
                 resources: &resources,
                 resolver: &self.resolver,
                 catalog: &self.catalog,
+                reserved_context_window: self.reserved_context_window,
             },
         )
     }
@@ -75,6 +78,7 @@ struct SelectionContext<'a> {
     resources: &'a [ResourceRecord],
     resolver: &'a JCodeWorkerConfigResolver,
     catalog: &'a FileSystemWorkerCatalog,
+    reserved_context_window: Option<u32>,
 }
 struct Candidates<'a> {
     decision: GenericWorkerSelectionDecision,
@@ -191,10 +195,13 @@ fn select_generic(
     });
     decision.model_profile_version = Some(profile.profile_version.clone());
     decision.qualification_evidence_refs = profile.qualification_evidence_refs.clone();
-    let runtime = context
+    let mut runtime = context
         .resolver
         .resolve(worker.id.as_str())
         .map_err(WorkspaceSelectionError::Other)?;
+    if let Some(context_window) = context.reserved_context_window {
+        runtime = runtime.with_context_window(Some(context_window));
+    }
     let placement = context
         .catalog
         .resolve(worker.id.as_str())
@@ -375,6 +382,96 @@ mod tests {
     }
 
     #[test]
+    fn reserved_primary_uses_reserved_profile_context_without_changing_identity() {
+        let root = temp_root();
+        write_generic_registry(&root, "active");
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root))
+            .for_reserved_worker("local-primary".to_string())
+            .with_reserved_context_window(65_536);
+
+        let selection = selector
+            .select(&generic_request(
+                vec!["reasoning", "coding"],
+                "medium",
+                false,
+                "low",
+                "athba",
+            ))
+            .unwrap();
+
+        let runtime = selection.runtime();
+        assert_eq!(runtime.worker_id(), "local-primary");
+        assert_eq!(runtime.api_model_id(), "local-primary");
+        assert_eq!(runtime.endpoint(), "http://127.0.0.1:8017/v1");
+        assert_eq!(runtime.context_window(), Some(65_536));
+        assert_eq!(
+            runtime.worker_provenance().unwrap().resource_id,
+            "gpu-4060ti"
+        );
+        assert_eq!(
+            selection
+                .selection_decision()
+                .unwrap()
+                .selected_worker_id
+                .as_deref(),
+            Some("local-primary")
+        );
+    }
+
+    #[test]
+    fn reserved_coder_uses_reserved_profile_context_without_changing_identity() {
+        let root = temp_root();
+        write_generic_registry(&root, "active");
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root))
+            .for_reserved_worker("local-coder".to_string())
+            .with_reserved_context_window(14_320);
+
+        let selection = selector
+            .select(&generic_request(
+                vec!["coding"],
+                "small",
+                false,
+                "low",
+                "athba",
+            ))
+            .unwrap();
+
+        let runtime = selection.runtime();
+        assert_eq!(runtime.worker_id(), "local-coder");
+        assert_eq!(runtime.api_model_id(), "local-coder");
+        assert_eq!(runtime.endpoint(), "http://127.0.0.1:8018/v1");
+        assert_eq!(runtime.context_window(), Some(14_320));
+        assert_eq!(runtime.tool_profile(), Some("minimal"));
+        assert_eq!(runtime.worker_provenance().unwrap().resource_id, "gpu-2060");
+    }
+
+    #[test]
+    fn reserved_context_window_changes_independently_of_registry_model_metadata() {
+        let root = temp_root();
+        write_generic_registry(&root, "active");
+        let request = generic_request(vec!["coding"], "small", false, "low", "athba");
+
+        let first = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root.clone()))
+            .for_reserved_worker("local-coder".to_string())
+            .with_reserved_context_window(14_320)
+            .select(&request)
+            .unwrap();
+        let second = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root))
+            .for_reserved_worker("local-coder".to_string())
+            .with_reserved_context_window(12_000)
+            .select(&request)
+            .unwrap();
+
+        assert_eq!(first.runtime().worker_id(), second.runtime().worker_id());
+        assert_eq!(
+            first.runtime().api_model_id(),
+            second.runtime().api_model_id()
+        );
+        assert_eq!(first.runtime().context_window(), Some(14_320));
+        assert_eq!(second.runtime().context_window(), Some(12_000));
+    }
+
+    #[test]
     fn generic_coding_small_selects_least_scarce_coder_and_persists_decision() {
         let root = temp_root();
         write_generic_registry(&root, "active");
@@ -521,6 +618,11 @@ mod tests {
 impl RegistryWorkspaceWorkerSelector {
     pub fn for_reserved_worker(mut self, id: String) -> Self {
         self.reserved_worker = Some(id);
+        self
+    }
+
+    pub fn with_reserved_context_window(mut self, context_window: u32) -> Self {
+        self.reserved_context_window = Some(context_window);
         self
     }
 }

@@ -87,3 +87,44 @@ pub fn is_workspace(i: &crate::types::Invocation) -> bool {
         .as_ref()
         .is_some_and(|w| w.workspace().is_some())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Work;
+    use serde_json::json;
+
+    fn workspace_payload(requirements: serde_json::Value) -> serde_json::Value {
+        json!({
+            "reservation_id": "reservation",
+            "service": "local-coder",
+            "work_id": "work",
+            "payload": {
+                "kind": "workspace",
+                "workspace": {
+                    "repository": {"id": "repo", "base_ref": "main"},
+                    "objective": "Make one bounded change.",
+                    "allowed_paths": ["src/"],
+                    "acceptance": {"commands": [["cargo", "test"]]},
+                    "requirements": requirements,
+                    "limits": {"max_implementation_attempts": 1, "timeout_seconds": 30}
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn workspace_payload_does_not_accept_client_context_window() {
+        let ok = workspace_payload(json!({
+            "complexity": "small",
+            "requires_large_context": false
+        }));
+        assert!(serde_json::from_value::<Work>(ok).is_ok());
+
+        let rejected = workspace_payload(json!({
+            "complexity": "small",
+            "requires_large_context": false,
+            "context_window": 14_320
+        }));
+        assert!(serde_json::from_value::<Work>(rejected).is_err());
+    }
+}

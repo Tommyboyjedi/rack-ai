@@ -13,6 +13,7 @@ pub struct JCodeChangeImplementer {
     access: Option<rack_ai_application::implement_worker_runtime::ReservedAccess>,
     resolver: JCodeWorkerConfigResolver,
     default_worker: Option<ImplementWorkerRuntime>,
+    reserved_context_window: Option<u32>,
 }
 
 impl JCodeChangeImplementer {
@@ -21,6 +22,17 @@ impl JCodeChangeImplementer {
             access: None,
             resolver: JCodeWorkerConfigResolver::new(paths),
             default_worker,
+            reserved_context_window: None,
+        }
+    }
+
+    fn apply_reserved_context_window(
+        &self,
+        runtime: ImplementWorkerRuntime,
+    ) -> ImplementWorkerRuntime {
+        match self.reserved_context_window {
+            Some(context_window) => runtime.with_context_window(Some(context_window)),
+            None => runtime,
         }
     }
 
@@ -29,7 +41,8 @@ impl JCodeChangeImplementer {
         request: &ImplementChangeRequest,
     ) -> Result<ImplementWorkerRuntime, String> {
         if let Some(runtime) = request.worker() {
-            let resolved = self.resolver.resolve(runtime.worker_id())?;
+            let resolved =
+                self.apply_reserved_context_window(self.resolver.resolve(runtime.worker_id())?);
             assert_runtime_matches(runtime, &resolved)?;
             return Ok(match &self.access {
                 Some(access) => resolved.with_reserved_access(access.clone()),
@@ -38,8 +51,12 @@ impl JCodeChangeImplementer {
         }
         self.default_worker
             .clone()
-            .map(Ok)
-            .unwrap_or_else(|| self.resolver.resolve_default_implementer())
+            .map(|runtime| Ok(self.apply_reserved_context_window(runtime)))
+            .unwrap_or_else(|| {
+                self.resolver
+                    .resolve_default_implementer()
+                    .map(|runtime| self.apply_reserved_context_window(runtime))
+            })
     }
 }
 
@@ -248,6 +265,33 @@ mod tests {
     }
 
     #[test]
+    fn reserved_context_window_satisfies_runtime_re_resolution() {
+        let root = temp_root();
+        write_registry(&root);
+        let implementer = JCodeChangeImplementer::new(RegistryPaths::new(root), None)
+            .with_reserved_context_window(14_320);
+        let worktree = temp_root();
+        let request = ImplementChangeRequest::new(worktree, "task".to_string()).with_worker(
+            ImplementWorkerRuntime::new(
+                "local-coder".to_string(),
+                "/home/tomp/.local/bin/jcode".to_string(),
+                "local-coder".to_string(),
+                "local-coder".to_string(),
+                "http://127.0.0.1:8018/v1".to_string(),
+            )
+            .with_tool_profile(Some("minimal".to_string()))
+            .with_context_window(Some(14_320)),
+        );
+
+        let runtime = implementer.resolve_runtime(&request).unwrap();
+
+        assert_eq!(runtime.worker_id(), "local-coder");
+        assert_eq!(runtime.api_model_id(), "local-coder");
+        assert_eq!(runtime.endpoint(), "http://127.0.0.1:8018/v1");
+        assert_eq!(runtime.context_window(), Some(14_320));
+    }
+
+    #[test]
     fn rejects_request_runtime_model_mismatch() {
         let root = temp_root();
         write_registry(&root);
@@ -331,6 +375,11 @@ impl JCodeChangeImplementer {
         access: rack_ai_application::implement_worker_runtime::ReservedAccess,
     ) -> Self {
         self.access = Some(access);
+        self
+    }
+
+    pub fn with_reserved_context_window(mut self, context_window: u32) -> Self {
+        self.reserved_context_window = Some(context_window);
         self
     }
 }

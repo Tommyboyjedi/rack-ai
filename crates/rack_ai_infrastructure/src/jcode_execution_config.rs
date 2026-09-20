@@ -118,6 +118,26 @@ mod tests {
     }
 
     #[test]
+    fn writes_reserved_runtime_context_window_for_jcode() {
+        let root = temp_root();
+        let runtime = ImplementWorkerRuntime::new(
+            "local-primary".to_string(),
+            "/home/tomp/.local/bin/jcode".to_string(),
+            "local-primary".to_string(),
+            "local-primary".to_string(),
+            "http://127.0.0.1:8095/scoped/reservation/access/v1".to_string(),
+        )
+        .with_context_window(Some(65_536));
+
+        let config = JCodeExecutionConfig::prepare_at(&root, &runtime).unwrap();
+        let text = fs::read_to_string(config.home_dir().join(".jcode/config.toml")).unwrap();
+
+        assert!(text.contains("default_provider = \"local-primary\""));
+        assert!(text.contains("default_model = \"local-primary\""));
+        assert!(text.contains("context_window = 65536"));
+    }
+
+    #[test]
     fn rejects_minimal_worker_without_context_window() {
         let root = temp_root();
         let runtime = ImplementWorkerRuntime::new(
