@@ -103,7 +103,7 @@ An unavailable service rejects new work without creating a pending invocation. A
 
 Work contains no priority and cannot select a service outside its reservation. `work_id` is unique within the authenticated principal. Repeating the exact request reconciles its original invocation; changing the reservation, service or payload conflicts. Neither a disconnected caller nor a retry creates another execution within the retained work record. `inspect_work` and `cancel_work` take `work_id` and enforce ownership.
 
-The existing invocation record stores accepted/started/completed/cancelled/expired/uncertain state, result, cancellation intent and late evidence. Work inspection also reports waiting/Held from current reservation state. Cancellation before dispatch prevents execution. Cancellation after dispatch records intent and retains late evidence. Receiver restart marks unresolved started work uncertain, never automatically replaying it. Ordinary inference token/context/protocol/time limits remain unchanged.
+The existing invocation record stores accepted/started/completed/cancelled/expired/uncertain state, result, cancellation intent and late evidence. Work inspection also reports waiting/Held from current reservation state. Cancellation before dispatch prevents execution. Cancellation after dispatch records intent and retains late evidence. Receiver restart marks unresolved started work uncertain, never automatically replaying it. Ordinary inference protocol/time limits remain unchanged. Service discovery publishes `context_tokens`, `max_input_tokens` and `max_output_tokens`; public Ready reservation members expose the same profile-frozen limits beside their model and profile version. RackAI enforces explicit output bounds against `max_output_tokens`. Scoped chat/completions and responses calls that omit an output bound receive the reserved profile's `max_output_tokens` before backend dispatch. RackAI does not infer tokenizer-specific prompt length from serialized HTTP bytes; clients and model runtimes remain responsible for true input-token enforcement against the published `max_input_tokens` contract.
 
 ## Bounded workspace payload
 
@@ -143,7 +143,7 @@ The managed `local-image` job API, its existing request format and reservation `
 
 Remove source `permitted`, `default`, `maximum`, `tags` and `tag_priorities`, workspace `source_admission_policies`, and media principal `ceiling` from ordinary configuration. These application-policy types and fields have been removed. Runtime/media configuration rejects their obsolete fields. Identity/credential fields and existing operational flags remain. No recorded historical request or priority is rewritten.
 
-Legacy single-service `acquire` still works; omitted legacy priority now uses the uniform Low default. Discovery publishes the global `priorities` vocabulary and all service profiles, including their qualification status. Ordinary unqualified requests still fail qualification independently of application identity. New reserve requests supply priority explicitly.
+Legacy single-service `acquire` still works; omitted legacy priority now uses the uniform Low default. Discovery publishes the global `priorities` vocabulary and all service profiles, including qualification status, capabilities, context and input/output token limits. Ordinary unqualified requests still fail qualification independently of application identity. New reserve requests supply priority explicitly.
 
 No deployment or client migration is performed by this change.
 

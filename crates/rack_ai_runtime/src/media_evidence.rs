@@ -275,6 +275,7 @@ mod tests {
                 "evidence": [],
                 "capabilities": [],
                 "context_tokens": 1,
+                "max_input_tokens": 1,
                 "max_output_tokens": 1,
                 "resources": ["gpu-4080-super"],
                 "device_mib": {},

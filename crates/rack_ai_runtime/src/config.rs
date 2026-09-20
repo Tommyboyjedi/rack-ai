@@ -30,6 +30,7 @@ pub struct Profile {
     pub evidence: Vec<String>,
     pub capabilities: Vec<GenericCapability>,
     pub context_tokens: u32,
+    pub max_input_tokens: u32,
     #[serde(default = "crate::protocol::default_protocols")]
     pub protocols: Vec<crate::protocol::Protocol>,
     #[serde(default)]

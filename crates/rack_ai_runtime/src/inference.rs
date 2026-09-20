@@ -70,16 +70,11 @@ impl Submission<'_> {
                 .work
                 .as_ref()
                 .is_some_and(|w| w.workspace().is_some());
-            let input_bytes = if let Some(payload) = &request.payload {
+            if let Some(payload) = &request.payload {
                 if payload.validate(d)? != request.max_tokens {
                     return Err("output_limit_mismatch".into());
                 }
-                serde_json::to_vec(payload)
-                    .map_err(|e| e.to_string())?
-                    .len()
-            } else {
-                request.prompt.len()
-            };
+            }
             if request.schema != VERSION
                 || !valid_id(&request.submission_id)
                 || request.timeout_seconds == 0
@@ -91,7 +86,6 @@ impl Submission<'_> {
                     }
                 || request.max_tokens == 0
                 || request.max_tokens > d.profile.max_output_tokens
-                || input_bytes as u64 + request.max_tokens as u64 > d.request.context_tokens as u64
             {
                 return Err("inference_limits".into());
             }

@@ -15,12 +15,15 @@ class ProtocolTests(unittest.TestCase):
                 target = next(p for p in c['profiles'] if p['tag'] == 'local-primary')
                 target['protocols'] = source['protocols']
                 target['streaming'] = source['streaming']
+                target['context_tokens'] = 131072
+                target['max_input_tokens'] = 65536
+                target['max_output_tokens'] = 65536
             r = Rack(root,configure=configure)
             try:
                 demand = r.wait(r.acquire('athba','local-primary','low'))
                 url = f'http://{r.address}'+demand['gateway_path']+'/chat/completions'
                 body = dict(model='local-primary',messages=[dict(role='user',content='bounded stream')],
-                    max_tokens=16,stream=True,stream_options=dict(include_usage=True))
+                    stream=True,stream_options=dict(include_usage=True))
                 def call(payload):
                     request = urllib.request.Request(url,data=json.dumps(payload).encode(),
                         headers={'Content-Type':'application/json'})
@@ -28,7 +31,18 @@ class ProtocolTests(unittest.TestCase):
                 response = call(body)
                 self.assertIn(b'data: [DONE]',response)
                 forwarded = json.loads(Path(str(r.events)+'.requests').read_text().splitlines()[0])
-                self.assertEqual(forwarded,body)
+                self.assertEqual(forwarded['max_tokens'],65536)
+                self.assertNotEqual(forwarded['max_tokens'],131072)
+                self.assertEqual({k:v for k,v in forwarded.items() if k!='max_tokens'},body)
+                with self.assertRaises(urllib.error.HTTPError) as too_many:
+                    call(dict(body,max_tokens=65537))
+                self.assertEqual(too_many.exception.code,409)
+                self.assertEqual(json.loads(too_many.exception.read())['error'],'inference_limits')
+                too_many.exception.close()
+                with self.assertRaises(urllib.error.HTTPError) as too_large:
+                    call(dict(model='local-primary',messages=[dict(role='user',content='x'*(1024*1024))]))
+                self.assertEqual(too_large.exception.code,413)
+                too_large.exception.close()
                 with self.assertRaises(urllib.error.HTTPError) as wrong_model:
                     call(dict(body,model='not-local-primary'))
                 self.assertEqual(wrong_model.exception.code,409)

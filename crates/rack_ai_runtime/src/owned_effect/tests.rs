@@ -10,7 +10,7 @@ pub(super) fn demand() -> Demand {
         "priority":"low", "profile":{
             "tag":"test","version":"fixture","model":"test","backend":"vllm",
             "driver":"fixture","qualified":true,"evidence":[],"capabilities":[],
-            "context_tokens":1,"max_output_tokens":1,"resources":[],"device_mib":{},
+            "context_tokens":1,"max_input_tokens":1,"max_output_tokens":1,"resources":[],"device_mib":{},
             "host_mib":1,"cpu_percent":1,"endpoint":"http://127.0.0.1:1",
             "executable":"/usr/bin/sleep","executable_sha256":"","args":[],
             "artifact":null,"artifact_sha256":null,"startup_seconds":1,

@@ -99,8 +99,12 @@ impl ProfileValidation<'_> {
             || p.artifact_verify_seconds == 0
             || p.artifact_verify_seconds > 3600
             || p.context_tokens == 0
+            || p.max_input_tokens == 0
             || p.max_output_tokens == 0
+            || p.max_input_tokens > p.context_tokens
             || p.max_output_tokens > p.context_tokens
+            || u64::from(p.max_input_tokens) + u64::from(p.max_output_tokens)
+                > u64::from(p.context_tokens)
             || p.capabilities.is_empty()
             || (p.qualified && p.evidence.is_empty())
             || (p.driver == Driver::Fixture && !c.fixture_mode)

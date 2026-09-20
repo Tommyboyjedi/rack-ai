@@ -44,7 +44,7 @@ class Rack:
             listen = port()
             profiles.append(dict(tag=tag, version='fixture-v1', model=tag, backend='vllm', driver='fixture',
                 qualified=True, evidence=['synthetic-process-only'], capabilities=['reasoning'], context_tokens=4096,
-                max_output_tokens=128, resources=resources, device_mib={r:16 for r in resources},host_mib=32,cpu_percent=100,
+                max_input_tokens=3968, max_output_tokens=128, resources=resources, device_mib={r:16 for r in resources},host_mib=32,cpu_percent=100,
                 endpoint=f'http://127.0.0.1:{listen}', executable=executable,
                 executable_sha256=hashlib.sha256(Path(executable).read_bytes()).hexdigest(),
                 args=[str(ROOT/'tests/runtime/backend.py'), str(listen), tag, str(self.events),str(self.root/(tag+'.control.json'))],
