@@ -63,6 +63,7 @@
         "coding"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions",
@@ -117,6 +118,7 @@
         "coding"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions",
@@ -173,6 +175,7 @@
         "coding"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions",
@@ -222,6 +225,7 @@
         "coding"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions"
@@ -283,6 +287,7 @@
         "visual"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions",
@@ -324,6 +329,7 @@
         "visual"
       ],
       "context_tokens": 4096,
+      "max_input_tokens": 3584,
       "max_output_tokens": 512,
       "protocols": [
         "chat_completions",
@@ -366,6 +372,7 @@
         "audio"
       ],
       "context_tokens": 8192,
+      "max_input_tokens": 8191,
       "max_output_tokens": 1,
       "protocols": [
         "speech"

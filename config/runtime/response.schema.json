@@ -642,6 +642,18 @@
         "profile_version": {
           "type": "string"
         },
+        "context_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
         "resources": {
           "type": "array",
           "items": {
@@ -761,6 +773,9 @@
         "preflight_done",
         "released",
         "profile_version",
+        "context_tokens",
+        "max_input_tokens",
+        "max_output_tokens",
         "resources",
         "last_activity_at",
         "ready_checked",
@@ -997,7 +1012,15 @@
                   },
                   "context_tokens": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 1
+                  },
+                  "max_input_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "max_output_tokens": {
+                    "type": "integer",
+                    "minimum": 1
                   }
                 },
                 "required": [
@@ -1005,7 +1028,9 @@
                   "version",
                   "qualified",
                   "capabilities",
-                  "context_tokens"
+                  "context_tokens",
+                  "max_input_tokens",
+                  "max_output_tokens"
                 ]
               }
             },

@@ -1,6 +1,7 @@
 """Published schemas match actual receiver responses and reusable client fixtures."""
 import json
 import tempfile
+import time
 from pathlib import Path
 import subprocess
 import unittest
@@ -27,6 +28,36 @@ class ContractTests(unittest.TestCase):
                 r.release(d);validate(r.wait(d,'released'))
             finally:r.close()
 
+    def test_discovery_and_ready_reservation_publish_effective_token_limits(self):
+        with tempfile.TemporaryDirectory(prefix='rack-token-contract-') as root:
+            def configure(c):
+                profile = next(p for p in c['profiles'] if p['tag'] == 'local-primary')
+                profile['context_tokens'] = 131072
+                profile['max_input_tokens'] = 65536
+                profile['max_output_tokens'] = 65536
+            r = Rack(root, configure=configure)
+            try:
+                discovery = r.call('athba', 'discover')
+                primary = next(p for p in discovery['tags'] if p['tag'] == 'local-primary')
+                self.assertEqual(primary['context_tokens'], 131072)
+                self.assertEqual(primary['max_input_tokens'], 65536)
+                self.assertEqual(primary['max_output_tokens'], 65536)
+                reservation = r.call('athba', 'reserve', request=dict(
+                    acquisition_id='token-contract-reserve', work_id='work',
+                    services=['local-primary'], priority='low', ttl_seconds=60))
+                deadline = time.monotonic() + 10
+                while reservation['state'] != 'ready' and time.monotonic() < deadline:
+                    reservation = r.call('athba', 'inspect_reservation', reservation_id=reservation['id'])
+                self.assertEqual(reservation['state'], 'ready')
+                service = reservation['services']['local-primary']
+                self.assertEqual(service['model'], 'local-primary')
+                self.assertEqual(service['profile_version'], 'fixture-v1')
+                self.assertEqual(service['context_tokens'], 131072)
+                self.assertEqual(service['max_input_tokens'], 65536)
+                self.assertEqual(service['max_output_tokens'], 65536)
+            finally:
+                r.close()
+
     def test_example_configuration_validates_without_effects(self):
         with tempfile.TemporaryDirectory(prefix='rack-pr35-config-') as root:
             path=Path(root)/'config.json'
@@ -35,6 +66,17 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout.strip(),'RUNTIME_CONFIG_VALID')
             self.assertEqual(list(Path(root).iterdir()),[path])
+
+            invalid = json.loads(path.read_text())
+            invalid['profiles'][0]['max_input_tokens'] = invalid['profiles'][0]['context_tokens']
+            invalid['profiles'][0]['max_output_tokens'] = 1
+            bad = Path(root)/'invalid-config.json'
+            bad.write_text(json.dumps(invalid))
+            bad.chmod(0o600)
+            result = subprocess.run([str(ROOT/'target/debug/rack_ai_runtime'),'validate',str(bad)],
+                capture_output=True,text=True,timeout=5)
+            self.assertNotEqual(result.returncode,0,result.stdout)
+            self.assertIn('invalid runtime profile: local-primary', result.stderr)
 
     def test_local_coder_runtime_capabilities_match_workspace_qualification(self):
         runtime = json.loads((ROOT/'config/runtime/config.example.json').read_text())
