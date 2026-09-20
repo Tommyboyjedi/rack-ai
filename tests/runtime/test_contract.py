@@ -48,7 +48,25 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(qualified, ['coding'])
         self.assertLessEqual(set(coder_profile['capabilities']), set(qualified))
         self.assertIn('chat_completions', coder_profile['protocols'])
+        self.assertIn('responses', coder_profile['protocols'])
         self.assertTrue(coder_profile['streaming'])
+
+    def test_local_primary_runtime_capabilities_match_jcode_route(self):
+        runtime = json.loads((ROOT/'config/runtime/config.example.json').read_text())
+        models = json.loads((ROOT/'config/models.json').read_text())
+        workers = json.loads((ROOT/'config/workers.json').read_text())
+        primary_profile = next(p for p in runtime['profiles'] if p['tag'] == 'local-primary')
+        primary_worker = next(w for w in workers['workers'] if w['id'] == 'local-primary')
+        primary_model = next(m for m in models['models'] if m['id'] == primary_worker['model_id'])
+        qualified = primary_model['eligibility_profile']['capabilities']
+        self.assertEqual(primary_profile['capabilities'], ['reasoning', 'coding'])
+        self.assertEqual(qualified, ['reasoning', 'coding'])
+        self.assertLessEqual(set(primary_profile['capabilities']), set(qualified))
+        self.assertEqual(primary_worker['provider_profile'], 'local-primary')
+        self.assertEqual(primary_model['api_model_id'], 'local-primary')
+        self.assertIn('chat_completions', primary_profile['protocols'])
+        self.assertIn('responses', primary_profile['protocols'])
+        self.assertTrue(primary_profile['streaming'])
 
 class ContractEndpointTests(unittest.TestCase):
     def get_contract(self, rack, authorization=None):
