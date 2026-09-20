@@ -30,6 +30,7 @@ pub struct Profile {
     pub evidence: Vec<String>,
     pub capabilities: Vec<GenericCapability>,
     pub context_tokens: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub max_input_tokens: u32,
     #[serde(default = "crate::protocol::default_protocols")]
     pub protocols: Vec<crate::protocol::Protocol>,
@@ -128,7 +129,19 @@ fn artifact_timeout() -> u64 {
     900
 }
 
+fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 impl Profile {
+    pub fn effective_max_input_tokens(&self) -> u32 {
+        if self.max_input_tokens == 0 {
+            self.context_tokens.saturating_sub(self.max_output_tokens)
+        } else {
+            self.max_input_tokens
+        }
+    }
+
     pub fn native_media(&self) -> bool {
         self.backend == Backend::Comfyui
             && self
