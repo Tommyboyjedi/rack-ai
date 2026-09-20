@@ -50,6 +50,11 @@ impl WorkspaceWorkerSelection {
         self
     }
 
+    pub fn with_context_window(mut self, context_window: u32) -> Self {
+        self.runtime = self.runtime.with_context_window(Some(context_window));
+        self
+    }
+
     pub fn selection_decision(&self) -> Option<&GenericWorkerSelectionDecision> {
         self.selection_decision.as_ref()
     }

@@ -944,7 +944,7 @@ printf 'COMPLETE\n'
             )
             .as_str(),
         );
-        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+        let runtime = coder_runtime(&script, "http://127.0.0.1:18018/v1");
 
         let output = JCodeProcessRunner::run(&runtime, "fix the file", &workdir, 5, false).unwrap();
 
@@ -992,7 +992,7 @@ printf 'COMPLETE\n'
             )
             .as_str(),
         );
-        let runtime = primary_runtime(&script, "http://127.0.0.1:8017/v1");
+        let runtime = primary_runtime(&script, "http://127.0.0.1:18017/v1");
 
         JCodeProcessRunner::run(&runtime, "plan", &workdir, 5, false).unwrap();
 
@@ -1018,7 +1018,7 @@ for _ in range(20000):
 PY
 "#,
         );
-        let runtime = coder_runtime(&script, "http://127.0.0.1:8018/v1");
+        let runtime = coder_runtime(&script, "http://127.0.0.1:18018/v1");
 
         let output = JCodeProcessRunner::run(&runtime, "flood", &workdir, 10, false).unwrap();
 
