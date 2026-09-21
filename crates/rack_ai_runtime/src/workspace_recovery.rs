@@ -614,6 +614,10 @@ mod tests {
                     wait_seconds: None,
                     workspace_scope: None,
                 },
+                request_digest: None,
+                request_bytes: None,
+                work_digest: None,
+                work_bytes: None,
                 state: InvocationState::Uncertain,
                 queue_order: 1,
                 waiting_deadline: now() + 60,
@@ -716,6 +720,10 @@ mod tests {
                                 wait_seconds: None,
                                 workspace_scope: Some(scope_id),
                             },
+                            request_digest: None,
+                            request_bytes: None,
+                            work_digest: None,
+                            work_bytes: None,
                             state: if active_child {
                                 InvocationState::Running
                             } else {

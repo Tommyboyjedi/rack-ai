@@ -18,7 +18,7 @@ impl WorkSubmission<'_> {
             .authority
             .read(|s| Ok(find(s, owner, &work.work_id).cloned()))?
         {
-            return if i.request.work.as_ref() == Some(&work) {
+            return if crate::inference::work_matches(&i, &work)? {
                 Ok(i)
             } else {
                 Err("identity_conflict".into())

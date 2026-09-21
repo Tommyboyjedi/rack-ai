@@ -10,7 +10,7 @@ impl Submission<'_> {
         self.service.authority.update(|s| {
             if let Some(work) = &request.work {
                 if let Some(i) = crate::work::find(s, owner, &work.work_id) {
-                    return if i.request.work.as_ref() == Some(work) {
+                    return if work_matches(i, work)? {
                         Ok(i.clone())
                     } else {
                         Err("identity_conflict".into())
@@ -35,7 +35,7 @@ impl Submission<'_> {
                     }
                     retry.generation = i.request.generation.clone();
                 }
-                return if i.request == retry {
+                return if request_matches(i, &retry)? {
                     Ok(i.clone())
                 } else {
                     Err("identity_conflict".into())
@@ -128,6 +128,10 @@ impl Submission<'_> {
                 id: identity()?,
                 owner: owner.into(),
                 request,
+                request_digest: None,
+                request_bytes: None,
+                work_digest: None,
+                work_bytes: None,
                 state: InvocationState::Queued,
                 queue_order,
                 waiting_deadline: now() + wait,
@@ -154,4 +158,24 @@ impl Submission<'_> {
             Ok(invocation)
         })
     }
+}
+
+pub(crate) fn request_matches(
+    invocation: &Invocation,
+    request: &Inference,
+) -> Result<bool, String> {
+    if let Some(digest) = &invocation.request_digest {
+        return Ok(&json_digest(request)? == digest);
+    }
+    Ok(invocation.request == *request)
+}
+
+pub(crate) fn work_matches(
+    invocation: &Invocation,
+    work: &crate::work_payload::Work,
+) -> Result<bool, String> {
+    if let Some(digest) = &invocation.work_digest {
+        return Ok(&json_digest(work)? == digest);
+    }
+    Ok(invocation.request.work.as_ref() == Some(work))
 }

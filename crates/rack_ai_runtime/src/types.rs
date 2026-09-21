@@ -181,6 +181,18 @@ pub struct Invocation {
     pub id: String,
     pub owner: String,
     pub request: Inference,
+    /// SHA-256 of the original full request before terminal request compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_digest: Option<String>,
+    /// Serialized byte length of the original full request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_bytes: Option<u64>,
+    /// SHA-256 of the original full workspace/work request, when present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_digest: Option<String>,
+    /// Serialized byte length of the original full workspace/work request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_bytes: Option<u64>,
     pub state: InvocationState,
     /// Monotonic local queue position. Dispatch is FIFO within one owned
     /// logical service and never uses global reservation priority.
@@ -249,6 +261,12 @@ pub fn identity() -> Result<String, String> {
 pub fn digest(data: &[u8]) -> String {
     use sha2::{Digest, Sha256};
     format!("{:x}", Sha256::digest(data))
+}
+pub fn json_bytes<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(value).map_err(|e| e.to_string())
+}
+pub fn json_digest<T: Serialize>(value: &T) -> Result<String, String> {
+    Ok(digest(&json_bytes(value)?))
 }
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
