@@ -51,6 +51,7 @@ pub mod browser_pages;
 pub mod browser_sessions;
 pub mod human_store;
 pub mod login_throttle;
+pub mod media_purge;
 pub mod password_kdf;
 
 #[cfg(test)]

@@ -18,6 +18,8 @@ pub struct Config {
     #[serde(default)]
     pub browser_auth_file: Option<PathBuf>,
     pub resource_root: PathBuf,
+    #[serde(default)]
+    pub input_root: Option<PathBuf>,
     pub output_root: PathBuf,
     pub authority_file: PathBuf,
     pub control_secret_file: PathBuf,
@@ -55,6 +57,15 @@ pub struct Profile {
     pub available: bool,
 }
 impl Config {
+    pub fn input_root(&self) -> PathBuf {
+        self.input_root.clone().unwrap_or_else(|| {
+            self.output_root
+                .parent()
+                .map(|parent| parent.join("input"))
+                .unwrap_or_else(|| PathBuf::from("/input"))
+        })
+    }
+
     pub fn load(path: PathBuf) -> Result<Self, String> {
         use std::os::unix::fs::PermissionsExt;
         if fs::metadata(&path)
