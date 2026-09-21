@@ -21,6 +21,15 @@ def completed(env, identity):
     return value if value.get("state") in {"completed", "failed", "interrupted", "cancelled"} else None
 
 
+def update_machine(env, **updates):
+    path = env["root"] / "machine.json"
+    value = json.loads(path.read_text())
+    value.update(updates)
+    temporary = path.with_suffix(".next")
+    temporary.write_text(json.dumps(value))
+    temporary.replace(path)
+
+
 def test_real_http_replay_artifacts_isolation_and_release(tmp_path):
     with receiver(tmp_path / "machine") as env:
         api = env["api"] + "/api/media/v1"
@@ -139,3 +148,20 @@ def test_native_module_burst_queues_without_starving_status(tmp_path):
             futures = [pool.submit(requests.get,env["native"]+f"/assets/module-{i}.js",headers=owner,timeout=8) for i in range(96)]
             assert requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=2).status_code == 200
             assert {future.result().status_code for future in futures} == {200}
+
+
+def test_native_static_assets_use_verified_grant_but_api_revalidates(tmp_path):
+    with receiver(tmp_path / "machine") as env:
+        owner = {"Authorization":"Bearer "+TOKEN}
+        requests.post(env["api"]+"/api/media/v1/sessions",
+            json={"schema":"rack-ai/media/v1","idempotency_key":"static-grant"},headers=owner,timeout=3).raise_for_status()
+        wait_for(lambda: requests.get(env["api"]+"/api/media/v1/status",headers=owner,timeout=3).json()["state"] == "ready")
+        requests.get(env["native"]+"/",headers=owner,timeout=8).raise_for_status()
+        update_machine(env, gpu_probe_error=True)
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+                futures = [pool.submit(requests.get,env["native"]+f"/assets/cached-{i}.js",headers=owner,timeout=8) for i in range(64)]
+                assert {future.result().status_code for future in futures} == {200}
+            assert requests.get(env["native"]+"/object_info",headers=owner,timeout=3).status_code == 409
+        finally:
+            update_machine(env, gpu_probe_error=False)
