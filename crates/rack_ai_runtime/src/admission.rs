@@ -111,6 +111,7 @@ impl Admission<'_> {
             reserve_result: None,
             reservation_closed: None,
             recovery_reconciliation: None,
+            workspace_recovery_analyses: Default::default(),
             id: identity()?,
             owner: self.source.source.clone(),
             request: request.clone(),

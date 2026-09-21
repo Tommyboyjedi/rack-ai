@@ -39,6 +39,12 @@ async fn main() -> Result<(), String> {
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
     });
+    let workspace_recovery = rack_ai_runtime::workspace_recovery::Monitor {
+        service: Arc::clone(&service),
+    };
+    std::thread::spawn(move || {
+        workspace_recovery.run_forever();
+    });
     axum::serve(listener, api::router(service))
         .await
         .map_err(|e| e.to_string())

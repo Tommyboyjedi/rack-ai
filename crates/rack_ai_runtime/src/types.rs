@@ -60,6 +60,10 @@ pub struct Demand {
     /// Latest cleanup blocker, separate from the original historical failure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery_error: Option<String>,
+    /// Workspace-specific diagnosis that proves an uncertain workspace has no
+    /// live scoped model work left, without rewriting its historical outcome.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub workspace_recovery_analyses: BTreeMap<String, WorkspaceRecoveryAnalysis>,
     pub id: String,
     pub owner: String,
     pub request: Acquire,
@@ -302,6 +306,58 @@ pub struct RecoveryReconciliation {
     pub checks: RecoveryAbsenceChecks,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cleanup_process: Option<Process>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceRecoveryAnalysis {
+    pub invocation_id: String,
+    pub diagnosed_at: u64,
+    pub parent_error: Option<String>,
+    pub work_id: Option<String>,
+    pub repository_id: Option<String>,
+    pub repository_root: Option<String>,
+    pub packet_path: String,
+    pub packet_status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_acceptance_verdict: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub packet_last_error: Option<String>,
+    pub scoped_children: Vec<WorkspaceRecoveryChild>,
+    pub checks: WorkspaceRecoveryChecks,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceRecoveryChild {
+    pub invocation_id: String,
+    pub state: InvocationState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_deadline: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cancellation_requested_at: Option<u64>,
+    pub result_present: bool,
+    pub late_result_present: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkspaceRecoveryChecks {
+    /// The parent workspace has a retained review packet under the configured
+    /// RackAI state root, so the workspace attempt itself reached a recorded
+    /// terminal packet outcome.
+    pub retained_terminal_packet: bool,
+    /// No scoped child invocation for this workspace parent is queued, running,
+    /// or uncertain.
+    pub scoped_children_terminal: bool,
+    /// All workspace scopes owned by this parent are closed or past deadline.
+    pub workspace_scope_closed_or_expired: bool,
+    /// The retained packet path was canonicalized under workspace.state_root.
+    pub packet_under_state_root: bool,
+    /// The original recovery ownership fence still matched when analysis was
+    /// persisted.
+    pub ownership_fence_intact: bool,
 }
 
 fn legacy_response_bound() -> u64 {

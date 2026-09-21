@@ -203,7 +203,9 @@ fn quiescent(s: &Document, d: &Demand) -> Result<(), String> {
     if s.data.invocations.values().any(|i| {
         i.request.reservation_id == d.id
             && (matches!(i.state, InvocationState::Queued | InvocationState::Running)
-                || (i.state == InvocationState::Uncertain && crate::work_payload::is_workspace(i)))
+                || (i.state == InvocationState::Uncertain
+                    && crate::work_payload::is_workspace(i)
+                    && !crate::workspace_recovery::allows_recovery(s, d, i)))
     }) {
         return Err("recovery_active_or_unproven_workspace_invocation".into());
     }

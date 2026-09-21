@@ -340,6 +340,7 @@ fn synthetic_demand(record: &WarmResidency) -> Demand {
         reservation_closed: None,
         recovery_reconciliation: None,
         recovery_error: None,
+        workspace_recovery_analyses: Default::default(),
         id: format!("warm-{}", record.id),
         owner: "rack-ai".into(),
         request: Acquire {

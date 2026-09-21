@@ -50,6 +50,7 @@ mod reservation_view;
 mod work;
 mod work_execution;
 pub mod work_payload;
+pub mod workspace_recovery;
 
 mod gpu_cleanup;
 mod reference_audio;
