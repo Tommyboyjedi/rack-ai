@@ -24,6 +24,7 @@ impl Shutdown<'_> {
     pub fn stopping(&self, service: &Service) -> Result<(), String> {
         let r = self.runtime;
         if r.systemd.gone()? && (GpuProbe { config: &r.config }).pids()?.is_empty() {
+            crate::media_purge::purge_configured(&r.config)?;
             let handle = service.lease.as_ref().ok_or("missing ownership at stop")?;
             r.reservations.release(handle)?;
             r.store.update(|state| {

@@ -97,6 +97,7 @@ pub fn recover(runtime: &Runtime) -> Result<(), String> {
         .is_empty()
     {
         if let Some(handle) = &state.service.lease {
+            crate::media_purge::purge_configured(&runtime.config)?;
             runtime.reservations.release(handle)?;
             return runtime.store.update(|s| {
                 for j in &mut s.jobs {

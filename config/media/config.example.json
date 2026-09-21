@@ -7,6 +7,7 @@
   "browser_auth_file": "/srv/rack-ai-media/secrets/browser-auth.json",
   "state_root": "/srv/rack-ai-media/state",
   "resource_root": "/srv/rack-ai/state/resources",
+  "input_root": "/srv/comfyui/input",
   "output_root": "/srv/comfyui/output",
   "authority_file": "/srv/rack-ai-media/authority.json",
   "control_secret_file": "/srv/rack-ai-media/secrets/control",

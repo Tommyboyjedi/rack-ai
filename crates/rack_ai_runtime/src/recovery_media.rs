@@ -55,6 +55,7 @@ impl MediaCleanup<'_> {
             }
             std::thread::sleep(std::time::Duration::from_millis(100));
         }
+        rack_ai_media::media_purge::purge_configured(&r.config)?;
         r.store.update(|s| {
             binding(s, d)?;
             for session in s.sessions.iter_mut().filter(|session| !session.stopped) {

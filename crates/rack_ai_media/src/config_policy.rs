@@ -1,5 +1,6 @@
 //! Independent listener, deployment-path and authenticated-source configuration policies.
 use crate::config::Config;
+use std::{ffi::OsStr, path::Path};
 pub fn validate(config: &Config) -> Result<(), String> {
     NetworkPolicy { config }.validate()?;
     LocalPolicy { config }.validate()?;
@@ -49,9 +50,11 @@ struct LocalPolicy<'a> {
 }
 impl LocalPolicy<'_> {
     fn validate(&self) -> Result<(), String> {
+        let input_root = self.config.input_root();
         for root in [
             &self.config.state_root,
             &self.config.resource_root,
+            &input_root,
             &self.config.output_root,
             &self.config.authority_file,
             &self.config.control_secret_file,
@@ -71,6 +74,7 @@ impl LocalPolicy<'_> {
         {
             return Err("absolute browser authentication path required".into());
         }
+        self.cleanup_roots(&input_root)?;
         if !self.config.unit.starts_with("rack-ai-comfyui-")
             || !self.config.unit.ends_with(".service")
             || !self
@@ -93,6 +97,24 @@ impl LocalPolicy<'_> {
         .any(|n| *n == 0 || *n > 86400)
         {
             return Err("invalid lifecycle deadline".into());
+        }
+        Ok(())
+    }
+
+    fn cleanup_roots(&self, input_root: &Path) -> Result<(), String> {
+        if input_root == self.config.output_root {
+            return Err("distinct ComfyUI cleanup roots required".into());
+        }
+        if input_root.file_name() != Some(OsStr::new("input"))
+            || self.config.output_root.file_name() != Some(OsStr::new("output"))
+            || input_root.parent() != self.config.output_root.parent()
+        {
+            return Err("ComfyUI cleanup roots must be sibling input/output directories".into());
+        }
+        for root in [input_root, self.config.output_root.as_path()] {
+            if root.parent().and_then(Path::parent).is_none() {
+                return Err("ComfyUI cleanup roots are too broad".into());
+            }
         }
         Ok(())
     }
