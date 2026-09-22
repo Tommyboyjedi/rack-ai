@@ -92,7 +92,7 @@ pub fn allows_recovery(s: &Document, d: &Demand, i: &Invocation) -> bool {
     i.state == InvocationState::Uncertain
         && crate::work_payload::is_workspace(i)
         && analysis_recorded(d, i)
-        && scoped_children_terminal(s, &i.id)
+        && scoped_children_physically_recoverable(s, d, i)
         && workspace_scope_closed_or_expired(s, &i.id)
 }
 
@@ -103,7 +103,8 @@ fn analysis_recorded(d: &Demand, i: &Invocation) -> bool {
             analysis.invocation_id == i.id
                 && terminal_packet_status(&analysis.packet_status)
                 && analysis.checks.retained_terminal_packet
-                && analysis.checks.scoped_children_terminal
+                && (analysis.checks.scoped_children_terminal
+                    || analysis.checks.scoped_children_physically_recoverable)
                 && analysis.checks.workspace_scope_closed_or_expired
                 && analysis.checks.packet_under_state_root
                 && analysis.checks.ownership_fence_intact
@@ -118,19 +119,17 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
         fence(s, &candidate.demand)?;
         let parent = workspace_parent(s, candidate)?;
         Ok((
-            scoped_child_summaries(s, parent),
+            scoped_child_summaries(s, &candidate.demand, parent),
             workspace_scope_closed_or_expired(s, &parent.id),
         ))
     })?;
     if !scope_ok {
         return Err("workspace_recovery_scope_open_or_missing".into());
     }
-    if scoped_children.iter().any(|child| {
-        matches!(
-            child.state,
-            InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
-        )
-    }) {
+    let scoped_children_terminal = scoped_children_terminal_from_summaries(&scoped_children);
+    let scoped_children_physically_recoverable =
+        scoped_children_physically_recoverable_from_summaries(&scoped_children);
+    if !scoped_children_physically_recoverable {
         return Err("workspace_recovery_scoped_child_unproven".into());
     }
     let result = candidate
@@ -165,7 +164,8 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
         scoped_children,
         checks: WorkspaceRecoveryChecks {
             retained_terminal_packet: true,
-            scoped_children_terminal: true,
+            scoped_children_terminal,
+            scoped_children_physically_recoverable,
             workspace_scope_closed_or_expired: true,
             packet_under_state_root: true,
             ownership_fence_intact: true,
@@ -180,8 +180,9 @@ fn persist(
 ) -> Result<bool, String> {
     service.authority.update(|s| {
         fence(s, &candidate.demand)?;
-        let parent_id = workspace_parent(s, candidate)?.id.clone();
-        if !scoped_children_terminal(s, &parent_id) {
+        let parent = workspace_parent(s, candidate)?;
+        let parent_id = parent.id.clone();
+        if !scoped_children_physically_recoverable(s, &candidate.demand, parent) {
             return Err("workspace_recovery_scoped_child_unproven".into());
         }
         if !workspace_scope_closed_or_expired(s, &parent_id) {
@@ -234,7 +235,11 @@ fn workspace_parent<'a>(s: &'a Document, candidate: &Candidate) -> Result<&'a In
     Ok(parent)
 }
 
-fn scoped_child_summaries(s: &Document, parent: &Invocation) -> Vec<WorkspaceRecoveryChild> {
+fn scoped_child_summaries(
+    s: &Document,
+    demand: &Demand,
+    parent: &Invocation,
+) -> Vec<WorkspaceRecoveryChild> {
     s.data
         .invocations
         .values()
@@ -243,6 +248,13 @@ fn scoped_child_summaries(s: &Document, parent: &Invocation) -> Vec<WorkspaceRec
             invocation_id: child.id.clone(),
             state: child.state,
             error: child.error.clone(),
+            workspace_scope: child.request.workspace_scope.clone(),
+            reservation_id: child.request.reservation_id.clone(),
+            request_generation: child.request.generation.clone(),
+            request_profile_hash: child.request.profile_hash.clone(),
+            invocation_activation: child.activation.clone(),
+            demand_backend_activation: demand.backend_activation.clone(),
+            physical_effect: child_physical_effect(s, demand, parent, child),
             started: child.started,
             execution_deadline: child.execution_deadline,
             cancellation_requested_at: child.cancellation.as_ref().map(|value| value.requested_at),
@@ -252,17 +264,77 @@ fn scoped_child_summaries(s: &Document, parent: &Invocation) -> Vec<WorkspaceRec
         .collect()
 }
 
-fn scoped_children_terminal(s: &Document, parent_id: &str) -> bool {
-    s.data
-        .invocations
-        .values()
-        .filter(|child| scoped_to_parent(s, child, parent_id))
-        .all(|child| {
-            !matches!(
-                child.state,
-                InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
-            )
-        })
+fn scoped_children_physically_recoverable(
+    s: &Document,
+    demand: &Demand,
+    parent: &Invocation,
+) -> bool {
+    let children = scoped_child_summaries(s, demand, parent);
+    scoped_children_physically_recoverable_from_summaries(&children)
+}
+
+fn scoped_children_terminal_from_summaries(children: &[WorkspaceRecoveryChild]) -> bool {
+    children
+        .iter()
+        .all(|child| child.physical_effect == WorkspaceRecoveryChildPhysicalEffect::Terminal)
+}
+
+fn scoped_children_physically_recoverable_from_summaries(
+    children: &[WorkspaceRecoveryChild],
+) -> bool {
+    children.iter().all(|child| {
+        matches!(
+            child.physical_effect,
+            WorkspaceRecoveryChildPhysicalEffect::Terminal
+                | WorkspaceRecoveryChildPhysicalEffect::ConfinedToDemandBackend
+        )
+    })
+}
+
+fn child_physical_effect(
+    s: &Document,
+    demand: &Demand,
+    parent: &Invocation,
+    child: &Invocation,
+) -> WorkspaceRecoveryChildPhysicalEffect {
+    match child.state {
+        InvocationState::Queued | InvocationState::Running => {
+            WorkspaceRecoveryChildPhysicalEffect::UnresolvedActive
+        }
+        InvocationState::Uncertain
+            if uncertain_child_confined_to_demand_backend(s, demand, parent, child) =>
+        {
+            WorkspaceRecoveryChildPhysicalEffect::ConfinedToDemandBackend
+        }
+        InvocationState::Uncertain => WorkspaceRecoveryChildPhysicalEffect::IndependentUnproven,
+        InvocationState::Completed
+        | InvocationState::Cancelled
+        | InvocationState::Failed
+        | InvocationState::Expired => WorkspaceRecoveryChildPhysicalEffect::Terminal,
+    }
+}
+
+fn uncertain_child_confined_to_demand_backend(
+    s: &Document,
+    demand: &Demand,
+    parent: &Invocation,
+    child: &Invocation,
+) -> bool {
+    child.request.reservation_id == demand.id
+        && child.request.generation == demand.generation
+        && child.request.profile_hash == demand.profile_hash
+        && child.activation.as_deref() == Some(demand.generation.as_str())
+        && child.request.work.is_none()
+        && demand
+            .backend_activation
+            .as_deref()
+            .is_some_and(|activation| !activation.is_empty())
+        && child
+            .request
+            .workspace_scope
+            .as_ref()
+            .and_then(|scope| s.data.workspace_scopes.get(scope))
+            .is_some_and(|scope| scope.invocation_id.as_deref() == Some(parent.id.as_str()))
 }
 
 fn scoped_to_parent(s: &Document, child: &Invocation, parent_id: &str) -> bool {
@@ -382,10 +454,16 @@ mod tests {
                 state_root: state_root.clone(),
             });
             config.fixture_mode = true;
+            let fixture_executable = PathBuf::from("/bin/sleep");
+            let fixture_executable_sha256 = digest(&fs::read(&fixture_executable).unwrap());
             for profile in &mut config.profiles {
                 profile.driver = Driver::Fixture;
                 profile.qualified = true;
                 profile.evidence = vec!["synthetic-no-gpu".into()];
+                profile.executable = fixture_executable.clone();
+                profile.executable_sha256 = fixture_executable_sha256.clone();
+                profile.args = vec!["60".into()];
+                profile.stop_seconds = 2;
             }
             Self {
                 service: Arc::new(Service::new(config)),
@@ -672,6 +750,226 @@ mod tests {
                 .unwrap();
             (demand, parent)
         }
+
+        fn live_deadlock_pattern(&self, demand: Demand, owned_effect: bool) -> Demand {
+            let mut demand = demand;
+            if owned_effect {
+                let process = crate::hosting::Hosting {
+                    config: &self.service.config,
+                }
+                .start(&demand)
+                .unwrap();
+                demand.process = Some(process);
+                demand.effect_started = true;
+            }
+            let scope_id = crate::workspace_scope::key(&demand.id, "workspace");
+            let children = vec![
+                self.child(
+                    &demand,
+                    &scope_id,
+                    "terminal-completed",
+                    InvocationState::Completed,
+                    None,
+                    false,
+                    false,
+                    None,
+                ),
+                self.child(
+                    &demand,
+                    &scope_id,
+                    "terminal-cancelled",
+                    InvocationState::Cancelled,
+                    None,
+                    false,
+                    false,
+                    None,
+                ),
+                self.child(
+                    &demand,
+                    &scope_id,
+                    "terminal-failed",
+                    InvocationState::Failed,
+                    Some("fixture_failed"),
+                    false,
+                    false,
+                    None,
+                ),
+                self.child(
+                    &demand,
+                    &scope_id,
+                    "terminal-expired",
+                    InvocationState::Expired,
+                    Some("fixture_expired"),
+                    false,
+                    false,
+                    None,
+                ),
+                self.child(
+                    &demand,
+                    &scope_id,
+                    "uncertain-oversized",
+                    InvocationState::Uncertain,
+                    Some("backend_response_oversized"),
+                    false,
+                    false,
+                    None,
+                ),
+            ];
+            self.replace_scoped_children(&demand, &scope_id, children);
+            demand
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn child(
+            &self,
+            demand: &Demand,
+            scope_id: &str,
+            id: &str,
+            state: InvocationState,
+            error: Option<&str>,
+            nested_work: bool,
+            generation_mismatch: bool,
+            activation: Option<String>,
+        ) -> Invocation {
+            let terminal = !matches!(
+                state,
+                InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
+            );
+            let generation = if generation_mismatch {
+                "other-generation".to_string()
+            } else {
+                demand.generation.clone()
+            };
+            Invocation {
+                scope_access_hash: None,
+                id: id.into(),
+                owner: demand.owner.clone(),
+                request: Inference {
+                    work: nested_work.then(Self::work),
+                    schema: VERSION.into(),
+                    submission_id: format!("{id}-submission"),
+                    reservation_id: demand.id.clone(),
+                    generation,
+                    profile_hash: demand.profile_hash.clone(),
+                    prompt: String::new(),
+                    payload: None,
+                    max_tokens: 16,
+                    timeout_seconds: 60,
+                    wait_seconds: None,
+                    workspace_scope: Some(scope_id.to_string()),
+                },
+                state,
+                queue_order: 2,
+                waiting_deadline: now() + 60,
+                execution_deadline: if state == InvocationState::Queued {
+                    None
+                } else if state == InvocationState::Running {
+                    Some(now() + 60)
+                } else {
+                    Some(now() - 1)
+                },
+                response_bytes: 1024,
+                cancellation: matches!(
+                    state,
+                    InvocationState::Cancelled | InvocationState::Uncertain
+                )
+                .then(|| CancellationIntent {
+                    requested_at: now(),
+                }),
+                late_result: terminal.then(|| json!({"late": true})),
+                result_digest: None,
+                late_result_digest: None,
+                started: (state != InvocationState::Queued).then(|| now() - 1),
+                activation: activation.or_else(|| {
+                    (state != InvocationState::Queued).then(|| demand.generation.clone())
+                }),
+                result: None,
+                error: error.map(str::to_string),
+            }
+        }
+
+        fn replace_scoped_children(
+            &self,
+            demand: &Demand,
+            scope_id: &str,
+            children: Vec<Invocation>,
+        ) {
+            self.service
+                .authority
+                .update(|s| {
+                    s.data.demands.insert(demand.id.clone(), demand.clone());
+                    s.claims.insert("gpu-4060ti".into(), demand.id.clone());
+                    s.data.invocations.retain(|_, invocation| {
+                        invocation.request.workspace_scope.as_deref() != Some(scope_id)
+                    });
+                    for child in children {
+                        s.data.invocations.insert(child.id.clone(), child);
+                    }
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        fn mutate_scoped_child(&self, id: &str, mutate: impl FnOnce(&mut Invocation)) {
+            self.service
+                .authority
+                .update(|s| {
+                    let child = s.data.invocations.get_mut(id).unwrap();
+                    mutate(child);
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        fn reopen_scope(&self, demand: &Demand) {
+            let scope_id = crate::workspace_scope::key(&demand.id, "workspace");
+            self.service
+                .authority
+                .update(|s| {
+                    let scope = s.data.workspace_scopes.get_mut(&scope_id).unwrap();
+                    scope.closed_at_ms = None;
+                    scope.deadline_ms = crate::workspace_scope::now_ms() + 60_000;
+                    Ok(())
+                })
+                .unwrap();
+        }
+
+        fn parent_packet_path(parent: &Invocation) -> PathBuf {
+            PathBuf::from(
+                parent
+                    .late_result
+                    .as_ref()
+                    .and_then(|value| value.get("packet_path"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap(),
+            )
+        }
+
+        fn rewrite_packet_status(&self, parent: &Invocation, status: &str) {
+            let path = Self::parent_packet_path(parent);
+            let mut packet: serde_json::Value =
+                serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            packet["status"] = json!(status);
+            fs::write(path, serde_json::to_string(&packet).unwrap()).unwrap();
+        }
+
+        fn assert_fenced(&self, demand: &Demand, parent: &Invocation) {
+            Monitor {
+                service: Arc::clone(&self.service),
+            }
+            .tick()
+            .unwrap();
+            self.service
+                .authority
+                .read(|s| {
+                    let saved = s.data.demands.get(&demand.id).unwrap();
+                    let invocation = s.data.invocations.get(&parent.id).unwrap();
+                    assert!(!allows_recovery(s, saved, invocation));
+                    assert!(!saved.workspace_recovery_analyses.contains_key(&parent.id));
+                    Ok(())
+                })
+                .unwrap();
+        }
     }
 
     impl Drop for Fixture {
@@ -742,6 +1040,154 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn confined_uncertain_scoped_child_allows_stop_only_recovery_without_rewriting_history() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, true);
+
+        Monitor {
+            service: Arc::clone(&fixture.service),
+        }
+        .tick()
+        .unwrap();
+
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                let saved = s.data.demands.get(&demand.id).unwrap();
+                let invocation = s.data.invocations.get(&parent.id).unwrap();
+                let child = s.data.invocations.get("uncertain-oversized").unwrap();
+                assert_eq!(child.state, InvocationState::Uncertain);
+                assert_eq!(child.error.as_deref(), Some("backend_response_oversized"));
+                assert!(allows_recovery(s, saved, invocation));
+                let analysis = saved.workspace_recovery_analyses.get(&parent.id).unwrap();
+                assert!(!analysis.checks.scoped_children_terminal);
+                assert!(analysis.checks.scoped_children_physically_recoverable);
+                let child_evidence = analysis
+                    .scoped_children
+                    .iter()
+                    .find(|child| child.invocation_id == "uncertain-oversized")
+                    .unwrap();
+                assert_eq!(child_evidence.state, InvocationState::Uncertain);
+                assert_eq!(
+                    child_evidence.physical_effect,
+                    WorkspaceRecoveryChildPhysicalEffect::ConfinedToDemandBackend
+                );
+                assert_eq!(child_evidence.request_generation, demand.generation);
+                assert_eq!(
+                    child_evidence.invocation_activation.as_deref(),
+                    Some(demand.generation.as_str())
+                );
+                assert_eq!(
+                    child_evidence.demand_backend_activation.as_deref(),
+                    demand.backend_activation.as_deref()
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        let fresh = fixture.service.inspect(&demand.owner, &demand.id).unwrap();
+        Transition {
+            service: &fixture.service,
+        }
+        .advance(&fresh)
+        .unwrap();
+        let released = fixture.service.inspect(&demand.owner, &demand.id).unwrap();
+        assert_eq!(released.state, DemandState::Released);
+        let reconciliation = released.recovery_reconciliation.as_ref().unwrap();
+        assert!(reconciliation.cleanup_process.is_some());
+        assert_eq!(reconciliation.current_effect, CurrentEffect::ProvenAbsent);
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                assert!(s.claims.is_empty());
+                let child = s.data.invocations.get("uncertain-oversized").unwrap();
+                assert_eq!(child.state, InvocationState::Uncertain);
+                assert_eq!(child.error.as_deref(), Some("backend_response_oversized"));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn queued_scoped_child_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.mutate_scoped_child("uncertain-oversized", |child| {
+            child.state = InvocationState::Queued;
+            child.error = None;
+            child.activation = None;
+            child.started = None;
+        });
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn running_scoped_child_remains_fenced_after_scope_close() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.mutate_scoped_child("uncertain-oversized", |child| {
+            child.state = InvocationState::Running;
+            child.error = None;
+            child.execution_deadline = Some(now() + 60);
+        });
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn uncertain_child_with_independent_work_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.mutate_scoped_child("uncertain-oversized", |child| {
+            child.request.work = Some(Fixture::work());
+        });
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn open_workspace_scope_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.reopen_scope(&demand);
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn missing_parent_packet_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fs::remove_file(Fixture::parent_packet_path(&parent)).unwrap();
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn nonterminal_parent_packet_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.rewrite_packet_status(&parent, "running");
+        fixture.assert_fenced(&demand, &parent);
+    }
+
+    #[test]
+    fn uncertain_child_generation_mismatch_remains_fenced() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, false);
+        fixture.mutate_scoped_child("uncertain-oversized", |child| {
+            child.request.generation = "other-generation".into();
+        });
+        fixture.assert_fenced(&demand, &parent);
     }
 
     #[test]
