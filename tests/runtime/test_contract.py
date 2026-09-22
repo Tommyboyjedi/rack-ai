@@ -28,6 +28,44 @@ class ContractTests(unittest.TestCase):
                 r.release(d);validate(r.wait(d,'released'))
             finally:r.close()
 
+    def test_compacted_terminal_invocation_stays_within_public_response_schema(self):
+        schema=json.loads((ROOT/'config/runtime/response.schema.json').read_text())
+        def validate(result):
+            jsonschema.validate(dict(schema=VERSION,result=result),schema)
+        with tempfile.TemporaryDirectory(prefix='rack-contract-compacted-invocation-') as root:
+            r=Rack(root)
+            try:
+                d=r.wait(r.acquire('athba','local-primary','low'))
+                identity='contract-compacted-terminal'
+                prompt='compact-me-' + ('x' * 128000)
+                invocation=r.infer(d, identity=identity, prompt=prompt)
+                validate(invocation)
+                terminal=r.result(invocation)
+                validate(terminal)
+                managed=json.loads((Path(root)/'authority/managed.json').read_text())
+                stored=managed['data']['invocations'][invocation['id']]
+                self.assertIn('request_digest', stored)
+                self.assertIn('request_bytes', stored)
+                self.assertNotIn('payload', stored['request'])
+                self.assertEqual(stored['request']['prompt'], '')
+                for field in ['request_digest','request_bytes','work_digest','work_bytes']:
+                    self.assertNotIn(field, terminal)
+                replay=r.infer(d, identity=identity, prompt=prompt)
+                validate(replay)
+                self.assertEqual(replay['id'], invocation['id'])
+                conflict=r.call('athba','infer',status=409,request=dict(
+                    schema=VERSION,submission_id=identity,reservation_id=d['id'],
+                    generation=d['generation'],profile_hash=d['profile_hash'],
+                    prompt='different request',max_tokens=16,timeout_seconds=5))
+                self.assertEqual(conflict['error'],'identity_conflict')
+                for operation in ['result','reconcile','cancel']:
+                    response=r.call('athba',operation,invocation_id=invocation['id'])
+                    validate(response)
+                    for field in ['request_digest','request_bytes','work_digest','work_bytes']:
+                        self.assertNotIn(field, response)
+            finally:
+                r.close()
+
     def test_discovery_and_ready_reservation_publish_effective_token_limits(self):
         with tempfile.TemporaryDirectory(prefix='rack-token-contract-') as root:
             def configure(c):

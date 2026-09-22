@@ -222,22 +222,29 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
                 request,
             })?,
         )?,
-        Request::Infer { request } => serde_json::to_value(
+        Request::Infer { request } => public_invocation(
             (crate::inference::Submission { service }).submit(&source.source, *request)?,
-        )
-        .map_err(|e| e.to_string())?,
+        )?,
         Request::Result { invocation_id } | Request::Reconcile { invocation_id } => {
-            serde_json::to_value(service.result(&source.source, &invocation_id)?)
-                .map_err(|e| e.to_string())?
+            public_invocation(service.result(&source.source, &invocation_id)?)?
         }
-        Request::Cancel { invocation_id } => serde_json::to_value(
+        Request::Cancel { invocation_id } => public_invocation(
             (crate::control::ReservationControl { service })
                 .cancel_invocation(&source.source, &invocation_id)?,
-        )
-        .map_err(|e| e.to_string())?,
+        )?,
     };
     Ok(json!({"schema":VERSION, "result":value}))
 }
+fn public_invocation(invocation: Invocation) -> Result<Value, String> {
+    let mut value = serde_json::to_value(&invocation).map_err(|e| e.to_string())?;
+    let object = value.as_object_mut().ok_or("invalid_public_invocation")?;
+    object.remove("request_digest");
+    object.remove("request_bytes");
+    object.remove("work_digest");
+    object.remove("work_bytes");
+    Ok(value)
+}
+
 pub(crate) fn public(d: Demand) -> Result<Value, String> {
     let mut value = serde_json::to_value(&d).map_err(|e| e.to_string())?;
     let object = value.as_object_mut().ok_or("invalid_public_record")?;
