@@ -333,6 +333,20 @@ pub struct WorkspaceRecoveryChild {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_scope: Option<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reservation_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_generation: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub request_profile_hash: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invocation_activation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub demand_backend_activation: Option<String>,
+    #[serde(default)]
+    pub physical_effect: WorkspaceRecoveryChildPhysicalEffect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_deadline: Option<u64>,
@@ -340,6 +354,21 @@ pub struct WorkspaceRecoveryChild {
     pub cancellation_requested_at: Option<u64>,
     pub result_present: bool,
     pub late_result_present: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceRecoveryChildPhysicalEffect {
+    Terminal,
+    ConfinedToDemandBackend,
+    UnresolvedActive,
+    IndependentUnproven,
+}
+
+impl Default for WorkspaceRecoveryChildPhysicalEffect {
+    fn default() -> Self {
+        Self::IndependentUnproven
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -351,6 +380,12 @@ pub struct WorkspaceRecoveryChecks {
     /// No scoped child invocation for this workspace parent is queued, running,
     /// or uncertain.
     pub scoped_children_terminal: bool,
+    /// Every scoped child is either logically terminal or historically
+    /// uncertain but physically confined to the fenced demand backend that
+    /// stop-only Recovery will tear down. The historical child outcome is not
+    /// rewritten.
+    #[serde(default)]
+    pub scoped_children_physically_recoverable: bool,
     /// All workspace scopes owned by this parent are closed or past deadline.
     pub workspace_scope_closed_or_expired: bool,
     /// The retained packet path was canonicalized under workspace.state_root.
