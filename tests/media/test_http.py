@@ -150,7 +150,7 @@ def test_native_module_burst_queues_without_starving_status(tmp_path):
             assert {future.result().status_code for future in futures} == {200}
 
 
-def test_native_static_assets_use_verified_grant_but_api_revalidates(tmp_path):
+def test_native_frontend_reads_use_verified_grant_but_mutations_revalidate(tmp_path):
     with receiver(tmp_path / "machine") as env:
         owner = {"Authorization":"Bearer "+TOKEN}
         requests.post(env["api"]+"/api/media/v1/sessions",
@@ -160,8 +160,9 @@ def test_native_static_assets_use_verified_grant_but_api_revalidates(tmp_path):
         update_machine(env, gpu_probe_error=True)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
-                futures = [pool.submit(requests.get,env["native"]+f"/assets/cached-{i}.js",headers=owner,timeout=8) for i in range(64)]
+                paths = ["/object_info", "/system_stats", "/queue", "/global_subgraphs"] * 32
+                futures = [pool.submit(requests.get,env["native"]+path,headers=owner,timeout=8) for path in paths]
                 assert {future.result().status_code for future in futures} == {200}
-            assert requests.get(env["native"]+"/object_info",headers=owner,timeout=3).status_code == 409
+            assert requests.post(env["native"]+"/prompt",headers=owner,json={"prompt_id":"blocked","prompt":{}},timeout=3).status_code == 409
         finally:
             update_machine(env, gpu_probe_error=False)

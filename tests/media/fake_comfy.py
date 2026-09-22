@@ -164,6 +164,8 @@ app.router.add_get("/", native)
 async def object_info(request):
     return web.json_response({"FixtureNode": {"input": {"required": {}}, "output": ["IMAGE"]}})
 app.router.add_get("/object_info", object_info)
+app.router.add_get("/system_stats", lambda request: web.json_response({"system": "fixture"}))
+app.router.add_get("/global_subgraphs", lambda request: web.json_response({}))
 app.router.add_get("/ws", websocket)
 app.router.add_get("/assets/{name}", asset)
 (root / "machine.json").write_text(json.dumps({"active": False, "pid": os.getpid(), "controller_pid": os.getpid(), "invocation": ""}))

@@ -49,10 +49,9 @@ pub async fn handle(State(app): State<WebState>, request: Request) -> Response {
         .get(header::UPGRADE)
         .and_then(|h| h.to_str().ok())
         .is_some_and(|h| h.eq_ignore_ascii_case("websocket"));
-    let static_frontend =
-        !websocket && static_frontend_request(request.method(), request.uri().path());
+    let frontend_read = !websocket && frontend_read_request(request.method(), request.uri().path());
     let read = app.clone();
-    let result = blocking(move || authorize_native(&read, &principal, static_frontend)).await;
+    let result = blocking(move || authorize_native(&read, &principal, frontend_read)).await;
     let secret = match result {
         Ok(Access::Ready(secret)) => secret,
         Ok(Access::Temporary(message)) => {
@@ -84,7 +83,7 @@ pub async fn handle(State(app): State<WebState>, request: Request) -> Response {
 fn authorize_native(
     app: &WebState,
     principal: &Principal,
-    static_frontend: bool,
+    frontend_read: bool,
 ) -> Result<Access, String> {
     let state = app.store.read()?;
     if state.service.mode != Mode::Interactive {
@@ -118,7 +117,7 @@ fn authorize_native(
         clear_static_grant(app);
         return Ok(Access::Absent);
     };
-    if static_frontend {
+    if frontend_read {
         if let Some(secret) = cached_static_grant(
             app,
             &principal.id,
@@ -140,7 +139,7 @@ fn authorize_native(
     let secret = std::fs::read_to_string(&app.config.control_secret_file)
         .map(|s| s.trim().to_string())
         .map_err(|e| e.to_string())?;
-    if static_frontend {
+    if frontend_read {
         remember_static_grant(
             app,
             NativeStaticGrant {
@@ -156,16 +155,8 @@ fn authorize_native(
     Ok(Access::Ready(secret))
 }
 
-pub(crate) fn static_frontend_request(method: &Method, path: &str) -> bool {
-    matches!(*method, Method::GET | Method::HEAD)
-        && (path == "/"
-            || path == "/favicon.ico"
-            || path == "/materialdesignicons.min.css"
-            || path == "/user.css"
-            || path == "/api/userdata/user.css"
-            || path.starts_with("/assets/")
-            || path.starts_with("/extensions/")
-            || path.starts_with("/fonts/"))
+pub(crate) fn frontend_read_request(method: &Method, path: &str) -> bool {
+    matches!(*method, Method::GET | Method::HEAD) && path != "/ws"
 }
 
 fn cached_static_grant(
@@ -202,22 +193,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn static_frontend_classifier_is_narrow() {
-        assert!(static_frontend_request(&Method::GET, "/"));
-        assert!(static_frontend_request(&Method::HEAD, "/assets/index.js"));
-        assert!(static_frontend_request(
-            &Method::GET,
-            "/fonts/material.woff2"
-        ));
-        assert!(static_frontend_request(
+    fn frontend_read_classifier_covers_bootstrap_gets_only() {
+        assert!(frontend_read_request(&Method::GET, "/"));
+        assert!(frontend_read_request(&Method::HEAD, "/assets/index.js"));
+        assert!(frontend_read_request(&Method::GET, "/fonts/material.woff2"));
+        assert!(frontend_read_request(
             &Method::GET,
             "/api/userdata/user.css"
         ));
-        assert!(!static_frontend_request(&Method::POST, "/assets/index.js"));
-        assert!(!static_frontend_request(&Method::GET, "/object_info"));
-        assert!(!static_frontend_request(&Method::GET, "/system_stats"));
-        assert!(!static_frontend_request(&Method::GET, "/queue"));
-        assert!(!static_frontend_request(&Method::GET, "/history/abc"));
-        assert!(!static_frontend_request(&Method::GET, "/ws"));
+        assert!(frontend_read_request(&Method::GET, "/object_info"));
+        assert!(frontend_read_request(&Method::GET, "/system_stats"));
+        assert!(frontend_read_request(&Method::GET, "/queue"));
+        assert!(frontend_read_request(&Method::GET, "/history/abc"));
+        assert!(frontend_read_request(&Method::GET, "/global_subgraphs"));
+        assert!(!frontend_read_request(&Method::POST, "/assets/index.js"));
+        assert!(!frontend_read_request(&Method::POST, "/prompt"));
+        assert!(!frontend_read_request(&Method::GET, "/ws"));
     }
 }
