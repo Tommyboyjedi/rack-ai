@@ -30,7 +30,7 @@ impl Default for Limits {
             max_transition_workers: 8,
             max_gateway_waiters: 32,
             max_wait_seconds: 300,
-            max_response_bytes: 256 * 1024,
+            max_response_bytes: 3 * 1024 * 1024,
             retention_admission_bytes: 30 * 1024 * 1024,
             terminal_evidence_bytes: 8 * 1024 * 1024,
         }
@@ -239,6 +239,19 @@ pub fn diagnostic(mut error: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn runtime_response_budget_baseline_is_three_mib() {
+        const BASELINE: u64 = 3 * 1024 * 1024;
+        assert_eq!(Limits::default().max_response_bytes, BASELINE);
+        let example: serde_json::Value =
+            serde_json::from_str(include_str!("../../../config/runtime/config.example.json"))
+                .unwrap();
+        assert_eq!(
+            example["limits"]["max_response_bytes"].as_u64(),
+            Some(BASELINE)
+        );
+    }
+
     #[test]
     fn configured_capacity_limits_reject_zero_excess_and_unknown_fields() {
         for value in [

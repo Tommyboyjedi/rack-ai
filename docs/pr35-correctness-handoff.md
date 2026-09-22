@@ -81,8 +81,7 @@ These are CPU fixture processes exercising production logic, not live GPU qualif
 The [public contract](runtime-public-contract.md#configuration-validation-and-retention)
 publishes exact limits, identity/replay rules, cancellation outcomes and the retention
 procedure. Retention admission is deliberately conservative and can refuse before the
-nominal byte ceiling. Results have a frozen default 256 KiB bound (administrator maximum
-4 MiB). Existing on-disk deadlines and response bounds remain bounded and readable.
+nominal byte ceiling. Results have a frozen production baseline 3 MiB bound. Existing on-disk deadlines and response bounds remain bounded and readable.
 
 There is no automatic evidence deletion or archive compaction. At capacity, stop new
 submissions, finish/cancel accepted work, reconcile uncertainty, prove owned cleanup,
