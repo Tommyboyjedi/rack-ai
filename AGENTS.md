@@ -18,6 +18,23 @@ For architecture detail, safety invariants, and verification guidance, see:
 - `docs/engineering-contract.md`
 - `docs/generic-bounded-workspace-execution.md`
 
+## Approved resource-accounting policy (2026-09-23)
+
+Before changing retention, archival, replay lookup or capacity accounting, read
+[the approved historical-accounting resolution](docs/resource-accounting-retirement-policy.md).
+Historical working data and receipts retire from active accounting after verified
+cleanup, remain retrievable in a separate owner-scoped archive, and expire 14 days
+after verified reservation closure unless explicitly protected. Completed calls
+also retire during long-running reservations. Historical uncertainty alone does
+not prevent retirement once physical cleanup is proven.
+
+This is explicit operator approval for that retention lifecycle, not permission
+to discard unresolved-recovery evidence or application assets. Implementation is
+pending. Active-call accounting is a separate required follow-up; do not change its
+formula or approved limits as part of historical retirement. Do not silently
+change token limits, response limits, timeouts or tool profiles to make an
+accounting test pass. Keep the documentation PR separate from implementation.
+
 ## Core Boundary
 
 Rack AI is a generic rack execution and resource-control plane. It is neither a raw prompt proxy nor a client-specific software-engineering orchestrator.

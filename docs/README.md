@@ -2,6 +2,15 @@
 
 This directory holds operational notes and design docs for the rack.
 
+## Approved resource-accounting decision
+
+[Resource accounting: approved history retirement and active-call follow-up](resource-accounting-retirement-policy.md)
+records the operator-approved historical accounting resolution: immediate retirement
+from active state after verified cleanup, owner-scoped archival, and automatic
+14-day expiration after closure. Completed calls also retire during long-running
+reservations. Implementation is pending. Active-call accounting is explicitly a
+separate required next task, not solved or authorized for redesign by that policy.
+
 The first non-swarm orchestration path is the JSON task contract executed by `bin/rack-task`.
 
 `bin/rack-task` supports either:
