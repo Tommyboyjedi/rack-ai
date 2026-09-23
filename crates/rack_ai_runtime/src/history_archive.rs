@@ -305,25 +305,13 @@ pub fn prepare_maintenance(
     })
 }
 
-pub fn commit_prepared_maintenance(
-    _root: &Path,
-    s: &mut Document,
-    prepared: PreparedMaintenance,
-) -> Result<MaintenanceReport, String> {
-    let mut report = MaintenanceReport::default();
-    match &prepared.plan.kind {
+pub fn prepared_maintenance_eligible(
+    s: &Document,
+    prepared: &PreparedMaintenance,
+) -> Result<bool, String> {
+    Ok(match &prepared.plan.kind {
         MaintenancePlanKind::ActiveInvocation { invocation, .. } => {
-            let eligible = s.data.invocations.get(&invocation.id).is_some_and(|live| {
-                serialized_equal(live, invocation)
-                    && active_invocation_dependencies_clear(s, live, prepared.plan.at)
-            });
-            if !eligible {
-                discard_staged(&prepared.staged);
-                return Ok(report);
-            }
-            publish_staged(&prepared.staged)?;
-            s.data.invocations.remove(&invocation.id);
-            report.archived_invocations = 1;
+            active_invocation_prepared_eligible(s, invocation, prepared.plan.at)
         }
         MaintenancePlanKind::ClosedGroup {
             root: demand,
@@ -331,35 +319,82 @@ pub fn commit_prepared_maintenance(
             members,
             invocations,
             ..
+        } => closed_group_prepared_eligible(
+            s,
+            demand,
+            member_ids,
+            members,
+            invocations,
+            prepared.plan.at,
+        ),
+        MaintenancePlanKind::Expire => true,
+    })
+}
+
+fn active_invocation_prepared_eligible(s: &Document, invocation: &Invocation, at: u64) -> bool {
+    s.data.invocations.get(&invocation.id).is_some_and(|live| {
+        serialized_equal(live, invocation) && active_invocation_dependencies_clear(s, live, at)
+    })
+}
+
+fn closed_group_prepared_eligible(
+    s: &Document,
+    demand: &Demand,
+    member_ids: &[String],
+    members: &[Demand],
+    invocations: &[Invocation],
+    at: u64,
+) -> bool {
+    let members_match = member_ids.iter().all(|id| {
+        let Some(live) = s.data.demands.get(id) else {
+            return false;
+        };
+        members
+            .iter()
+            .find(|member| member.id == *id)
+            .is_some_and(|snapshot| serialized_equal(live, snapshot))
+    });
+    let invocations_match = invocations.iter().all(|snapshot| {
+        s.data
+            .invocations
+            .get(&snapshot.id)
+            .is_some_and(|live| serialized_equal(live, snapshot))
+    });
+    s.data
+        .demands
+        .get(&demand.id)
+        .is_some_and(|live| serialized_equal(live, demand))
+        && members_match
+        && invocations_match
+        && closed_group_eligible(s, &demand.id, at)
+}
+
+pub fn publish_prepared_maintenance(prepared: &PreparedMaintenance) -> Result<(), String> {
+    publish_staged(&prepared.staged)
+}
+
+pub fn discard_prepared_maintenance(prepared: &PreparedMaintenance) {
+    discard_staged(&prepared.staged);
+}
+
+pub fn commit_published_maintenance(
+    s: &mut Document,
+    prepared: PreparedMaintenance,
+) -> Result<MaintenanceReport, String> {
+    let mut report = MaintenanceReport::default();
+    if !prepared_maintenance_eligible(s, &prepared)? {
+        return Ok(report);
+    }
+    match prepared.plan.kind {
+        MaintenancePlanKind::ActiveInvocation { invocation, .. } => {
+            s.data.invocations.remove(&invocation.id);
+            report.archived_invocations = 1;
+        }
+        MaintenancePlanKind::ClosedGroup {
+            member_ids,
+            invocations,
+            ..
         } => {
-            let members_match = member_ids.iter().all(|id| {
-                let Some(live) = s.data.demands.get(id) else {
-                    return false;
-                };
-                members
-                    .iter()
-                    .find(|member| member.id == *id)
-                    .is_some_and(|snapshot| serialized_equal(live, snapshot))
-            });
-            let invocations_match = invocations.iter().all(|snapshot| {
-                s.data
-                    .invocations
-                    .get(&snapshot.id)
-                    .is_some_and(|live| serialized_equal(live, snapshot))
-            });
-            let eligible = s
-                .data
-                .demands
-                .get(&demand.id)
-                .is_some_and(|live| serialized_equal(live, demand))
-                && members_match
-                && invocations_match
-                && closed_group_eligible(s, &demand.id, prepared.plan.at);
-            if !eligible {
-                discard_staged(&prepared.staged);
-                return Ok(report);
-            }
-            publish_staged(&prepared.staged)?;
             for invocation in invocations {
                 s.data.invocations.remove(&invocation.id);
                 report.archived_invocations += 1;
@@ -368,7 +403,7 @@ pub fn commit_prepared_maintenance(
             s.data
                 .workspace_scopes
                 .retain(|_, scope| !member_set.contains(&scope.reservation_id));
-            for id in member_ids {
+            for id in &member_ids {
                 s.data.demands.remove(id);
             }
             report.archived_reservations = 1;
@@ -1172,6 +1207,7 @@ fn stage_json<T: Serialize>(
 }
 
 fn publish_staged(staged: &[StagedFile]) -> Result<(), String> {
+    pause_maintenance_publish_io_if_configured();
     for file in staged {
         let contents = fs::read_to_string(&file.stage_path).map_err(|e| e.to_string())?;
         match fs::read_to_string(&file.final_path) {
@@ -1245,18 +1281,33 @@ static MAINTENANCE_IO_PAUSE: std::sync::Mutex<Option<std::sync::Arc<MaintenanceI
     std::sync::Mutex::new(None);
 
 #[cfg(test)]
+static MAINTENANCE_PUBLISH_IO_PAUSE: std::sync::Mutex<Option<std::sync::Arc<MaintenanceIoPause>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn install_maintenance_io_pause(pause: std::sync::Arc<MaintenanceIoPause>) {
     *MAINTENANCE_IO_PAUSE.lock().unwrap() = Some(pause);
 }
 
 #[cfg(test)]
+#[allow(dead_code)]
 pub(crate) fn clear_maintenance_io_pause() {
     *MAINTENANCE_IO_PAUSE.lock().unwrap() = None;
 }
 
 #[cfg(test)]
-fn pause_maintenance_io_if_configured() {
-    let pause = MAINTENANCE_IO_PAUSE.lock().unwrap().take();
+pub(crate) fn install_maintenance_publish_io_pause(pause: std::sync::Arc<MaintenanceIoPause>) {
+    *MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap() = Some(pause);
+}
+
+#[cfg(test)]
+pub(crate) fn clear_maintenance_publish_io_pause() {
+    *MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+fn pause_for_test(pause: Option<std::sync::Arc<MaintenanceIoPause>>) {
     if let Some(pause) = pause {
         let (entered_lock, entered_condvar) = &pause.entered;
         *entered_lock.lock().unwrap() = true;
@@ -1269,8 +1320,23 @@ fn pause_maintenance_io_if_configured() {
     }
 }
 
+#[cfg(test)]
+fn pause_maintenance_io_if_configured() {
+    let pause = MAINTENANCE_IO_PAUSE.lock().unwrap().take();
+    pause_for_test(pause);
+}
+
+#[cfg(test)]
+fn pause_maintenance_publish_io_if_configured() {
+    let pause = MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap().take();
+    pause_for_test(pause);
+}
+
 #[cfg(not(test))]
 fn pause_maintenance_io_if_configured() {}
+
+#[cfg(not(test))]
+fn pause_maintenance_publish_io_if_configured() {}
 
 fn expire(root: &Path, at: u64) -> Result<usize, String> {
     let mut removed = 0;
@@ -1677,6 +1743,28 @@ mod tests {
             .unwrap();
         assert_eq!(archived.state, InvocationState::Uncertain);
         assert_eq!(archived.error.as_deref(), Some("unknown"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_publication_conflict_leaves_active_records_intact() {
+        let root = root("publish-conflict");
+        let doc = document(
+            demand("reservation", DemandState::Released),
+            invocation("call", "reservation", InvocationState::Completed),
+        );
+        let plan = plan_maintenance(&root, &doc, 10).unwrap().unwrap();
+        let prepared = prepare_maintenance(&root, plan).unwrap();
+        assert!(prepared_maintenance_eligible(&doc, &prepared).unwrap());
+        let final_path = prepared.staged[0].final_path.clone();
+        fs::create_dir_all(final_path.parent().unwrap()).unwrap();
+        fs::write(&final_path, r#"{"schema":"conflicting-newer-archive"}"#).unwrap();
+
+        let error = publish_prepared_maintenance(&prepared).unwrap_err();
+        assert_eq!(error, "history_archive_publish_conflict");
+        assert!(doc.data.demands.contains_key("reservation"));
+        assert!(doc.data.invocations.contains_key("call"));
+        discard_prepared_maintenance(&prepared);
         fs::remove_dir_all(root).unwrap();
     }
 

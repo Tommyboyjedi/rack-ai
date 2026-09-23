@@ -70,9 +70,17 @@ impl Service {
                 break;
             };
             let prepared = crate::history_archive::prepare_maintenance(&root, plan)?;
-            let report = self.authority.update(|s| {
-                crate::history_archive::commit_prepared_maintenance(&root, s, prepared)
-            })?;
+            let eligible = self
+                .authority
+                .read(|s| crate::history_archive::prepared_maintenance_eligible(s, &prepared))?;
+            if !eligible {
+                crate::history_archive::discard_prepared_maintenance(&prepared);
+                break;
+            }
+            crate::history_archive::publish_prepared_maintenance(&prepared)?;
+            let report = self
+                .authority
+                .update(|s| crate::history_archive::commit_published_maintenance(s, prepared))?;
             let changed = report.archived_invocations > 0
                 || report.archived_reservations > 0
                 || report.expired_files > 0;

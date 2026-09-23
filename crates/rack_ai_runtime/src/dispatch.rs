@@ -377,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_history_maintenance_does_not_block_unrelated_execution_or_release() {
+    fn paused_history_publication_does_not_block_unrelated_execution_or_release() {
         let fixture = Fixture::new();
         let old = fixture.acquire_ready();
         let old_invocation = crate::inference::Submission {
@@ -404,7 +404,7 @@ mod tests {
         .unwrap();
 
         let pause = crate::history_archive::MaintenanceIoPause::new();
-        crate::history_archive::install_maintenance_io_pause(std::sync::Arc::clone(&pause));
+        crate::history_archive::install_maintenance_publish_io_pause(std::sync::Arc::clone(&pause));
         let service = std::sync::Arc::clone(&fixture.service);
         let maintenance = std::thread::spawn(move || service.retire_history_once());
         pause.wait_until_entered();
@@ -467,7 +467,7 @@ mod tests {
 
         pause.release();
         let report = maintenance.join().unwrap().unwrap();
-        crate::history_archive::clear_maintenance_io_pause();
+        crate::history_archive::clear_maintenance_publish_io_pause();
         assert!(report.archived_invocations >= 1);
     }
 
