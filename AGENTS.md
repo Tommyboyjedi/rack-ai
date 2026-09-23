@@ -61,6 +61,10 @@ A model calling an unavailable tool is not, by itself, evidence that the tool sh
 
 Current worker names and GPU placements are deployment details. Generic clients request broad capabilities and constraints; Rack AI selects the concrete runtime internally.
 
+## Resource Accounting
+
+See `docs/resource-accounting-retirement-policy.md` before changing admission, retention, archive, payload storage, or response-limit behavior. Active authority accounting must keep compact execution facts separate from essential payload bodies and optional diagnostics. Do not reintroduce `response_bytes * 6` charging against `managed.json`, expose internal payload reference fields through the public v1 API, or lower the protected 3 MiB `max_response_bytes` limit to make capacity tests pass. Optional archive/diagnostic maintenance must not roll back completed execution, verified release, or a fresh unrelated first job on a new reservation.
+
 ## Safety Boundaries
 
 - External-repository work must stay inside a Rack AI managed isolated Git worktree.

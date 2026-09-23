@@ -14,7 +14,7 @@ pub struct ReservationAdmission<'a> {
 }
 impl ReservationAdmission<'_> {
     pub fn reserve(&self, request: Reserve) -> Result<Value, String> {
-        self.service.authority.update(|s| {
+        let result = self.service.authority.update(|s| {
             if let Some(d) = s.data.demands.values().find(|d| {
                 d.owner == self.source.source
                     && d.reserve_request
@@ -42,7 +42,6 @@ impl ReservationAdmission<'_> {
                     Err("identity_conflict".into())
                 };
             }
-            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             if !valid_id(&request.acquisition_id)
                 || !valid_id(&request.work_id)
                 || request.services.is_empty()
@@ -153,7 +152,11 @@ impl ReservationAdmission<'_> {
                 .reserve_result = Some(result.clone());
             crate::capacity::retention(s, &self.service.config.limits)?;
             Ok(result)
-        })
+        });
+        if result.is_ok() {
+            self.service.request_history_maintenance();
+        }
+        result
     }
 }
 

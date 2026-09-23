@@ -13,6 +13,7 @@ pub mod idle;
 pub mod inference;
 pub mod media;
 mod media_idle;
+mod payload_store;
 pub mod planner;
 pub mod preflight;
 pub mod process;

@@ -174,6 +174,13 @@ pub enum InvocationState {
 pub struct CancellationIntent {
     pub requested_at: u64,
 }
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct StoredPayloadRef {
+    pub sha256: String,
+    pub bytes: u64,
+    pub path: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Invocation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +200,9 @@ pub struct Invocation {
     /// Serialized byte length of the original full workspace/work request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub work_bytes: Option<u64>,
+    /// Private durable payload reference for the full request while active or archived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_ref: Option<StoredPayloadRef>,
     pub state: InvocationState,
     /// Monotonic local queue position. Dispatch is FIFO within one owned
     /// logical service and never uses global reservation priority.
@@ -214,6 +224,11 @@ pub struct Invocation {
     pub result_digest: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late_result_digest: Option<String>,
+    /// Private durable payload references for complete public results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_ref: Option<StoredPayloadRef>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub late_result_ref: Option<StoredPayloadRef>,
     pub started: Option<u64>,
     pub activation: Option<String>,
     pub result: Option<serde_json::Value>,

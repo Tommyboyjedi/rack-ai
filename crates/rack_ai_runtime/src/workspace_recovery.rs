@@ -115,10 +115,11 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
     if candidate.invocation.error.as_deref() != Some("workspace_model_outcome_uncertain") {
         return Err("workspace_recovery_unsupported_parent_error".into());
     }
-    let (scoped_children, scope_ok) = service.authority.read(|s| {
+    let (parent, scoped_children, scope_ok) = service.authority.read(|s| {
         fence(s, &candidate.demand)?;
         let parent = workspace_parent(s, candidate)?;
         Ok((
+            parent.clone(),
             scoped_child_summaries(s, &candidate.demand, parent),
             workspace_scope_closed_or_expired(s, &parent.id),
         ))
@@ -132,11 +133,11 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
     if !scoped_children_physically_recoverable {
         return Err("workspace_recovery_scoped_child_unproven".into());
     }
-    let result = candidate
-        .invocation
+    let parent = crate::payload_store::hydrate_invocation(&service.config.authority_root, parent)?;
+    let result = parent
         .late_result
         .as_ref()
-        .or(candidate.invocation.result.as_ref())
+        .or(parent.result.as_ref())
         .ok_or("workspace_recovery_parent_result_missing")?;
     let packet_path = result
         .get("packet_path")
@@ -147,12 +148,12 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
     if !terminal_packet_status(&packet_status) {
         return Err("workspace_recovery_packet_not_terminal".into());
     }
-    let work = candidate.invocation.request.work.as_ref();
+    let work = parent.request.work.as_ref();
     let workspace = work.and_then(crate::work_payload::Work::workspace);
     Ok(WorkspaceRecoveryAnalysis {
-        invocation_id: candidate.invocation.id.clone(),
+        invocation_id: parent.id.clone(),
         diagnosed_at: now(),
-        parent_error: candidate.invocation.error.clone(),
+        parent_error: parent.error.clone(),
         work_id: work.map(|work| work.work_id.clone()),
         repository_id: workspace.map(|workspace| workspace.repository.id.clone()),
         repository_root: workspace
@@ -258,8 +259,8 @@ fn scoped_child_summaries(
             started: child.started,
             execution_deadline: child.execution_deadline,
             cancellation_requested_at: child.cancellation.as_ref().map(|value| value.requested_at),
-            result_present: child.result.is_some(),
-            late_result_present: child.late_result.is_some(),
+            result_present: child.result.is_some() || child.result_ref.is_some(),
+            late_result_present: child.late_result.is_some() || child.late_result_ref.is_some(),
         })
         .collect()
 }
@@ -618,6 +619,7 @@ mod tests {
                 request_bytes: None,
                 work_digest: None,
                 work_bytes: None,
+                request_ref: None,
                 state: InvocationState::Uncertain,
                 queue_order: 1,
                 waiting_deadline: now() + 60,
@@ -633,6 +635,8 @@ mod tests {
                 })),
                 result_digest: None,
                 late_result_digest: None,
+                result_ref: None,
+                late_result_ref: None,
                 started: Some(now() - 300),
                 activation: Some(demand.generation.clone()),
                 result: None,
@@ -724,6 +728,7 @@ mod tests {
                             request_bytes: None,
                             work_digest: None,
                             work_bytes: None,
+                            request_ref: None,
                             state: if active_child {
                                 InvocationState::Running
                             } else {
@@ -747,6 +752,8 @@ mod tests {
                             },
                             result_digest: None,
                             late_result_digest: None,
+                            result_ref: None,
+                            late_result_ref: None,
                             started: Some(now() - 1),
                             activation: Some(demand.generation.clone()),
                             result: None,
@@ -870,6 +877,7 @@ mod tests {
                 request_bytes: None,
                 work_digest: None,
                 work_bytes: None,
+                request_ref: None,
                 state,
                 queue_order: 2,
                 waiting_deadline: now() + 60,
@@ -891,6 +899,8 @@ mod tests {
                 late_result: terminal.then(|| json!({"late": true})),
                 result_digest: None,
                 late_result_digest: None,
+                result_ref: None,
+                late_result_ref: None,
                 started: (state != InvocationState::Queued).then(|| now() - 1),
                 activation: activation.or_else(|| {
                     (state != InvocationState::Queued).then(|| demand.generation.clone())
@@ -955,6 +965,22 @@ mod tests {
                     .and_then(serde_json::Value::as_str)
                     .unwrap(),
             )
+        }
+
+        fn move_parent_result_to_late_sidecar(&self, parent_id: &str) {
+            self.service
+                .authority
+                .update(|s| {
+                    let parent = s.data.invocations.get_mut(parent_id).unwrap();
+                    let result = parent.late_result.take().unwrap();
+                    crate::payload_store::store_late_result(
+                        &self.service.config.authority_root,
+                        parent,
+                        result,
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
         }
 
         fn rewrite_packet_status(&self, parent: &Invocation, status: &str) {
@@ -1049,6 +1075,45 @@ mod tests {
             .authority
             .read(|s| {
                 assert!(s.claims.is_empty());
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn diagnosis_reads_terminal_packet_from_late_result_sidecar() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        fixture.move_parent_result_to_late_sidecar(&parent.id);
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                let saved = s.data.demands.get(&demand.id).unwrap();
+                let invocation = s.data.invocations.get(&parent.id).unwrap();
+                assert!(invocation.late_result.is_none());
+                assert!(invocation.late_result_ref.is_some());
+                assert!(!allows_recovery(s, saved, invocation));
+                Ok(())
+            })
+            .unwrap();
+
+        Monitor {
+            service: Arc::clone(&fixture.service),
+        }
+        .tick()
+        .unwrap();
+
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                let saved = s.data.demands.get(&demand.id).unwrap();
+                let invocation = s.data.invocations.get(&parent.id).unwrap();
+                assert!(allows_recovery(s, saved, invocation));
+                let analysis = saved.workspace_recovery_analyses.get(&parent.id).unwrap();
+                assert_eq!(analysis.packet_status, "failed");
+                assert!(analysis.checks.retained_terminal_packet);
                 Ok(())
             })
             .unwrap();

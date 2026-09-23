@@ -7,7 +7,10 @@ from support import Rack
 class WorkspaceScopes(unittest.TestCase):
     def setUp(self):
         self.directory=tempfile.TemporaryDirectory(prefix='rack-pr35-scopes-')
-        self.r=Rack(self.directory.name)
+        def configure(config):
+            if self._testMethodName=='test_failed_scoped_call_replays_promptly_and_next_call_succeeds':
+                config['limits']=dict(max_response_bytes=4096)
+        self.r=Rack(self.directory.name,configure=configure)
         self.p=self.r.wait(self.r.acquire('athba','local-primary','low'))
         self.base=f'http://{self.r.address}'+self.p['gateway_path']
     def tearDown(self):self.r.close();self.directory.cleanup()
@@ -55,7 +58,7 @@ class WorkspaceScopes(unittest.TestCase):
             self.assertEqual(self.r.result(blocker)['state'],'completed')
             self.assertEqual(self.r.result(unrelated)['state'],'completed')
             self.assertEqual(self.r.counts('dispatch')['local-primary'],2)
-            self.assertEqual(self.data()['invocations'][i['id']]['state'],'cancelled')
+            self.assertEqual(self.r.result(i,'cancelled')['state'],'cancelled')
             self.assertFalse(self.r.inspect(self.p)['released'])
 
     def test_delayed_http_submission_cannot_cross_closed_or_expired_scope(self):
@@ -71,6 +74,23 @@ class WorkspaceScopes(unittest.TestCase):
                 while chunk:=stream.recv(4096):response+=chunk
                 stream.close();self.assertIn(b'409 Conflict',response);self.assertIn(b'workspace_scope_closed_or_unknown',response)
         self.assertEqual(self.data()['invocations'],{});self.assertEqual(self.r.counts('dispatch')['local-primary'],0)
+    def test_failed_scoped_call_replays_promptly_and_next_call_succeeds(self):
+        self.open('oversized')
+        self.r.controls('local-primary', content='x'*10000)
+        started=time.monotonic(); status,error=self.call('oversized')
+        self.assertEqual(status,409); self.assertIn('invocation_Failed',error)
+        self.assertLess(time.monotonic()-started,2.0)
+        self.assertEqual(self.r.counts('dispatch')['local-primary'],1)
+        replay_started=time.monotonic(); status,error=self.call('oversized')
+        self.assertEqual(status,409); self.assertIn('invocation_Failed',error)
+        self.assertLess(time.monotonic()-replay_started,1.0)
+        self.assertEqual(self.r.counts('dispatch')['local-primary'],1)
+        self.open('after-failed')
+        self.r.controls('local-primary', content='scoped-ok')
+        status,body=self.call('after-failed')
+        self.assertEqual(status,200); self.assertIn('scoped-ok',body)
+        self.assertEqual(self.r.counts('dispatch')['local-primary'],2)
+
     def test_temporary_disconnect_reconciles_and_legitimate_work_continues(self):
         self.r.controls('local-primary',delay=1)
         blocker=self.r.infer(self.p,submission_id='disconnect-blocker')

@@ -165,12 +165,12 @@ There are three intentional, independently bounded capacities:
    terminal payload bodies are compacted to durable SHA-256 receipt fields while
    retaining the invocation identity, request, terminal state, error, and digest
    for reconciliation. Queued, running, and uncertain records are never
-   compacted. `retention_admission_bytes` then reserves only active response
-   headroom and compact control data.
+   compacted. `retention_admission_bytes` then reserves compact control data; active
+   request/result payload commitments are accounted separately.
 
 This prevents completed historical output from causing
-`capacity_retained_evidence` for ordinary calls under an already Ready
-reservation. A compacted completed result deliberately reports no original body;
+`capacity_active_control` or `capacity_active_payload` for ordinary calls under
+an already Ready reservation. A compacted completed result deliberately reports no original body;
 the digest proves which retained body was compacted and prevents RackAI from
 pretending it can reproduce an output it no longer retains. The authority's
 existing 32 MiB hard write bound remains the final fail-safe corruption/storage

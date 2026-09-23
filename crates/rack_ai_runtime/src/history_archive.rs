@@ -83,6 +83,7 @@ struct ReservationPointer {
     expires_at: Option<u64>,
 }
 
+#[allow(dead_code)]
 pub fn maintain(root: &Path, s: &mut Document, at: u64) -> Result<MaintenanceReport, String> {
     let mut report = MaintenanceReport::default();
     for root_id in closed_roots(s) {
@@ -102,10 +103,316 @@ pub fn maintain(root: &Path, s: &mut Document, at: u64) -> Result<MaintenanceRep
     Ok(report)
 }
 
+#[allow(dead_code)]
 pub fn pending(root: &Path, s: &Document, at: u64) -> bool {
     !closed_roots(s).is_empty()
         || !active_terminal_invocations(s, at).is_empty()
         || expired_archive_exists(root, at).unwrap_or(false)
+}
+
+#[derive(Clone)]
+pub struct MaintenancePlan {
+    at: u64,
+    kind: MaintenancePlanKind,
+}
+
+#[derive(Clone)]
+enum MaintenancePlanKind {
+    ActiveInvocation {
+        invocation: Invocation,
+        reservation: Option<Demand>,
+    },
+    ClosedGroup {
+        root: Demand,
+        member_ids: Vec<String>,
+        members: Vec<Demand>,
+        invocations: Vec<Invocation>,
+        workspace_scopes: BTreeMap<String, crate::workspace_scope::WorkspaceScope>,
+    },
+    Expire,
+}
+
+pub struct PreparedMaintenance {
+    plan: MaintenancePlan,
+    staged: Vec<StagedFile>,
+    expired_files: usize,
+}
+
+#[derive(Clone)]
+struct StagedFile {
+    final_path: PathBuf,
+    stage_path: PathBuf,
+    base_contents: Option<String>,
+}
+
+pub fn plan_maintenance(
+    root: &Path,
+    s: &Document,
+    at: u64,
+) -> Result<Option<MaintenancePlan>, String> {
+    for root_id in closed_roots(s) {
+        if !closed_group_eligible(s, &root_id, at) {
+            continue;
+        }
+        let root = s
+            .data
+            .demands
+            .get(&root_id)
+            .cloned()
+            .ok_or("missing_retirement_root")?;
+        let member_ids = member_ids(s, &root).ok_or("missing_retirement_member")?;
+        let member_set = member_ids.iter().cloned().collect::<BTreeSet<_>>();
+        let members = member_ids
+            .iter()
+            .filter_map(|id| s.data.demands.get(id).cloned())
+            .collect::<Vec<_>>();
+        let invocations = s
+            .data
+            .invocations
+            .values()
+            .filter(|i| member_set.contains(&i.request.reservation_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let workspace_scopes = s
+            .data
+            .workspace_scopes
+            .iter()
+            .filter(|(_, scope)| member_set.contains(&scope.reservation_id))
+            .map(|(id, scope)| (id.clone(), scope.clone()))
+            .collect();
+        return Ok(Some(MaintenancePlan {
+            at,
+            kind: MaintenancePlanKind::ClosedGroup {
+                root,
+                member_ids,
+                members,
+                invocations,
+                workspace_scopes,
+            },
+        }));
+    }
+    for id in active_terminal_invocations(s, at) {
+        let Some(invocation) = s.data.invocations.get(&id).cloned() else {
+            continue;
+        };
+        return Ok(Some(MaintenancePlan {
+            at,
+            kind: MaintenancePlanKind::ActiveInvocation {
+                reservation: s
+                    .data
+                    .demands
+                    .get(&invocation.request.reservation_id)
+                    .cloned(),
+                invocation,
+            },
+        }));
+    }
+    if expired_archive_exists(root, at)? {
+        return Ok(Some(MaintenancePlan {
+            at,
+            kind: MaintenancePlanKind::Expire,
+        }));
+    }
+    Ok(None)
+}
+
+pub fn prepare_maintenance(
+    root: &Path,
+    plan: MaintenancePlan,
+) -> Result<PreparedMaintenance, String> {
+    let stage_id = identity()?;
+    let mut staged = Vec::new();
+    let mut expired_files = 0;
+    match &plan.kind {
+        MaintenancePlanKind::ActiveInvocation {
+            invocation,
+            reservation,
+        } => {
+            pause_maintenance_io_if_configured();
+            stage_invocation_archive(
+                root,
+                &stage_id,
+                invocation,
+                reservation.as_ref(),
+                None,
+                true,
+                &mut staged,
+            )?;
+        }
+        MaintenancePlanKind::ClosedGroup {
+            root: demand,
+            member_ids,
+            members,
+            invocations,
+            workspace_scopes,
+        } => {
+            pause_maintenance_io_if_configured();
+            let member_set = member_ids.iter().cloned().collect::<BTreeSet<_>>();
+            let mut staged_invocations = BTreeMap::new();
+            for invocation in invocations {
+                let archive = stage_invocation_archive(
+                    root,
+                    &stage_id,
+                    invocation,
+                    members
+                        .iter()
+                        .find(|member| member.id == invocation.request.reservation_id),
+                    Some(plan.at),
+                    false,
+                    &mut staged,
+                )?;
+                staged_invocations.insert(archive.invocation_id.clone(), archive);
+            }
+            let reservation = closed_reservation_archive_from_snapshot(
+                root,
+                demand,
+                member_ids,
+                members,
+                invocations,
+                workspace_scopes,
+                &member_set,
+                plan.at,
+            )?;
+            stage_reservation_archive(root, &stage_id, &reservation, &mut staged)?;
+            for id in &reservation.invocation_ids {
+                let mut archive = if let Some(archive) = staged_invocations.get(id).cloned() {
+                    archive
+                } else if let Some(archive) = read_invocation(root, &reservation.owner, id)? {
+                    archive
+                } else {
+                    continue;
+                };
+                apply_closure(
+                    &mut archive.closed_at,
+                    &mut archive.closed_at_source,
+                    &mut archive.expires_at,
+                    archive.preserved,
+                    reservation.closed_at,
+                );
+                stage_invocation_archive_value(root, &stage_id, &archive, &mut staged)?;
+                stage_invocation_indexes(root, &stage_id, &archive, &mut staged)?;
+            }
+        }
+        MaintenancePlanKind::Expire => {
+            pause_maintenance_io_if_configured();
+            expired_files = expire(root, plan.at)?;
+        }
+    }
+    Ok(PreparedMaintenance {
+        plan,
+        staged,
+        expired_files,
+    })
+}
+
+pub fn prepared_maintenance_eligible(
+    s: &Document,
+    prepared: &PreparedMaintenance,
+) -> Result<bool, String> {
+    Ok(match &prepared.plan.kind {
+        MaintenancePlanKind::ActiveInvocation { invocation, .. } => {
+            active_invocation_prepared_eligible(s, invocation, prepared.plan.at)
+        }
+        MaintenancePlanKind::ClosedGroup {
+            root: demand,
+            member_ids,
+            members,
+            invocations,
+            ..
+        } => closed_group_prepared_eligible(
+            s,
+            demand,
+            member_ids,
+            members,
+            invocations,
+            prepared.plan.at,
+        ),
+        MaintenancePlanKind::Expire => true,
+    })
+}
+
+fn active_invocation_prepared_eligible(s: &Document, invocation: &Invocation, at: u64) -> bool {
+    s.data.invocations.get(&invocation.id).is_some_and(|live| {
+        serialized_equal(live, invocation) && active_invocation_dependencies_clear(s, live, at)
+    })
+}
+
+fn closed_group_prepared_eligible(
+    s: &Document,
+    demand: &Demand,
+    member_ids: &[String],
+    members: &[Demand],
+    invocations: &[Invocation],
+    at: u64,
+) -> bool {
+    let members_match = member_ids.iter().all(|id| {
+        let Some(live) = s.data.demands.get(id) else {
+            return false;
+        };
+        members
+            .iter()
+            .find(|member| member.id == *id)
+            .is_some_and(|snapshot| serialized_equal(live, snapshot))
+    });
+    let invocations_match = invocations.iter().all(|snapshot| {
+        s.data
+            .invocations
+            .get(&snapshot.id)
+            .is_some_and(|live| serialized_equal(live, snapshot))
+    });
+    s.data
+        .demands
+        .get(&demand.id)
+        .is_some_and(|live| serialized_equal(live, demand))
+        && members_match
+        && invocations_match
+        && closed_group_eligible(s, &demand.id, at)
+}
+
+pub fn publish_prepared_maintenance(prepared: &PreparedMaintenance) -> Result<(), String> {
+    publish_staged(&prepared.staged)
+}
+
+pub fn discard_prepared_maintenance(prepared: &PreparedMaintenance) {
+    discard_staged(&prepared.staged);
+}
+
+pub fn commit_published_maintenance(
+    s: &mut Document,
+    prepared: PreparedMaintenance,
+) -> Result<MaintenanceReport, String> {
+    let mut report = MaintenanceReport::default();
+    if !prepared_maintenance_eligible(s, &prepared)? {
+        return Ok(report);
+    }
+    match prepared.plan.kind {
+        MaintenancePlanKind::ActiveInvocation { invocation, .. } => {
+            s.data.invocations.remove(&invocation.id);
+            report.archived_invocations = 1;
+        }
+        MaintenancePlanKind::ClosedGroup {
+            member_ids,
+            invocations,
+            ..
+        } => {
+            for invocation in invocations {
+                s.data.invocations.remove(&invocation.id);
+                report.archived_invocations += 1;
+            }
+            let member_set = member_ids.iter().cloned().collect::<BTreeSet<_>>();
+            s.data
+                .workspace_scopes
+                .retain(|_, scope| !member_set.contains(&scope.reservation_id));
+            for id in &member_ids {
+                s.data.demands.remove(id);
+            }
+            report.archived_reservations = 1;
+        }
+        MaintenancePlanKind::Expire => {
+            report.expired_files = prepared.expired_files;
+        }
+    }
+    Ok(report)
 }
 
 pub fn lookup_invocation(root: &Path, owner: &str, id: &str) -> Result<Option<Invocation>, String> {
@@ -115,7 +422,7 @@ pub fn lookup_invocation(root: &Path, owner: &str, id: &str) -> Result<Option<In
     if expired(archive.expires_at, now()) {
         return Ok(None);
     }
-    Ok(Some(archive.record))
+    crate::payload_store::hydrate_invocation(root, archive.record).map(Some)
 }
 
 pub fn lookup_work(root: &Path, owner: &str, work_id: &str) -> Result<Option<Invocation>, String> {
@@ -350,6 +657,7 @@ fn physical_cleanup_proven(s: &Document, reservation_id: &str) -> bool {
         .is_some_and(|d| d.recovery_reconciliation.is_some())
 }
 
+#[allow(dead_code)]
 fn retire_closed_group(
     root: &Path,
     s: &mut Document,
@@ -400,6 +708,7 @@ fn member_ids(s: &Document, root: &Demand) -> Option<Vec<String>> {
         .then_some(ids)
 }
 
+#[allow(dead_code)]
 fn archive_invocation(
     root: &Path,
     s: &Document,
@@ -448,6 +757,7 @@ fn archive_invocation(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_invocation_indexes(root: &Path, archive: &InvocationArchive) -> Result<(), String> {
     let pointer = InvocationPointer {
         schema: ARCHIVE_SCHEMA.into(),
@@ -470,6 +780,7 @@ fn write_invocation_indexes(root: &Path, archive: &InvocationArchive) -> Result<
     Ok(())
 }
 
+#[allow(dead_code)]
 fn update_reservation_invocation_index(
     root: &Path,
     s: &Document,
@@ -494,6 +805,7 @@ fn update_reservation_invocation_index(
     write_reservation_archive(root, &reservation)
 }
 
+#[allow(dead_code)]
 fn active_reservation_archive(s: &Document, archive: &InvocationArchive) -> ReservationArchive {
     let demand = s.data.demands.get(&archive.reservation_id);
     ReservationArchive {
@@ -515,6 +827,7 @@ fn active_reservation_archive(s: &Document, archive: &InvocationArchive) -> Rese
     }
 }
 
+#[allow(dead_code)]
 fn write_closed_reservation(
     root: &Path,
     s: &Document,
@@ -585,6 +898,7 @@ fn write_closed_reservation(
     Ok(())
 }
 
+#[allow(dead_code)]
 fn write_reservation_archive(root: &Path, archive: &ReservationArchive) -> Result<(), String> {
     write_json(
         &reservation_path(root, &archive.owner, &archive.reservation_id),
@@ -623,6 +937,407 @@ fn apply_closure(
     }
 }
 
+fn stage_invocation_archive(
+    root: &Path,
+    stage_id: &str,
+    invocation: &Invocation,
+    reservation: Option<&Demand>,
+    closed_at: Option<u64>,
+    stage_reservation_index: bool,
+    staged: &mut Vec<StagedFile>,
+) -> Result<InvocationArchive, String> {
+    let archive = invocation_archive_from_snapshot(root, invocation, closed_at)?;
+    stage_invocation_archive_value(root, stage_id, &archive, staged)?;
+    stage_invocation_indexes(root, stage_id, &archive, staged)?;
+    if stage_reservation_index {
+        stage_reservation_invocation_index(root, stage_id, reservation, &archive, staged)?;
+    }
+    Ok(archive)
+}
+
+fn invocation_archive_from_snapshot(
+    root: &Path,
+    invocation: &Invocation,
+    closed_at: Option<u64>,
+) -> Result<InvocationArchive, String> {
+    let mut archive =
+        if let Some(existing) = read_invocation(root, &invocation.owner, &invocation.id)? {
+            if existing.owner != invocation.owner || existing.invocation_id != invocation.id {
+                return Err("archive_invocation_identity_conflict".into());
+            }
+            existing
+        } else {
+            let mut record = invocation.clone();
+            if !matches!(
+                record.state,
+                InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
+            ) {
+                crate::capacity::compact_terminal_request(&mut record)?;
+            }
+            InvocationArchive {
+                schema: ARCHIVE_SCHEMA.into(),
+                owner: invocation.owner.clone(),
+                invocation_id: invocation.id.clone(),
+                reservation_id: invocation.request.reservation_id.clone(),
+                submission_id: invocation.request.submission_id.clone(),
+                work_id: invocation.request.work.as_ref().map(|w| w.work_id.clone()),
+                closed_at: None,
+                closed_at_source: None,
+                expires_at: None,
+                preserved: false,
+                record,
+            }
+        };
+    apply_closure(
+        &mut archive.closed_at,
+        &mut archive.closed_at_source,
+        &mut archive.expires_at,
+        archive.preserved,
+        closed_at,
+    );
+    Ok(archive)
+}
+
+fn stage_invocation_archive_value(
+    root: &Path,
+    stage_id: &str,
+    archive: &InvocationArchive,
+    staged: &mut Vec<StagedFile>,
+) -> Result<(), String> {
+    stage_json(
+        root,
+        stage_id,
+        &invocation_path(root, &archive.owner, &archive.invocation_id),
+        archive,
+        staged,
+    )
+}
+
+fn stage_invocation_indexes(
+    root: &Path,
+    stage_id: &str,
+    archive: &InvocationArchive,
+    staged: &mut Vec<StagedFile>,
+) -> Result<(), String> {
+    let pointer = InvocationPointer {
+        schema: ARCHIVE_SCHEMA.into(),
+        owner: archive.owner.clone(),
+        invocation_id: archive.invocation_id.clone(),
+        expires_at: archive.expires_at,
+    };
+    stage_json(
+        root,
+        stage_id,
+        &submission_index_path(
+            root,
+            &archive.owner,
+            &archive.reservation_id,
+            &archive.submission_id,
+        ),
+        &pointer,
+        staged,
+    )?;
+    if let Some(work_id) = archive.work_id.as_ref() {
+        stage_json(
+            root,
+            stage_id,
+            &work_index_path(root, &archive.owner, work_id),
+            &pointer,
+            staged,
+        )?;
+    }
+    Ok(())
+}
+
+fn stage_reservation_invocation_index(
+    root: &Path,
+    stage_id: &str,
+    demand: Option<&Demand>,
+    archive: &InvocationArchive,
+    staged: &mut Vec<StagedFile>,
+) -> Result<(), String> {
+    let path = reservation_path(root, &archive.owner, &archive.reservation_id);
+    let mut reservation = read_json(&path)?
+        .unwrap_or_else(|| active_reservation_archive_from_snapshot(archive, demand));
+    append_unique(
+        &mut reservation.invocation_ids,
+        archive.invocation_id.clone(),
+    );
+    if archive.closed_at.is_some() {
+        apply_closure(
+            &mut reservation.closed_at,
+            &mut reservation.closed_at_source,
+            &mut reservation.expires_at,
+            reservation.preserved,
+            archive.closed_at,
+        );
+    }
+    stage_reservation_archive(root, stage_id, &reservation, staged)
+}
+
+fn active_reservation_archive_from_snapshot(
+    archive: &InvocationArchive,
+    demand: Option<&Demand>,
+) -> ReservationArchive {
+    ReservationArchive {
+        schema: ARCHIVE_SCHEMA.into(),
+        owner: archive.owner.clone(),
+        reservation_id: archive.reservation_id.clone(),
+        acquisition_id: demand
+            .and_then(|d| d.reserve_request.as_ref())
+            .map(|r| r.acquisition_id.clone()),
+        request: demand.and_then(|d| d.reserve_request.clone()),
+        result: demand.and_then(|d| d.reserve_result.clone()),
+        closed_at: None,
+        closed_at_source: None,
+        expires_at: None,
+        preserved: false,
+        demands: demand.into_iter().cloned().collect(),
+        invocation_ids: Vec::new(),
+        workspace_scopes: BTreeMap::new(),
+    }
+}
+
+fn closed_reservation_archive_from_snapshot(
+    root: &Path,
+    root_demand: &Demand,
+    _member_ids: &[String],
+    members: &[Demand],
+    invocations: &[Invocation],
+    workspace_scopes: &BTreeMap<String, crate::workspace_scope::WorkspaceScope>,
+    member_set: &BTreeSet<String>,
+    closed_at: u64,
+) -> Result<ReservationArchive, String> {
+    let path = reservation_path(root, &root_demand.owner, &root_demand.id);
+    let existing: Option<ReservationArchive> = read_json(&path)?;
+    let mut invocation_ids = existing
+        .as_ref()
+        .map(|a| a.invocation_ids.clone())
+        .unwrap_or_default();
+    for invocation in invocations {
+        if member_set.contains(&invocation.request.reservation_id) {
+            append_unique(&mut invocation_ids, invocation.id.clone());
+        }
+    }
+    let mut archive = ReservationArchive {
+        schema: ARCHIVE_SCHEMA.into(),
+        owner: root_demand.owner.clone(),
+        reservation_id: root_demand.id.clone(),
+        acquisition_id: root_demand
+            .reserve_request
+            .as_ref()
+            .map(|r| r.acquisition_id.clone()),
+        request: root_demand.reserve_request.clone(),
+        result: root_demand.reserve_result.clone(),
+        closed_at: existing.as_ref().and_then(|a| a.closed_at),
+        closed_at_source: existing.as_ref().and_then(|a| a.closed_at_source.clone()),
+        expires_at: existing.as_ref().and_then(|a| a.expires_at),
+        preserved: existing.as_ref().is_some_and(|a| a.preserved),
+        demands: members.to_vec(),
+        invocation_ids,
+        workspace_scopes: workspace_scopes.clone(),
+    };
+    apply_closure(
+        &mut archive.closed_at,
+        &mut archive.closed_at_source,
+        &mut archive.expires_at,
+        archive.preserved,
+        Some(closed_at),
+    );
+    Ok(archive)
+}
+
+fn stage_reservation_archive(
+    root: &Path,
+    stage_id: &str,
+    archive: &ReservationArchive,
+    staged: &mut Vec<StagedFile>,
+) -> Result<(), String> {
+    stage_json(
+        root,
+        stage_id,
+        &reservation_path(root, &archive.owner, &archive.reservation_id),
+        archive,
+        staged,
+    )?;
+    if let Some(acquisition_id) = archive.acquisition_id.as_ref() {
+        let pointer = ReservationPointer {
+            schema: ARCHIVE_SCHEMA.into(),
+            owner: archive.owner.clone(),
+            reservation_id: archive.reservation_id.clone(),
+            expires_at: archive.expires_at,
+        };
+        stage_json(
+            root,
+            stage_id,
+            &acquisition_index_path(root, &archive.owner, acquisition_id),
+            &pointer,
+            staged,
+        )?;
+    }
+    Ok(())
+}
+
+fn stage_json<T: Serialize>(
+    root: &Path,
+    stage_id: &str,
+    final_path: &Path,
+    value: &T,
+    staged: &mut Vec<StagedFile>,
+) -> Result<(), String> {
+    let index = staged.len();
+    let path_digest = digest(final_path.display().to_string().as_bytes());
+    let stage_path = root
+        .join("archive")
+        .join("staging")
+        .join(stage_id)
+        .join(format!("{index:04}-{path_digest}.json"));
+    let base_contents = match fs::read_to_string(final_path) {
+        Ok(contents) => Some(contents),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.to_string()),
+    };
+    write_json(&stage_path, value)?;
+    staged.push(StagedFile {
+        final_path: final_path.to_path_buf(),
+        stage_path,
+        base_contents,
+    });
+    Ok(())
+}
+
+fn publish_staged(staged: &[StagedFile]) -> Result<(), String> {
+    pause_maintenance_publish_io_if_configured();
+    for file in staged {
+        let contents = fs::read_to_string(&file.stage_path).map_err(|e| e.to_string())?;
+        match fs::read_to_string(&file.final_path) {
+            Ok(existing) if existing == contents => {
+                let _ = fs::remove_file(&file.stage_path);
+            }
+            Ok(existing) if file.base_contents.as_ref() == Some(&existing) => {
+                atomic_write(&file.final_path, &contents)?;
+                let _ = fs::remove_file(&file.stage_path);
+            }
+            Ok(_) => {
+                return Err("history_archive_publish_conflict".into());
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound && file.base_contents.is_none() =>
+            {
+                atomic_write(&file.final_path, &contents)?;
+                let _ = fs::remove_file(&file.stage_path);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Err("history_archive_publish_conflict".into());
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn discard_staged(staged: &[StagedFile]) {
+    for file in staged {
+        let _ = fs::remove_file(&file.stage_path);
+    }
+}
+
+fn serialized_equal<T: Serialize>(left: &T, right: &T) -> bool {
+    serde_json::to_value(left).ok() == serde_json::to_value(right).ok()
+}
+
+#[cfg(test)]
+pub(crate) struct MaintenanceIoPause {
+    entered: (std::sync::Mutex<bool>, std::sync::Condvar),
+    release: (std::sync::Mutex<bool>, std::sync::Condvar),
+}
+
+#[cfg(test)]
+impl MaintenanceIoPause {
+    pub(crate) fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            entered: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+            release: (std::sync::Mutex::new(false), std::sync::Condvar::new()),
+        })
+    }
+
+    pub(crate) fn wait_until_entered(&self) {
+        let (lock, condvar) = &self.entered;
+        let mut entered = lock.lock().unwrap();
+        while !*entered {
+            entered = condvar.wait(entered).unwrap();
+        }
+    }
+
+    pub(crate) fn release(&self) {
+        let (lock, condvar) = &self.release;
+        *lock.lock().unwrap() = true;
+        condvar.notify_all();
+    }
+}
+
+#[cfg(test)]
+static MAINTENANCE_IO_PAUSE: std::sync::Mutex<Option<std::sync::Arc<MaintenanceIoPause>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+static MAINTENANCE_PUBLISH_IO_PAUSE: std::sync::Mutex<Option<std::sync::Arc<MaintenanceIoPause>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn install_maintenance_io_pause(pause: std::sync::Arc<MaintenanceIoPause>) {
+    *MAINTENANCE_IO_PAUSE.lock().unwrap() = Some(pause);
+}
+
+#[cfg(test)]
+#[allow(dead_code)]
+pub(crate) fn clear_maintenance_io_pause() {
+    *MAINTENANCE_IO_PAUSE.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+pub(crate) fn install_maintenance_publish_io_pause(pause: std::sync::Arc<MaintenanceIoPause>) {
+    *MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap() = Some(pause);
+}
+
+#[cfg(test)]
+pub(crate) fn clear_maintenance_publish_io_pause() {
+    *MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap() = None;
+}
+
+#[cfg(test)]
+fn pause_for_test(pause: Option<std::sync::Arc<MaintenanceIoPause>>) {
+    if let Some(pause) = pause {
+        let (entered_lock, entered_condvar) = &pause.entered;
+        *entered_lock.lock().unwrap() = true;
+        entered_condvar.notify_all();
+        let (release_lock, release_condvar) = &pause.release;
+        let mut released = release_lock.lock().unwrap();
+        while !*released {
+            released = release_condvar.wait(released).unwrap();
+        }
+    }
+}
+
+#[cfg(test)]
+fn pause_maintenance_io_if_configured() {
+    let pause = MAINTENANCE_IO_PAUSE.lock().unwrap().take();
+    pause_for_test(pause);
+}
+
+#[cfg(test)]
+fn pause_maintenance_publish_io_if_configured() {
+    let pause = MAINTENANCE_PUBLISH_IO_PAUSE.lock().unwrap().take();
+    pause_for_test(pause);
+}
+
+#[cfg(not(test))]
+fn pause_maintenance_io_if_configured() {}
+
+#[cfg(not(test))]
+fn pause_maintenance_publish_io_if_configured() {}
+
 fn expire(root: &Path, at: u64) -> Result<usize, String> {
     let mut removed = 0;
     for owner in owner_dirs(root)? {
@@ -630,6 +1345,7 @@ fn expire(root: &Path, at: u64) -> Result<usize, String> {
             if archive.preserved || !expired(archive.expires_at, at) {
                 continue;
             }
+            crate::payload_store::remove_invocation_payloads(root, &archive.record)?;
             remove_file_if_exists(&invocation_path(
                 root,
                 &archive.owner,
@@ -672,6 +1388,7 @@ fn expired(expires_at: Option<u64>, at: u64) -> bool {
     expires_at.is_some_and(|expiry| expiry <= at)
 }
 
+#[allow(dead_code)]
 fn expired_archive_exists(root: &Path, at: u64) -> Result<bool, String> {
     for owner in owner_dirs(root)? {
         if invocation_archives(&owner)?
@@ -947,6 +1664,7 @@ mod tests {
             request_bytes: None,
             work_digest: None,
             work_bytes: None,
+            request_ref: None,
             state,
             queue_order: 1,
             waiting_deadline: 100,
@@ -956,6 +1674,8 @@ mod tests {
             late_result: None,
             result_digest: None,
             late_result_digest: None,
+            result_ref: None,
+            late_result_ref: None,
             started: Some(2),
             activation: Some("generation".into()),
             result: (state == InvocationState::Completed).then(|| json!({"model":"model"})),
@@ -1023,6 +1743,28 @@ mod tests {
             .unwrap();
         assert_eq!(archived.state, InvocationState::Uncertain);
         assert_eq!(archived.error.as_deref(), Some("unknown"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn archive_publication_conflict_leaves_active_records_intact() {
+        let root = root("publish-conflict");
+        let doc = document(
+            demand("reservation", DemandState::Released),
+            invocation("call", "reservation", InvocationState::Completed),
+        );
+        let plan = plan_maintenance(&root, &doc, 10).unwrap().unwrap();
+        let prepared = prepare_maintenance(&root, plan).unwrap();
+        assert!(prepared_maintenance_eligible(&doc, &prepared).unwrap());
+        let final_path = prepared.staged[0].final_path.clone();
+        fs::create_dir_all(final_path.parent().unwrap()).unwrap();
+        fs::write(&final_path, r#"{"schema":"conflicting-newer-archive"}"#).unwrap();
+
+        let error = publish_prepared_maintenance(&prepared).unwrap_err();
+        assert_eq!(error, "history_archive_publish_conflict");
+        assert!(doc.data.demands.contains_key("reservation"));
+        assert!(doc.data.invocations.contains_key("call"));
+        discard_prepared_maintenance(&prepared);
         fs::remove_dir_all(root).unwrap();
     }
 
