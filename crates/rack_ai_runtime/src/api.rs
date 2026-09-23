@@ -136,7 +136,9 @@ async fn handle(
                 "capacity_pending_global"
                 | "capacity_pending_reservation"
                 | "capacity_reservation_call_history"
-                | "capacity_active_evidence" => StatusCode::TOO_MANY_REQUESTS,
+                | "capacity_active_evidence"
+                | "capacity_active_control"
+                | "capacity_active_payload" => StatusCode::TOO_MANY_REQUESTS,
                 "not_found" => StatusCode::NOT_FOUND,
                 "source_spoofing" | "qualification_mode_denied" => StatusCode::FORBIDDEN,
                 "identity_conflict"
@@ -242,6 +244,9 @@ fn public_invocation(invocation: Invocation) -> Result<Value, String> {
     object.remove("request_bytes");
     object.remove("work_digest");
     object.remove("work_bytes");
+    object.remove("request_ref");
+    object.remove("result_ref");
+    object.remove("late_result_ref");
     Ok(value)
 }
 

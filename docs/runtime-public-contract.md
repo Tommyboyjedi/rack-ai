@@ -98,7 +98,7 @@ the existing workspace executor, path controls, command evidence and semantic re
 
 HTTP 401 means authentication failure; 403 means source spoofing/policy failure; 404 means
 unknown or another owner's record; 409 means identity, generation or reservation-state
-conflict. HTTP 429 carries precise capacity codes: `capacity_pending_global`, `capacity_pending_reservation`, `capacity_retained_evidence`, `capacity_gateway_waiters`, or `capacity_api_workers`. Invalid typed requests use 400/422; oversized bodies use 413. Acquisition priority,
+conflict. HTTP 429 carries precise capacity codes: `capacity_pending_global`, `capacity_pending_reservation`, `capacity_active_control / capacity_active_payload`, `capacity_gateway_waiters`, or `capacity_api_workers`. Invalid typed requests use 400/422; oversized bodies use 413. Acquisition priority,
 qualification and resource denials are durable HTTP-200 decisions with `state:"denied"`.
 Transport/receiver errors are not evidence of a denial or a completed invocation: reconcile
 by replaying the exact acquisition/submission identity. `recovery_required` preserves claims;
@@ -143,12 +143,12 @@ checks these administrator-owned settings and the frozen `media_config_sha256`/P
 
 Validated `limits` bound pending invocations (Accepted plus Started), per-reservation pending work, active dispatch workers, lifecycle workers, gateway waiters, waiting time, response bytes and admission storage. Defaults are published in `config.example.json`. The normal runtime response-byte baseline is 3 MiB; smaller values are only for isolated tests that specifically require an artificial bound. Dispatch workers are considered only for active Ready reservations that own every resource and have no Started/Uncertain invocation; file permits are obtained before spawning. Held work creates no dispatch workers. Admission and control HTTP work have separate bounded slots; gateway waiting is asynchronous.
 
-The canonical document remains bounded to 32 MiB. New acquisition decisions and invocations are refused **before** exhausting that bound: default admission ceiling 30 MiB, including retained bytes plus reserved future output/cleanup capacity. Each pending invocation reserves six times its frozen response bound (worst-case JSON escaping) plus 16 KiB for envelope, cancellation and diagnostics. Each reservation reserves 64 KiB plus profile and victim/claim growth. This intentionally conservative allowance may refuse work well below 30 MiB; terminal records and denied acquisitions consume retained capacity too. Idempotent replay is still available at capacity. Previously accepted completion/cancel/release transitions do not pass through new-work admission and retain their reserved headroom. Nothing is automatically deleted, and ownership checks are unchanged. Legacy on-disk `deadline` fields load as bounded waiting deadlines; legacy response bounds remain bounded and readable rather than silently shrinking accepted output allowances.
+The canonical document remains bounded to 32 MiB. New acquisition decisions and invocations are refused **before** exhausting that bound: default compact-control admission ceiling 30 MiB, plus separate active-payload commitments for stored requests and promised response bodies. Pending invocations no longer charge `response_bytes * 6` against `managed.json`; the compact document stores ownership, queue/running state, dispatch/cancellation/recovery fences, digests and authenticated payload references. Essential request/result bodies are persisted outside the authority document with SHA-256 and byte counts, then hydrated at the API boundary. Each pending call commits stored request bytes plus its frozen response allowance against the active payload budget, with fixed completion/cancellation/recovery headroom. Idempotent replay is still available through active or archived lookup, and public v1 responses do not expose internal payload references. Previously accepted completion/cancel/release transitions do not pass through new-work admission and retain their reserved headroom. Historical retirement removes eligible closed records from active accounting; ownership checks are unchanged. Legacy on-disk `deadline` fields load as bounded waiting deadlines; legacy response bounds remain bounded and readable rather than silently shrinking accepted output allowances.
 
 
 ### Response-byte budget baseline
 
-Production `limits.max_response_bytes` is operator-approved at **3 MiB** (`3145728` bytes). This value is deliberate: 4 MiB was considered too expensive against the 30 MiB active-evidence admission ceiling because each active invocation reserves six times its frozen response byte bound plus envelope headroom, while 3 MiB preserves the intended production headroom.
+Production `limits.max_response_bytes` is operator-approved at **3 MiB** (`3145728` bytes). This value is deliberate and must remain the per-call response allowance. Active accounting must support that allowance by separating compact control state from essential payload storage; do not lower the response limit to compensate for authority-document growth or optional diagnostics.
 
 This response-byte budget is separate from input-token reliability. Do not conflate it with model context or token ceilings: `local-primary.max_input_tokens = 65536` and `local-primary.max_output_tokens = 65536` do not justify reducing `max_response_bytes`. The production value must **not be lowered below 3 MiB without an explicit operator decision and fresh qualification evidence**. Test fixtures may use another value only when that test specifically requires an artificial limit.
 
@@ -156,7 +156,7 @@ Actual I/O failure is separate from a capacity refusal. Failed writes do not com
 
 ### Retention operational procedure
 
-1. Monitor retained authority size and `capacity_retained_evidence`; stop new submissions when the ceiling refuses admission. Continue authenticated inspect/reconcile, cancel eligible pending work, and release each owner's reservations. Permit bounded Started work to finish. Do not retry uncertain work under new identities.
+1. Monitor retained authority size and `capacity_active_control / capacity_active_payload`; stop new submissions when the ceiling refuses admission. Continue authenticated inspect/reconcile, cancel eligible pending work, and release each owner's reservations. Permit bounded Started work to finish. Do not retry uncertain work under new identities.
 2. Verify all accepted work has terminal durable evidence, no unresolved Started/Uncertain operations remain, all affected owned processes have proven cleanup, and the canonical claims map is empty. If any check fails, keep the authority fenced and use its recovery procedure; a timeout is not proof of release.
 3. After quiescence, stop this receiver and take a permission-preserving, checksum-verified copy of the entire authority directory, including release receipts and ownership evidence, to operator-controlled immutable storage. Retain the original canonical document and identity history. Do not truncate `managed.json`, discard invocations, clear claims, or start an empty authority behind the same credentials.
 4. This PR provides safe admission stopping, not automatic compaction or a new archive lookup protocol. At the ceiling, leave new-work admission stopped until a separately reviewed migration preserves owner-scoped acquisition/invocation reconciliation and proves no unresolved effects. The finite-capacity service can still finish and release already accepted work. A preexisting authority from an older implementation without reserved headroom must be quiesced and capacity-reviewed before upgrade; no production upgrade is performed by this PR.
@@ -215,9 +215,9 @@ A valid, still-open workspace can therefore wait through preemption and execute 
 on restoration. Companion applications do not need to supply these controls.
 
 Scope controls use the bounded admission/control pools independently of gateway
-waiters. Scope registration applies retained-evidence admission and reserves 128
+waiters. Scope registration applies compact-control admission and reserves 128
 additional bytes per retained scope for closure; no tombstone is deleted. Capacity
-refusal remains HTTP 429 `capacity_retained_evidence`. Read-only status/result calls
+refusal remains HTTP 429 `capacity_active_control / capacity_active_payload`. Read-only status/result calls
 remain read-only. Follow the existing retention procedure for the complete authority,
 including scope records.
 

@@ -618,6 +618,7 @@ mod tests {
                 request_bytes: None,
                 work_digest: None,
                 work_bytes: None,
+                request_ref: None,
                 state: InvocationState::Uncertain,
                 queue_order: 1,
                 waiting_deadline: now() + 60,
@@ -633,6 +634,8 @@ mod tests {
                 })),
                 result_digest: None,
                 late_result_digest: None,
+                result_ref: None,
+                late_result_ref: None,
                 started: Some(now() - 300),
                 activation: Some(demand.generation.clone()),
                 result: None,
@@ -724,6 +727,7 @@ mod tests {
                             request_bytes: None,
                             work_digest: None,
                             work_bytes: None,
+                            request_ref: None,
                             state: if active_child {
                                 InvocationState::Running
                             } else {
@@ -747,6 +751,8 @@ mod tests {
                             },
                             result_digest: None,
                             late_result_digest: None,
+                            result_ref: None,
+                            late_result_ref: None,
                             started: Some(now() - 1),
                             activation: Some(demand.generation.clone()),
                             result: None,
@@ -870,6 +876,7 @@ mod tests {
                 request_bytes: None,
                 work_digest: None,
                 work_bytes: None,
+                request_ref: None,
                 state,
                 queue_order: 2,
                 waiting_deadline: now() + 60,
@@ -891,6 +898,8 @@ mod tests {
                 late_result: terminal.then(|| json!({"late": true})),
                 result_digest: None,
                 late_result_digest: None,
+                result_ref: None,
+                late_result_ref: None,
                 started: (state != InvocationState::Queued).then(|| now() - 1),
                 activation: activation.or_else(|| {
                     (state != InvocationState::Queued).then(|| demand.generation.clone())

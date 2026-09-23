@@ -76,6 +76,10 @@ impl Dispatch<'_> {
         let Some((invocation, demand)) = started else {
             return Ok(());
         };
+        let invocation = crate::payload_store::hydrate_invocation(
+            &self.service.config.authority_root,
+            invocation,
+        )?;
         let result = if crate::work_payload::is_workspace(&invocation) {
             crate::work_execution::execute(self.service, (&demand, &invocation))
         } else {
@@ -123,9 +127,16 @@ impl Completion<'_> {
             if unknown_child {
                 i.state = InvocationState::Uncertain;
                 i.error = Some("workspace_model_outcome_uncertain".into());
-                i.late_result = result.ok();
+                if let Ok(value) = result {
+                    crate::payload_store::store_late_result(
+                        &self.service.config.authority_root,
+                        i,
+                        value,
+                    )?;
+                }
                 return Ok(());
             }
+            let mut stored_payload = false;
             match result {
                 Ok(value) => {
                     let valid = (crate::work_payload::is_workspace(&invocation)
@@ -146,10 +157,19 @@ impl Completion<'_> {
                                     tokens <= invocation.request.max_tokens as u64
                                 });
                     if i.cancellation.is_some() {
-                        i.late_result = Some(value);
+                        crate::payload_store::store_late_result(
+                            &self.service.config.authority_root,
+                            i,
+                            value,
+                        )?;
                     } else {
-                        i.result = Some(value);
+                        crate::payload_store::store_result(
+                            &self.service.config.authority_root,
+                            i,
+                            value,
+                        )?;
                     }
+                    stored_payload = true;
                     i.state = if valid && i.cancellation.is_some() {
                         InvocationState::Cancelled
                     } else if valid {
@@ -162,21 +182,44 @@ impl Completion<'_> {
                     }
                 }
                 Err(e) => {
+                    i.state = failure_state(&e);
                     i.error = Some(crate::capacity::diagnostic(e));
-                    i.state = InvocationState::Uncertain;
                 }
             }
-            if i.state != InvocationState::Uncertain {
-                crate::idle::touch(s, &demand.id, now())?;
-                crate::activity_retention::refresh(
-                    s,
-                    (self.service.config.idle_timeout_seconds, now()),
-                )?;
+            let terminal_uncertain = i.state == InvocationState::Uncertain;
+            let cleanup_invocation = stored_payload.then(|| i.clone());
+            let _ = i;
+            let finalized = (|| {
+                if !terminal_uncertain {
+                    crate::idle::touch(s, &demand.id, now())?;
+                    crate::activity_retention::refresh(
+                        s,
+                        (self.service.config.idle_timeout_seconds, now()),
+                    )?;
+                }
+                crate::capacity::retention(s, &self.service.config.limits)?;
+                Ok(())
+            })();
+            if finalized.is_err() {
+                if let Some(invocation) = cleanup_invocation.as_ref() {
+                    let _ = crate::payload_store::remove_invocation_payloads(
+                        &self.service.config.authority_root,
+                        invocation,
+                    );
+                }
             }
-            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
-            crate::capacity::retention(s, &self.service.config.limits)?;
-            Ok(())
+            finalized
         })
+    }
+}
+
+fn failure_state(error: &str) -> InvocationState {
+    match error {
+        "backend_transport_uncertain"
+        | "backend_read_uncertain"
+        | "speech_transport_uncertain"
+        | "speech_read_uncertain" => InvocationState::Uncertain,
+        _ => InvocationState::Failed,
     }
 }
 

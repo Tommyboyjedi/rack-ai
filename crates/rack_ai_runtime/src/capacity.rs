@@ -3,6 +3,10 @@
 use crate::types::*;
 use serde::Deserialize;
 
+pub const API_REQUEST_BODY_BYTES: u64 = 1024 * 1024;
+const CONTROL_COMPLETION_HEADROOM_BYTES: u64 = 64 * 1024;
+const PAYLOAD_COMPLETION_HEADROOM_BYTES: u64 = 64 * 1024;
+
 #[derive(Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Limits {
@@ -101,21 +105,37 @@ pub fn retention(s: &mut Document, limits: &Limits) -> Result<(), String> {
             .terminal_evidence_bytes
             .min(limits.retention_admission_bytes / 2),
     )?;
-    let mut reserved = serde_json::to_vec(s).map_err(|e| e.to_string())?.len() as u64;
-    for invocation in s.data.invocations.values() {
-        if matches!(
-            invocation.state,
-            InvocationState::Queued | InvocationState::Running
-        ) {
-            // JSON escaping can expand raw protocol output by six; envelope and
-            // terminal transition diagnostics have fixed bounded overhead.
-            reserved = reserved.saturating_add(invocation.response_bytes.saturating_mul(6) + 16384);
-        }
+    let control_reserved = serde_json::to_vec(s).map_err(|e| e.to_string())?.len() as u64;
+    if control_reserved.saturating_add(CONTROL_COMPLETION_HEADROOM_BYTES)
+        > limits.retention_admission_bytes
+    {
+        return Err("capacity_active_control".into());
     }
-    if reserved > limits.retention_admission_bytes {
-        return Err("capacity_active_evidence".into());
+    let payload_reserved = s
+        .data
+        .invocations
+        .values()
+        .filter(|invocation| {
+            matches!(
+                invocation.state,
+                InvocationState::Queued | InvocationState::Running
+            )
+        })
+        .map(crate::payload_store::active_payload_commitment)
+        .sum::<u64>();
+    if payload_reserved.saturating_add(PAYLOAD_COMPLETION_HEADROOM_BYTES)
+        > active_payload_capacity(limits)
+    {
+        return Err("capacity_active_payload".into());
     }
     Ok(())
+}
+
+pub fn active_payload_capacity(limits: &Limits) -> u64 {
+    let per_pending = API_REQUEST_BODY_BYTES.saturating_add(limits.max_response_bytes);
+    (limits.max_pending as u64)
+        .saturating_mul(per_pending)
+        .saturating_add((limits.max_dispatch_workers as u64) * PAYLOAD_COMPLETION_HEADROOM_BYTES)
 }
 
 fn compact_terminal_requests(s: &mut Document) -> Result<(), String> {
@@ -349,6 +369,7 @@ mod tests {
             request_bytes: None,
             work_digest: None,
             work_bytes: None,
+            request_ref: None,
             state,
             queue_order: 1,
             waiting_deadline: now() + 60,
@@ -358,6 +379,8 @@ mod tests {
             late_result: None,
             result_digest: None,
             late_result_digest: None,
+            result_ref: None,
+            late_result_ref: None,
             started: Some(now()),
             activation: Some("generation".into()),
             result: Some(json!({"ok": true})),
@@ -379,12 +402,12 @@ mod tests {
             .sum()
     }
 
-    fn active_reservation_bytes(s: &Document) -> u64 {
+    fn active_payload_commitment_bytes(s: &Document) -> u64 {
         s.data
             .invocations
             .values()
             .filter(|i| matches!(i.state, InvocationState::Queued | InvocationState::Running))
-            .map(|i| i.response_bytes.saturating_mul(6) + 16384)
+            .map(crate::payload_store::active_payload_commitment)
             .sum()
     }
 
@@ -418,7 +441,7 @@ mod tests {
     fn terminal_request_history_compacts_old_representation_and_admits_new_work() {
         let limits = test_limits();
         let mut document = empty_document();
-        for index in 0..185 {
+        for index in 0..260 {
             let request = protocol_request(
                 &format!("terminal-{index}"),
                 "reservation",
@@ -446,17 +469,23 @@ mod tests {
         );
         let mut document: Document = serde_json::from_value(old_json).unwrap();
         let before_terminal_requests = terminal_request_bytes(&document);
-        let before_reserved =
-            json_bytes(&document).unwrap().len() as u64 + active_reservation_bytes(&document);
-        assert!(before_reserved > limits.retention_admission_bytes);
+        let before_control = json_bytes(&document).unwrap().len() as u64;
+        assert!(before_control > limits.retention_admission_bytes);
 
         retention(&mut document, &limits).unwrap();
 
         let after_terminal_requests = terminal_request_bytes(&document);
-        let after_reserved =
-            json_bytes(&document).unwrap().len() as u64 + active_reservation_bytes(&document);
+        let after_control = json_bytes(&document).unwrap().len() as u64;
+        let active_payload = active_payload_commitment_bytes(&document);
         assert!(after_terminal_requests < before_terminal_requests / 10);
-        assert!(after_reserved <= limits.retention_admission_bytes);
+        assert!(
+            after_control.saturating_add(CONTROL_COMPLETION_HEADROOM_BYTES)
+                <= limits.retention_admission_bytes
+        );
+        assert!(
+            active_payload.saturating_add(PAYLOAD_COMPLETION_HEADROOM_BYTES)
+                <= active_payload_capacity(&limits)
+        );
         let terminal = document.data.invocations.get("terminal-000").unwrap();
         assert!(terminal.request_digest.is_some());
         assert!(

@@ -7,7 +7,12 @@ pub struct Submission<'a> {
 }
 impl Submission<'_> {
     pub fn submit(&self, owner: &str, request: Inference) -> Result<Invocation, String> {
-        self.service.authority.update(|s| {
+        let root = self.service.config.authority_root.clone();
+        let invocation = self.service.authority.update(|s| {
+            let archived_identity_lookup_needed = owned(s, owner, &request.reservation_id)
+                .ok()
+                .filter(|d| active(d))
+                .is_none_or(|d| d.accepted_calls > 0);
             if let Some(work) = &request.work {
                 if let Some(i) = crate::work::find(s, owner, &work.work_id) {
                     return if work_matches(i, work)? {
@@ -16,16 +21,18 @@ impl Submission<'_> {
                         Err("identity_conflict".into())
                     };
                 }
-                if let Some(i) = crate::history_archive::lookup_work(
-                    &self.service.config.authority_root,
-                    owner,
-                    &work.work_id,
-                )? {
-                    return if work_matches(&i, work)? {
-                        Ok(i)
-                    } else {
-                        Err("identity_conflict".into())
-                    };
+                if archived_identity_lookup_needed {
+                    if let Some(i) = crate::history_archive::lookup_work(
+                        &self.service.config.authority_root,
+                        owner,
+                        &work.work_id,
+                    )? {
+                        return if work_matches(&i, work)? {
+                            Ok(i)
+                        } else {
+                            Err("identity_conflict".into())
+                        };
+                    }
                 }
                 let selected =
                     crate::reservation::select(s, (owner, &work.reservation_id, &work.service))?;
@@ -52,19 +59,20 @@ impl Submission<'_> {
                     Err("identity_conflict".into())
                 };
             }
-            if let Some(i) = crate::history_archive::lookup_submission(
-                &self.service.config.authority_root,
-                owner,
-                &request.reservation_id,
-                &request.submission_id,
-            )? {
-                return if request_matches(&i, &request)? {
-                    Ok(i)
-                } else {
-                    Err("identity_conflict".into())
-                };
+            if archived_identity_lookup_needed {
+                if let Some(i) = crate::history_archive::lookup_submission(
+                    &self.service.config.authority_root,
+                    owner,
+                    &request.reservation_id,
+                    &request.submission_id,
+                )? {
+                    return if request_matches(&i, &request)? {
+                        Ok(i)
+                    } else {
+                        Err("identity_conflict".into())
+                    };
+                }
             }
-            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             if !crate::workspace_scope::permits(s, &request) {
                 return Err("workspace_scope_closed_or_unknown".into());
             }
@@ -147,7 +155,7 @@ impl Submission<'_> {
             } else {
                 self.service.config.limits.max_response_bytes
             };
-            let invocation = Invocation {
+            let mut invocation = Invocation {
                 scope_access_hash: None,
                 id: identity()?,
                 owner: owner.into(),
@@ -156,6 +164,7 @@ impl Submission<'_> {
                 request_bytes: None,
                 work_digest: None,
                 work_bytes: None,
+                request_ref: None,
                 state: InvocationState::Queued,
                 queue_order,
                 waiting_deadline: now() + wait,
@@ -165,22 +174,32 @@ impl Submission<'_> {
                 late_result: None,
                 result_digest: None,
                 late_result_digest: None,
+                result_ref: None,
+                late_result_ref: None,
                 started: None,
                 activation: None,
                 result: None,
                 error: None,
             };
-            crate::idle::touch(s, &invocation.request.reservation_id, now())?;
-            crate::activity_retention::refresh(
-                s,
-                (self.service.config.idle_timeout_seconds, now()),
-            )?;
-            s.data
-                .invocations
-                .insert(invocation.id.clone(), invocation.clone());
-            crate::capacity::retention(s, &self.service.config.limits)?;
-            Ok(invocation)
-        })
+            crate::payload_store::store_request(&root, &mut invocation)?;
+            let admitted = (|| {
+                crate::idle::touch(s, &invocation.request.reservation_id, now())?;
+                crate::activity_retention::refresh(
+                    s,
+                    (self.service.config.idle_timeout_seconds, now()),
+                )?;
+                s.data
+                    .invocations
+                    .insert(invocation.id.clone(), invocation.clone());
+                crate::capacity::retention(s, &self.service.config.limits)?;
+                Ok(invocation.clone())
+            })();
+            if admitted.is_err() {
+                let _ = crate::payload_store::remove_invocation_payloads(&root, &invocation);
+            }
+            admitted
+        })?;
+        crate::payload_store::hydrate_invocation(&root, invocation)
     }
 }
 

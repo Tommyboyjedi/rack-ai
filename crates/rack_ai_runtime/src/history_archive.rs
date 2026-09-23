@@ -115,7 +115,7 @@ pub fn lookup_invocation(root: &Path, owner: &str, id: &str) -> Result<Option<In
     if expired(archive.expires_at, now()) {
         return Ok(None);
     }
-    Ok(Some(archive.record))
+    crate::payload_store::hydrate_invocation(root, archive.record).map(Some)
 }
 
 pub fn lookup_work(root: &Path, owner: &str, work_id: &str) -> Result<Option<Invocation>, String> {
@@ -630,6 +630,7 @@ fn expire(root: &Path, at: u64) -> Result<usize, String> {
             if archive.preserved || !expired(archive.expires_at, at) {
                 continue;
             }
+            crate::payload_store::remove_invocation_payloads(root, &archive.record)?;
             remove_file_if_exists(&invocation_path(
                 root,
                 &archive.owner,
@@ -947,6 +948,7 @@ mod tests {
             request_bytes: None,
             work_digest: None,
             work_bytes: None,
+            request_ref: None,
             state,
             queue_order: 1,
             waiting_deadline: 100,
@@ -956,6 +958,8 @@ mod tests {
             late_result: None,
             result_digest: None,
             late_result_digest: None,
+            result_ref: None,
+            late_result_ref: None,
             started: Some(2),
             activation: Some("generation".into()),
             result: (state == InvocationState::Completed).then(|| json!({"model":"model"})),

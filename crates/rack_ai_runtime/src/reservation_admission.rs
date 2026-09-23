@@ -14,6 +14,7 @@ pub struct ReservationAdmission<'a> {
 }
 impl ReservationAdmission<'_> {
     pub fn reserve(&self, request: Reserve) -> Result<Value, String> {
+        self.service.retire_history_best_effort();
         self.service.authority.update(|s| {
             if let Some(d) = s.data.demands.values().find(|d| {
                 d.owner == self.source.source
@@ -42,7 +43,6 @@ impl ReservationAdmission<'_> {
                     Err("identity_conflict".into())
                 };
             }
-            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             if !valid_id(&request.acquisition_id)
                 || !valid_id(&request.work_id)
                 || request.services.is_empty()

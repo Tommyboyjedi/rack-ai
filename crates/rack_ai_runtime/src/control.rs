@@ -108,20 +108,28 @@ impl ReservationControl<'_> {
         Ok(d.clone())
     }
     pub fn cancel_invocation(&self, owner: &str, id: &str) -> Result<Invocation, String> {
-        self.service.authority.update(|s| {
-            let Some(i) = s.data.invocations.get_mut(id).filter(|i| i.owner == owner) else {
-                return crate::history_archive::lookup_invocation(
+        self.service
+            .authority
+            .update(|s| {
+                let Some(i) = s.data.invocations.get_mut(id).filter(|i| i.owner == owner) else {
+                    return crate::history_archive::lookup_invocation(
+                        &self.service.config.authority_root,
+                        owner,
+                        id,
+                    )?
+                    .ok_or("not_found".into());
+                };
+                i.cancel();
+                let result = i.clone();
+                crate::workspace_scope::cancel_closed(s);
+                Ok(result)
+            })
+            .and_then(|invocation| {
+                crate::payload_store::hydrate_invocation(
                     &self.service.config.authority_root,
-                    owner,
-                    id,
-                )?
-                .ok_or("not_found".into());
-            };
-            i.cancel();
-            let result = i.clone();
-            crate::workspace_scope::cancel_closed(s);
-            Ok(result)
-        })
+                    invocation,
+                )
+            })
     }
 }
 

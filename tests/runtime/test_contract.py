@@ -51,9 +51,11 @@ class ContractTests(unittest.TestCase):
                 self.assertIsNotNone(stored)
                 self.assertIn('request_digest', stored)
                 self.assertIn('request_bytes', stored)
+                self.assertIn('request_ref', stored)
+                self.assertIn('result_ref', stored)
                 self.assertNotIn('payload', stored['request'])
                 self.assertEqual(stored['request']['prompt'], '')
-                for field in ['request_digest','request_bytes','work_digest','work_bytes']:
+                for field in ['request_digest','request_bytes','work_digest','work_bytes','request_ref','result_ref','late_result_ref']:
                     self.assertNotIn(field, terminal)
                 replay=r.infer(d, identity=identity, prompt=prompt)
                 validate(replay)
@@ -66,7 +68,7 @@ class ContractTests(unittest.TestCase):
                 for operation in ['result','reconcile','cancel']:
                     response=r.call('athba',operation,invocation_id=invocation['id'])
                     validate(response)
-                    for field in ['request_digest','request_bytes','work_digest','work_bytes']:
+                    for field in ['request_digest','request_bytes','work_digest','work_bytes','request_ref','result_ref','late_result_ref']:
                         self.assertNotIn(field, response)
             finally:
                 r.close()

@@ -14,6 +14,26 @@ class HistoryArchiveTests(unittest.TestCase):
         root = rack.root/'authority'/'archive'
         return sorted(path for path in root.rglob('*.json')) if root.exists() else []
 
+    def wait_archived(self, rack, invocation_id):
+        deadline = time.monotonic() + 5
+        active = self.managed(rack)
+        while time.monotonic() < deadline:
+            active = self.managed(rack)
+            if invocation_id not in active['data']['invocations'] and self.archive_files(rack):
+                return active
+            time.sleep(.05)
+        self.fail(f'invocation {invocation_id} was not retired from active state: {active}')
+
+    def wait_active_empty(self, rack):
+        deadline = time.monotonic() + 5
+        active = self.managed(rack)
+        while time.monotonic() < deadline:
+            active = self.managed(rack)
+            if active['data']['demands'] == {} and active['data']['invocations'] == {}:
+                return active
+            time.sleep(.05)
+        self.fail(f'active state did not retire after release: {active}')
+
     def test_completed_call_retires_during_live_reservation_and_replays_from_archive(self):
         with tempfile.TemporaryDirectory(prefix='rack-history-live-reservation-') as root:
             r = Rack(root)
@@ -23,9 +43,7 @@ class HistoryArchiveTests(unittest.TestCase):
                 terminal = r.result(invocation)
                 self.assertEqual(terminal['state'], 'completed')
 
-                active = self.managed(r)
-                self.assertNotIn(invocation['id'], active['data']['invocations'])
-                self.assertTrue(self.archive_files(r))
+                self.wait_archived(r, invocation['id'])
 
                 before = r.counts('dispatch')['local-primary']
                 replay = r.infer(d, identity='historical-live-call')
@@ -45,9 +63,7 @@ class HistoryArchiveTests(unittest.TestCase):
                 r.release(d)
                 released = r.wait(d, 'released')
                 self.assertEqual(released['state'], 'released')
-                closed = self.managed(r)
-                self.assertEqual(closed['data']['demands'], {})
-                self.assertEqual(closed['data']['invocations'], {})
+                self.wait_active_empty(r)
                 self.assertEqual(r.result(invocation)['id'], invocation['id'])
             finally:
                 r.close()

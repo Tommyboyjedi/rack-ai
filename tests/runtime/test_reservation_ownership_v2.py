@@ -160,7 +160,7 @@ class ReservationOwnershipV2(unittest.TestCase):
         document = json.loads((r.root / "authority" / "managed.json").read_text())
         results = document["data"]["invocations"].values()
         self.assertTrue(any(item.get("result_digest") for item in results))
-        self.assertFalse(any(item.get("error") == "capacity_retained_evidence" for item in results))
+        self.assertFalse(any(item.get("error") in {"capacity_active_control", "capacity_active_payload"} for item in results))
 
 
 if __name__ == "__main__":

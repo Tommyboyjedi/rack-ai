@@ -85,9 +85,11 @@ pub fn find<'a>(s: &'a Document, owner: &str, id: &str) -> Option<&'a Invocation
         .find(|i| i.owner == owner && i.request.work.as_ref().is_some_and(|w| w.work_id == id))
 }
 pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> {
+    let root = service.config.authority_root.clone();
     match service.authority.read(|s| {
-        let i = find(s, input.0, input.1).ok_or("not_found")?;
-        work_view(s, i)
+        let i = find(s, input.0, input.1).cloned().ok_or("not_found")?;
+        let hydrated = crate::payload_store::hydrate_invocation(&root, i)?;
+        work_view(s, &hydrated)
     }) {
         Ok(value) => Ok(value),
         Err(error) if error == "not_found" => {

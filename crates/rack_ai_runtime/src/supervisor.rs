@@ -88,9 +88,10 @@ impl Reconsideration<'_> {
                     i.state = InvocationState::Expired;
                 }
             }
-            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             Ok(())
-        })
+        })?;
+        self.service.retire_history_best_effort();
+        Ok(())
     }
 }
 pub struct Supervisor {

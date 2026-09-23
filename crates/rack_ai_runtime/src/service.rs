@@ -44,7 +44,9 @@ impl Service {
                 .cloned()
                 .ok_or("not_found".into())
         }) {
-            Ok(invocation) => Ok(invocation),
+            Ok(invocation) => {
+                crate::payload_store::hydrate_invocation(&self.config.authority_root, invocation)
+            }
             Err(error) if error == "not_found" => {
                 crate::history_archive::lookup_invocation(&self.config.authority_root, owner, id)?
                     .ok_or(error)
@@ -61,6 +63,12 @@ impl Service {
             archived_reservations: report.archived_reservations,
             expired_archives: report.expired_files,
         })
+    }
+
+    pub fn retire_history_best_effort(&self) {
+        if let Err(error) = self.retire_history_once() {
+            eprintln!("history archive maintenance failed: {error}");
+        }
     }
 
     pub fn recover(&self) -> Result<(), String> {
@@ -101,7 +109,7 @@ impl Service {
             }
             Ok(())
         })?;
-        self.retire_history_once()?;
+        self.retire_history_best_effort();
         crate::residency::reconcile_on_start(self)?;
         Ok(())
     }
