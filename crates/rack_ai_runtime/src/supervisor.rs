@@ -88,6 +88,7 @@ impl Reconsideration<'_> {
                     i.state = InvocationState::Expired;
                 }
             }
+            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             Ok(())
         })
     }
@@ -218,6 +219,7 @@ fn pending_changes(service: &Service, s: &Document) -> bool {
     crate::activity_retention::pending(s, (service.config.idle_timeout_seconds, now()))
         || crate::recovery::pending(s)
         || crate::idle::pending(s, service.config.idle_timeout_seconds, now())
+        || crate::history_archive::pending(&service.config.authority_root, s, now())
         || s.data.invocations.values().any(|i| {
             crate::workspace_scope::needs_cancel(s, i)
                 || i.state == InvocationState::Queued

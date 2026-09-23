@@ -48,6 +48,7 @@ impl Retirement<'_> {
                 _ => DemandState::Released,
             };
             s.claims.retain(|_, owner| owner != &d.id);
+            crate::history_archive::maintain(&r.config.authority_root, s, now())?;
             Ok(())
         })
     }

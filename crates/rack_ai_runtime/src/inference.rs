@@ -16,6 +16,17 @@ impl Submission<'_> {
                         Err("identity_conflict".into())
                     };
                 }
+                if let Some(i) = crate::history_archive::lookup_work(
+                    &self.service.config.authority_root,
+                    owner,
+                    &work.work_id,
+                )? {
+                    return if work_matches(&i, work)? {
+                        Ok(i)
+                    } else {
+                        Err("identity_conflict".into())
+                    };
+                }
                 let selected =
                     crate::reservation::select(s, (owner, &work.reservation_id, &work.service))?;
                 if selected.id != request.reservation_id {
@@ -41,6 +52,19 @@ impl Submission<'_> {
                     Err("identity_conflict".into())
                 };
             }
+            if let Some(i) = crate::history_archive::lookup_submission(
+                &self.service.config.authority_root,
+                owner,
+                &request.reservation_id,
+                &request.submission_id,
+            )? {
+                return if request_matches(&i, &request)? {
+                    Ok(i)
+                } else {
+                    Err("identity_conflict".into())
+                };
+            }
+            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             if !crate::workspace_scope::permits(s, &request) {
                 return Err("workspace_scope_closed_or_unknown".into());
             }

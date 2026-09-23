@@ -1,5 +1,12 @@
 use rack_ai_runtime::{api, config::Config, service::Service};
 use std::sync::Arc;
+
+enum Operation {
+    Run,
+    Validate,
+    RetireHistory,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), String> {
     let arguments: Vec<_> = std::env::args().skip(1).collect();
@@ -10,15 +17,31 @@ async fn main() -> Result<(), String> {
         return rack_ai_infrastructure::sandbox_tcp_bridge::run_from_args(&arguments[1..])
             .map(|_| ());
     }
-    let (path, validate_only) = match arguments.as_slice() {
-        [path] => (path, false),
-        [operation, path] if operation == "validate" => (path, true),
-        _ => return Err("usage: rack_ai_runtime [validate] ADMIN_CONFIG.json".into()),
+    let (path, operation) = match arguments.as_slice() {
+        [path] => (path, Operation::Run),
+        [operation, path] if operation == "validate" => (path, Operation::Validate),
+        [operation, path] if operation == "retire-history" => (path, Operation::RetireHistory),
+        _ => {
+            return Err(
+                "usage: rack_ai_runtime [validate|retire-history] ADMIN_CONFIG.json".into(),
+            );
+        }
     };
     let config = Config::load(std::path::Path::new(path))?;
-    if validate_only {
-        println!("RUNTIME_CONFIG_VALID");
-        return Ok(());
+    match operation {
+        Operation::Validate => {
+            println!("RUNTIME_CONFIG_VALID");
+            return Ok(());
+        }
+        Operation::RetireHistory => {
+            let report = Service::new(config).retire_history_once()?;
+            println!(
+                "HISTORY_RETIREMENT archived_invocations={} archived_reservations={} expired_archives={}",
+                report.archived_invocations, report.archived_reservations, report.expired_archives
+            );
+            return Ok(());
+        }
+        Operation::Run => {}
     }
     let listener = tokio::net::TcpListener::bind(&config.listen)
         .await

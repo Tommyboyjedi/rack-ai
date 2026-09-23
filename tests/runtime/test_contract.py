@@ -42,8 +42,13 @@ class ContractTests(unittest.TestCase):
                 validate(invocation)
                 terminal=r.result(invocation)
                 validate(terminal)
-                managed=json.loads((Path(root)/'authority/managed.json').read_text())
-                stored=managed['data']['invocations'][invocation['id']]
+                stored = None
+                for path in (Path(root)/'authority/archive').rglob('*.json'):
+                    data = json.loads(path.read_text())
+                    if data.get('invocation_id') == invocation['id'] and 'record' in data:
+                        stored = data['record']
+                        break
+                self.assertIsNotNone(stored)
                 self.assertIn('request_digest', stored)
                 self.assertIn('request_bytes', stored)
                 self.assertNotIn('payload', stored['request'])

@@ -4,7 +4,16 @@ use crate::{
 };
 use serde_json::{Value, json};
 pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> {
-    service.authority.read(|s| view(s, input))
+    match service.authority.read(|s| view(s, input)) {
+        Ok(value) => Ok(value),
+        Err(error) if error == "not_found" => crate::history_archive::lookup_reservation_view(
+            &service.config.authority_root,
+            input.0,
+            input.1,
+        )?
+        .ok_or(error),
+        Err(error) => Err(error),
+    }
 }
 pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
     let d = owned(s, input.0, input.1)?;

@@ -29,6 +29,20 @@ impl ReservationAdmission<'_> {
                     .clone()
                     .ok_or("original_reservation_receipt_missing".into());
             }
+            if let Some((archived_request, result)) =
+                crate::history_archive::lookup_reservation_replay(
+                    &self.service.config.authority_root,
+                    &self.source.source,
+                    &request.acquisition_id,
+                )?
+            {
+                return if archived_request == request {
+                    Ok(result)
+                } else {
+                    Err("identity_conflict".into())
+                };
+            }
+            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             if !valid_id(&request.acquisition_id)
                 || !valid_id(&request.work_id)
                 || request.services.is_empty()
