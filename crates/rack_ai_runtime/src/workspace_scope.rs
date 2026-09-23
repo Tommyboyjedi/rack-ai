@@ -6,7 +6,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 
-#[derive(Clone, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct WorkspaceScope {
     #[serde(default)]
     pub invocation_id: Option<String>,

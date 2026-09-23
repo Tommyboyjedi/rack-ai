@@ -109,12 +109,14 @@ impl ReservationControl<'_> {
     }
     pub fn cancel_invocation(&self, owner: &str, id: &str) -> Result<Invocation, String> {
         self.service.authority.update(|s| {
-            let i = s
-                .data
-                .invocations
-                .get_mut(id)
-                .filter(|i| i.owner == owner)
-                .ok_or("not_found")?;
+            let Some(i) = s.data.invocations.get_mut(id).filter(|i| i.owner == owner) else {
+                return crate::history_archive::lookup_invocation(
+                    &self.service.config.authority_root,
+                    owner,
+                    id,
+                )?
+                .ok_or("not_found".into());
+            };
             i.cancel();
             let result = i.clone();
             crate::workspace_scope::cancel_closed(s);
@@ -126,7 +128,22 @@ impl ReservationControl<'_> {
 pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Result<(), String> {
     service.authority.update(|s| {
         let (owner, id, action) = input;
-        let d = owned(s, owner, id)?;
+        let d = match owned(s, owner, id) {
+            Ok(demand) => demand,
+            Err(error) if error == "not_found" => {
+                if crate::history_archive::lookup_reservation_view(
+                    &service.config.authority_root,
+                    owner,
+                    id,
+                )?
+                .is_some()
+                {
+                    return Ok(());
+                }
+                return Err(error);
+            }
+            Err(error) => return Err(error),
+        };
         let root_id = crate::reservation::root(s, d)?.id.clone();
         let ids = crate::reservation::members(s, d)?;
         if !matches!(action, Action::Renew { .. }) {

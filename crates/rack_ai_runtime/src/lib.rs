@@ -7,6 +7,7 @@ pub mod container;
 mod contract;
 pub mod control;
 pub mod dispatch;
+mod history_archive;
 pub mod hosting;
 pub mod idle;
 pub mod inference;

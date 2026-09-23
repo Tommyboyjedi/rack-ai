@@ -7,6 +7,12 @@ pub struct Service {
     pub control_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub authority: ManagedAuthority<State>,
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HistoryRetirementReport {
+    pub archived_invocations: usize,
+    pub archived_reservations: usize,
+    pub expired_archives: usize,
+}
 impl Service {
     pub fn new(config: Config) -> Self {
         Self {
@@ -20,18 +26,43 @@ impl Service {
         }
     }
     pub fn inspect(&self, owner: &str, id: &str) -> Result<Demand, String> {
-        self.authority.read(|s| owned(s, owner, id).cloned())
+        match self.authority.read(|s| owned(s, owner, id).cloned()) {
+            Ok(demand) => Ok(demand),
+            Err(error) if error == "not_found" => {
+                crate::history_archive::lookup_demand(&self.config.authority_root, owner, id)?
+                    .ok_or(error)
+            }
+            Err(error) => Err(error),
+        }
     }
     pub fn result(&self, owner: &str, id: &str) -> Result<Invocation, String> {
-        self.authority.read(|s| {
+        match self.authority.read(|s| {
             s.data
                 .invocations
                 .get(id)
                 .filter(|i| i.owner == owner)
                 .cloned()
                 .ok_or("not_found".into())
+        }) {
+            Ok(invocation) => Ok(invocation),
+            Err(error) if error == "not_found" => {
+                crate::history_archive::lookup_invocation(&self.config.authority_root, owner, id)?
+                    .ok_or(error)
+            }
+            Err(error) => Err(error),
+        }
+    }
+    pub fn retire_history_once(&self) -> Result<HistoryRetirementReport, String> {
+        let report = self
+            .authority
+            .update(|s| crate::history_archive::maintain(&self.config.authority_root, s, now()))?;
+        Ok(HistoryRetirementReport {
+            archived_invocations: report.archived_invocations,
+            archived_reservations: report.archived_reservations,
+            expired_archives: report.expired_files,
         })
     }
+
     pub fn recover(&self) -> Result<(), String> {
         let placement =
             digest(&serde_json::to_vec(&self.config.devices).map_err(|e| e.to_string())?);
@@ -70,7 +101,9 @@ impl Service {
             }
             Ok(())
         })?;
-        crate::residency::reconcile_on_start(self)
+        self.retire_history_once()?;
+        crate::residency::reconcile_on_start(self)?;
+        Ok(())
     }
 }
 pub fn owned<'a>(s: &'a Document, owner: &str, id: &str) -> Result<&'a Demand, String> {

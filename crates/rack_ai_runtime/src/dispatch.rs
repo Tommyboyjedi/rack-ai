@@ -173,6 +173,7 @@ impl Completion<'_> {
                     (self.service.config.idle_timeout_seconds, now()),
                 )?;
             }
+            crate::history_archive::maintain(&self.service.config.authority_root, s, now())?;
             crate::capacity::retention(s, &self.service.config.limits)?;
             Ok(())
         })

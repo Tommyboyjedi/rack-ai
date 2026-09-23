@@ -24,6 +24,17 @@ impl WorkSubmission<'_> {
                 Err("identity_conflict".into())
             };
         }
+        if let Some(i) = crate::history_archive::lookup_work(
+            &self.service.config.authority_root,
+            owner,
+            &work.work_id,
+        )? {
+            return if crate::inference::work_matches(&i, &work)? {
+                Ok(i)
+            } else {
+                Err("identity_conflict".into())
+            };
+        }
         let d = self.service.authority.read(|s| {
             crate::reservation::select(s, (owner, &work.reservation_id, &work.service)).cloned()
         })?;
@@ -74,28 +85,70 @@ pub fn find<'a>(s: &'a Document, owner: &str, id: &str) -> Option<&'a Invocation
         .find(|i| i.owner == owner && i.request.work.as_ref().is_some_and(|w| w.work_id == id))
 }
 pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> {
-    service.authority.read(|s| {
+    match service.authority.read(|s| {
         let i = find(s, input.0, input.1).ok_or("not_found")?;
-        let w = i.request.work.as_ref().ok_or("work_required")?;
-        let d = crate::service::owned(s, input.0, &i.request.reservation_id)?;
-        let state = if (i.state == InvocationState::Queued || (crate::work_payload::is_workspace(i) && i.state == InvocationState::Running)) && !crate::reservation::ready(s, d) {
-            match d.state {
-                DemandState::Preempting => "preempting".into(),
-                DemandState::Preempted => "preempted".into(),
-                _ => "waiting".into(),
-            }
-        } else { serde_json::to_value(i.state).map_err(|e| e.to_string())? };
-        Ok(json!({"work_id":w.work_id,"reservation_id":w.reservation_id,"service":w.service,"state":state,
-            "invocation_id":i.id,"started":i.started,"activation":i.activation,"result":i.result,
-            "late_result":i.late_result,"cancellation":i.cancellation,"error":i.error}))
-    })
+        work_view(s, i)
+    }) {
+        Ok(value) => Ok(value),
+        Err(error) if error == "not_found" => {
+            let invocation = crate::history_archive::lookup_work(
+                &service.config.authority_root,
+                input.0,
+                input.1,
+            )?
+            .ok_or(error)?;
+            archived_work_view(&invocation)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn work_view(s: &Document, i: &Invocation) -> Result<Value, String> {
+    let w = i.request.work.as_ref().ok_or("work_required")?;
+    let d = crate::service::owned(s, &i.owner, &i.request.reservation_id)?;
+    let state = if (i.state == InvocationState::Queued
+        || (crate::work_payload::is_workspace(i) && i.state == InvocationState::Running))
+        && !crate::reservation::ready(s, d)
+    {
+        match d.state {
+            DemandState::Preempting => "preempting".into(),
+            DemandState::Preempted => "preempted".into(),
+            _ => "waiting".into(),
+        }
+    } else {
+        serde_json::to_value(i.state).map_err(|e| e.to_string())?
+    };
+    work_json(i, w, state)
+}
+
+fn archived_work_view(i: &Invocation) -> Result<Value, String> {
+    let w = i.request.work.as_ref().ok_or("work_required")?;
+    work_json(
+        i,
+        w,
+        serde_json::to_value(i.state).map_err(|e| e.to_string())?,
+    )
+}
+
+fn work_json(i: &Invocation, w: &Work, state: Value) -> Result<Value, String> {
+    Ok(
+        json!({"work_id":w.work_id,"reservation_id":w.reservation_id,"service":w.service,"state":state,
+        "invocation_id":i.id,"started":i.started,"activation":i.activation,"result":i.result,
+        "late_result":i.late_result,"cancellation":i.cancellation,"error":i.error}),
+    )
 }
 pub fn cancel(service: &Service, input: (&str, &str)) -> Result<Value, String> {
-    let id = service.authority.read(|s| {
+    let id = match service.authority.read(|s| {
         find(s, input.0, input.1)
             .map(|i| i.id.clone())
             .ok_or("not_found".into())
-    })?;
+    }) {
+        Ok(id) => id,
+        Err(error) if error == "not_found" => {
+            return inspect(service, input);
+        }
+        Err(error) => return Err(error),
+    };
     (crate::control::ReservationControl { service }).cancel_invocation(input.0, &id)?;
     inspect(service, input)
 }

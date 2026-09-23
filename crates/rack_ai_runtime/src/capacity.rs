@@ -130,7 +130,7 @@ fn compact_terminal_requests(s: &mut Document) -> Result<(), String> {
     Ok(())
 }
 
-fn compact_terminal_request(invocation: &mut Invocation) -> Result<(), String> {
+pub(crate) fn compact_terminal_request(invocation: &mut Invocation) -> Result<(), String> {
     let original = json_bytes(&invocation.request)?;
     let mut compacted = invocation.request.clone();
     compacted.prompt.clear();
