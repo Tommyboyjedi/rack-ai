@@ -24,6 +24,7 @@ pub struct RegistryWorkspaceWorkerSelector {
     resolver: JCodeWorkerConfigResolver,
     reserved_worker: Option<String>,
     reserved_context_window: Option<u32>,
+    reserved_tool_profile: Option<String>,
 }
 
 impl RegistryWorkspaceWorkerSelector {
@@ -34,6 +35,7 @@ impl RegistryWorkspaceWorkerSelector {
             catalog: FileSystemWorkerCatalog::new(paths.clone()),
             resolver: JCodeWorkerConfigResolver::new(paths),
             reserved_context_window: None,
+            reserved_tool_profile: None,
         }
     }
 }
@@ -67,6 +69,7 @@ impl WorkspaceWorkerSelector for RegistryWorkspaceWorkerSelector {
                 resolver: &self.resolver,
                 catalog: &self.catalog,
                 reserved_context_window: self.reserved_context_window,
+                reserved_tool_profile: self.reserved_tool_profile.as_deref(),
             },
         )
     }
@@ -79,6 +82,7 @@ struct SelectionContext<'a> {
     resolver: &'a JCodeWorkerConfigResolver,
     catalog: &'a FileSystemWorkerCatalog,
     reserved_context_window: Option<u32>,
+    reserved_tool_profile: Option<&'a str>,
 }
 struct Candidates<'a> {
     decision: GenericWorkerSelectionDecision,
@@ -201,6 +205,9 @@ fn select_generic(
         .map_err(WorkspaceSelectionError::Other)?;
     if let Some(context_window) = context.reserved_context_window {
         runtime = runtime.with_context_window(Some(context_window));
+    }
+    if let Some(tool_profile) = context.reserved_tool_profile {
+        runtime = runtime.with_tool_profile(Some(tool_profile.to_string()));
     }
     let placement = context
         .catalog
@@ -419,6 +426,36 @@ mod tests {
     }
 
     #[test]
+    fn reserved_primary_can_use_reserved_workspace_tool_profile_without_changing_identity() {
+        let root = temp_root();
+        write_generic_registry(&root, "active");
+        let selector = RegistryWorkspaceWorkerSelector::new(RegistryPaths::new(root))
+            .for_reserved_worker("local-primary".to_string())
+            .with_reserved_context_window(65_536)
+            .with_reserved_tool_profile("minimal");
+
+        let selection = selector
+            .select(&generic_request(
+                vec!["reasoning", "coding"],
+                "medium",
+                false,
+                "low",
+                "athba",
+            ))
+            .unwrap();
+
+        let runtime = selection.runtime();
+        assert_eq!(runtime.worker_id(), "local-primary");
+        assert_eq!(runtime.api_model_id(), "local-primary");
+        assert_eq!(runtime.context_window(), Some(65_536));
+        assert_eq!(runtime.tool_profile(), Some("minimal"));
+        assert_eq!(
+            runtime.worker_provenance().unwrap().resource_id,
+            "gpu-4060ti"
+        );
+    }
+
+    #[test]
     fn reserved_coder_uses_reserved_profile_context_without_changing_identity() {
         let root = temp_root();
         write_generic_registry(&root, "active");
@@ -623,6 +660,11 @@ impl RegistryWorkspaceWorkerSelector {
 
     pub fn with_reserved_context_window(mut self, context_window: u32) -> Self {
         self.reserved_context_window = Some(context_window);
+        self
+    }
+
+    pub fn with_reserved_tool_profile(mut self, tool_profile: impl Into<String>) -> Self {
+        self.reserved_tool_profile = Some(tool_profile.into());
         self
     }
 }

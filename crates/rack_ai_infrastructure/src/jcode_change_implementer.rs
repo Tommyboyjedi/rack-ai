@@ -14,6 +14,7 @@ pub struct JCodeChangeImplementer {
     resolver: JCodeWorkerConfigResolver,
     default_worker: Option<ImplementWorkerRuntime>,
     reserved_context_window: Option<u32>,
+    reserved_tool_profile: Option<String>,
 }
 
 impl JCodeChangeImplementer {
@@ -23,15 +24,20 @@ impl JCodeChangeImplementer {
             resolver: JCodeWorkerConfigResolver::new(paths),
             default_worker,
             reserved_context_window: None,
+            reserved_tool_profile: None,
         }
     }
 
-    fn apply_reserved_context_window(
+    fn apply_reserved_runtime_overrides(
         &self,
         runtime: ImplementWorkerRuntime,
     ) -> ImplementWorkerRuntime {
-        match self.reserved_context_window {
+        let runtime = match self.reserved_context_window {
             Some(context_window) => runtime.with_context_window(Some(context_window)),
+            None => runtime,
+        };
+        match &self.reserved_tool_profile {
+            Some(tool_profile) => runtime.with_tool_profile(Some(tool_profile.clone())),
             None => runtime,
         }
     }
@@ -42,7 +48,7 @@ impl JCodeChangeImplementer {
     ) -> Result<ImplementWorkerRuntime, String> {
         if let Some(runtime) = request.worker() {
             let resolved =
-                self.apply_reserved_context_window(self.resolver.resolve(runtime.worker_id())?);
+                self.apply_reserved_runtime_overrides(self.resolver.resolve(runtime.worker_id())?);
             assert_runtime_matches(runtime, &resolved)?;
             return Ok(match &self.access {
                 Some(access) => resolved.with_reserved_access(access.clone()),
@@ -51,11 +57,11 @@ impl JCodeChangeImplementer {
         }
         self.default_worker
             .clone()
-            .map(|runtime| Ok(self.apply_reserved_context_window(runtime)))
+            .map(|runtime| Ok(self.apply_reserved_runtime_overrides(runtime)))
             .unwrap_or_else(|| {
                 self.resolver
                     .resolve_default_implementer()
-                    .map(|runtime| self.apply_reserved_context_window(runtime))
+                    .map(|runtime| self.apply_reserved_runtime_overrides(runtime))
             })
     }
 }
@@ -265,6 +271,34 @@ mod tests {
     }
 
     #[test]
+    fn reserved_tool_profile_satisfies_runtime_re_resolution() {
+        let root = temp_root();
+        write_registry(&root);
+        let implementer = JCodeChangeImplementer::new(RegistryPaths::new(root), None)
+            .with_reserved_context_window(65_536)
+            .with_reserved_tool_profile("minimal");
+        let worktree = temp_root();
+        let request = ImplementChangeRequest::new(worktree, "task".to_string()).with_worker(
+            ImplementWorkerRuntime::new(
+                "local-primary".to_string(),
+                "/home/tomp/.local/bin/jcode".to_string(),
+                "local-primary".to_string(),
+                "local-primary".to_string(),
+                "http://127.0.0.1:8017/v1".to_string(),
+            )
+            .with_tool_profile(Some("minimal".to_string()))
+            .with_context_window(Some(65_536)),
+        );
+
+        let runtime = implementer.resolve_runtime(&request).unwrap();
+
+        assert_eq!(runtime.worker_id(), "local-primary");
+        assert_eq!(runtime.api_model_id(), "local-primary");
+        assert_eq!(runtime.context_window(), Some(65_536));
+        assert_eq!(runtime.tool_profile(), Some("minimal"));
+    }
+
+    #[test]
     fn reserved_context_window_satisfies_runtime_re_resolution() {
         let root = temp_root();
         write_registry(&root);
@@ -321,6 +355,17 @@ mod tests {
             r#"{
   "workers": [
     {
+      "id": "local-primary",
+      "kind": "jcode",
+      "role": "planner-verifier",
+      "entrypoint": "/home/tomp/.local/bin/jcode",
+      "backend": "jcode",
+      "resource_id": "gpu-4060ti",
+      "model_id": "gemma4-12b-local-primary",
+      "enabled": true,
+      "provider_profile": "local-primary"
+    },
+    {
       "id": "local-coder",
       "kind": "jcode",
       "role": "implementer-tester",
@@ -340,6 +385,17 @@ mod tests {
             root.join("config/models.json"),
             r#"{
   "models": [
+    {
+      "id": "gemma4-12b-local-primary",
+      "label": "Gemma 4 12B",
+      "role": "planner-verifier",
+      "backend": "vllm",
+      "worker_id": "local-primary",
+      "api_model_id": "local-primary",
+      "endpoint": "http://127.0.0.1:8017/v1",
+      "port": 8017,
+      "status": "active"
+    },
     {
       "id": "eqaq-v2-local-coder",
       "label": "NotaMG/eqaq-v2",
@@ -380,6 +436,11 @@ impl JCodeChangeImplementer {
 
     pub fn with_reserved_context_window(mut self, context_window: u32) -> Self {
         self.reserved_context_window = Some(context_window);
+        self
+    }
+
+    pub fn with_reserved_tool_profile(mut self, tool_profile: impl Into<String>) -> Self {
+        self.reserved_tool_profile = Some(tool_profile.into());
         self
     }
 }

@@ -6,10 +6,11 @@ Before inspecting, planning, editing, testing, or committing code, read and obey
 
 1. `coding_principles.MD`
 2. `agent.MD`
-3. `docs/engineering-contract.md`
-4. `docs/generic-bounded-workspace-execution.md`
-5. `docs/athba-runtime-boundary.md` for ATHBA-facing work
-6. the current PR description and any source-controlled implementation contract relevant to the task
+3. `docs/protected-runtime-limits.md`
+4. `docs/engineering-contract.md`
+5. `docs/generic-bounded-workspace-execution.md`
+6. `docs/athba-runtime-boundary.md` for ATHBA-facing work
+7. the current PR description and any source-controlled implementation contract relevant to the task
 
 `coding_principles.MD` is mandatory application-level policy, not optional style guidance. Exceptions to its class-size, parameter-count, inheritance, or other architectural rules require explicit user approval and documented rationale.
 
@@ -17,6 +18,7 @@ For architecture detail, safety invariants, and verification guidance, see:
 
 - `docs/engineering-contract.md`
 - `docs/generic-bounded-workspace-execution.md`
+- `docs/protected-runtime-limits.md`
 
 ## Core Boundary
 
