@@ -127,6 +127,25 @@ pub fn remove_invocation_payloads(root: &Path, invocation: &Invocation) -> Resul
     Ok(())
 }
 
+pub fn remove_uncommitted_result_payloads(
+    root: &Path,
+    invocation: &Invocation,
+    previous_result_ref: Option<&StoredPayloadRef>,
+    previous_late_result_ref: Option<&StoredPayloadRef>,
+) -> Result<(), String> {
+    if let Some(reference) = invocation.result_ref.as_ref() {
+        if previous_result_ref != Some(reference) {
+            remove_reference(root, reference)?;
+        }
+    }
+    if let Some(reference) = invocation.late_result_ref.as_ref() {
+        if previous_late_result_ref != Some(reference) {
+            remove_reference(root, reference)?;
+        }
+    }
+    Ok(())
+}
+
 pub fn active_payload_commitment(invocation: &Invocation) -> u64 {
     request_bytes(invocation).saturating_add(invocation.response_bytes)
 }

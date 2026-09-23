@@ -5,6 +5,7 @@ pub struct Service {
     pub gateway_waiters: std::sync::Arc<tokio::sync::Semaphore>,
     pub admission_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub control_slots: std::sync::Arc<tokio::sync::Semaphore>,
+    history_maintenance_after: std::sync::atomic::AtomicU64,
     pub authority: ManagedAuthority<State>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,6 +22,7 @@ impl Service {
             )),
             admission_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
             control_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
+            history_maintenance_after: std::sync::atomic::AtomicU64::new(0),
             authority: ManagedAuthority::new(config.authority_root.clone()),
             config,
         }
@@ -66,9 +68,30 @@ impl Service {
     }
 
     pub fn retire_history_best_effort(&self) {
+        self.history_maintenance_after.store(
+            now().saturating_add(60),
+            std::sync::atomic::Ordering::Release,
+        );
         if let Err(error) = self.retire_history_once() {
             eprintln!("history archive maintenance failed: {error}");
         }
+    }
+
+    pub fn history_maintenance_due(&self, at: u64) -> bool {
+        let next = self
+            .history_maintenance_after
+            .load(std::sync::atomic::Ordering::Acquire);
+        if at < next {
+            return false;
+        }
+        self.history_maintenance_after
+            .compare_exchange(
+                next,
+                at.saturating_add(60),
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
     }
 
     pub fn recover(&self) -> Result<(), String> {

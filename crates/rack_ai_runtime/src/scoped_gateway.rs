@@ -96,7 +96,10 @@ pub async fn handle(
         }
         if matches!(
             result.state,
-            InvocationState::Uncertain | InvocationState::Cancelled | InvocationState::Expired
+            InvocationState::Failed
+                | InvocationState::Uncertain
+                | InvocationState::Cancelled
+                | InvocationState::Expired
         ) || std::time::Instant::now() >= deadline
         {
             return failure(format!("invocation_{:?}:{}", result.state, result.id));

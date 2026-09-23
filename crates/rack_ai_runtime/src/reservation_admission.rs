@@ -14,7 +14,6 @@ pub struct ReservationAdmission<'a> {
 }
 impl ReservationAdmission<'_> {
     pub fn reserve(&self, request: Reserve) -> Result<Value, String> {
-        self.service.retire_history_best_effort();
         self.service.authority.update(|s| {
             if let Some(d) = s.data.demands.values().find(|d| {
                 d.owner == self.source.source

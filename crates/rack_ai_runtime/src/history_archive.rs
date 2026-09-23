@@ -102,6 +102,7 @@ pub fn maintain(root: &Path, s: &mut Document, at: u64) -> Result<MaintenanceRep
     Ok(report)
 }
 
+#[allow(dead_code)]
 pub fn pending(root: &Path, s: &Document, at: u64) -> bool {
     !closed_roots(s).is_empty()
         || !active_terminal_invocations(s, at).is_empty()
@@ -673,6 +674,7 @@ fn expired(expires_at: Option<u64>, at: u64) -> bool {
     expires_at.is_some_and(|expiry| expiry <= at)
 }
 
+#[allow(dead_code)]
 fn expired_archive_exists(root: &Path, at: u64) -> Result<bool, String> {
     for owner in owner_dirs(root)? {
         if invocation_archives(&owner)?

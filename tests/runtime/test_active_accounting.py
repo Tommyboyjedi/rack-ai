@@ -37,16 +37,19 @@ class ActiveAccountingTests(unittest.TestCase):
     def test_two_services_keep_three_mib_allowance_without_false_control_charge(self):
         with tempfile.TemporaryDirectory(prefix='rack-active-two-services-') as root:
             def configure(config):
-                config['limits'] = dict(max_dispatch_workers=1, max_response_bytes=3*1024*1024)
+                config['limits'] = dict(max_dispatch_workers=2, max_response_bytes=3*1024*1024)
             rack = Rack(root, configure=configure)
             try:
                 primary = rack.wait(rack.acquire('athba', 'local-primary', 'low'))
                 coder = rack.wait(rack.acquire('athba', 'local-coder', 'low'))
-                rack.controls('local-primary', delay=1)
-                rack.controls('local-coder', delay=1)
+                rack.controls('local-primary', delay=1.5)
+                rack.controls('local-coder', delay=1.5)
+                started = time.monotonic()
                 first = rack.infer(primary, identity='primary-running')
+                second = rack.infer(coder, identity='coder-running')
                 self.wait_dispatch(rack, 'local-primary')
-                second = rack.infer(coder, identity='coder-queued')
+                self.wait_dispatch(rack, 'local-coder')
+                self.assertLess(time.monotonic()-started, 1.2)
                 active = self.managed(rack)
                 self.assertLess((rack.root/'authority'/'managed.json').stat().st_size, 30*1024*1024)
                 self.assertGreater(self.payload_bytes(rack), 0)
@@ -62,7 +65,7 @@ class ActiveAccountingTests(unittest.TestCase):
             rack = Rack(root)
             try:
                 demand = rack.wait(rack.acquire('athba', 'local-primary', 'low'))
-                content = ('unicode snowman \u2603 quote " slash \\ ' * 60000)
+                content = ('unicode snowman ☃ quote " slash \\ newline \n tab \t ' * 25000)
                 rack.controls('local-primary', content=content)
                 invocation = rack.infer(demand, identity='near-limit')
                 result = rack.result(invocation)
@@ -72,6 +75,10 @@ class ActiveAccountingTests(unittest.TestCase):
                 stored = self.stored_invocation(rack, invocation['id'])
                 self.assertIn('result_ref', stored)
                 self.assertIsNone(stored.get('result'))
+                result_ref = stored['result_ref']
+                result_path = rack.root/'authority'/result_ref['path']
+                self.assertEqual(result_path.stat().st_size, result_ref['bytes'])
+                self.assertGreater(result_ref['bytes'], len(content.encode()) + 50000)
             finally:
                 rack.close()
 

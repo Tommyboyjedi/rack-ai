@@ -50,7 +50,6 @@ impl Retirement<'_> {
             s.claims.retain(|_, owner| owner != &d.id);
             Ok(())
         })?;
-        r.retire_history_best_effort();
         Ok(())
     }
 }
