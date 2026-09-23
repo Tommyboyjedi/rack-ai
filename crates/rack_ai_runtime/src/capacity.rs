@@ -132,7 +132,9 @@ pub fn retention(s: &mut Document, limits: &Limits) -> Result<(), String> {
 }
 
 pub fn active_payload_capacity(limits: &Limits) -> u64 {
-    let per_pending = API_REQUEST_BODY_BYTES.saturating_add(limits.max_response_bytes);
+    let per_pending = API_REQUEST_BODY_BYTES.saturating_add(
+        crate::payload_store::response_storage_bound(limits.max_response_bytes),
+    );
     (limits.max_pending as u64)
         .saturating_mul(per_pending)
         .saturating_add((limits.max_dispatch_workers as u64) * PAYLOAD_COMPLETION_HEADROOM_BYTES)

@@ -81,10 +81,8 @@ class HistoryArchiveTests(unittest.TestCase):
                     r.release(d)
                     self.assertEqual(r.wait(d, 'released')['state'], 'released')
                     managed_path = r.root/'authority'/'managed.json'
-                    active = json.loads(managed_path.read_text())
+                    active = self.wait_active_empty(r)
                     self.assertEqual(active['claims'], {})
-                    self.assertEqual(active['data']['demands'], {})
-                    self.assertEqual(active['data']['invocations'], {})
                     sizes.append(managed_path.stat().st_size)
                 self.assertLess(max(sizes) - min(sizes), 2048)
             finally:
@@ -99,6 +97,7 @@ class HistoryArchiveTests(unittest.TestCase):
                 self.assertEqual(r.result(invocation)['state'], 'completed')
                 r.release(d)
                 self.assertEqual(r.wait(d, 'released')['state'], 'released')
+                self.wait_active_empty(r)
                 files = self.archive_files(r)
                 self.assertTrue(files)
                 for path in files:

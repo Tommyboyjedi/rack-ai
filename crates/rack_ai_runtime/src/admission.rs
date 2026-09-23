@@ -13,9 +13,14 @@ impl Admission<'_> {
         if request.source_system != self.source.source {
             return Err("source_spoofing".into());
         }
-        self.service
+        let result = self
+            .service
             .authority
-            .update(|s| self.acquire_in(s, request))
+            .update(|s| self.acquire_in(s, request));
+        if result.is_ok() {
+            self.service.request_history_maintenance();
+        }
+        result
     }
 
     pub(crate) fn acquire_in(&self, s: &mut Document, request: Acquire) -> Result<Demand, String> {

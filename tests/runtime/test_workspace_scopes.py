@@ -58,7 +58,7 @@ class WorkspaceScopes(unittest.TestCase):
             self.assertEqual(self.r.result(blocker)['state'],'completed')
             self.assertEqual(self.r.result(unrelated)['state'],'completed')
             self.assertEqual(self.r.counts('dispatch')['local-primary'],2)
-            self.assertEqual(self.data()['invocations'][i['id']]['state'],'cancelled')
+            self.assertEqual(self.r.result(i,'cancelled')['state'],'cancelled')
             self.assertFalse(self.r.inspect(self.p)['released'])
 
     def test_delayed_http_submission_cannot_cross_closed_or_expired_scope(self):

@@ -98,12 +98,12 @@ struct Completion<'a> {
     service: &'a Service,
 }
 #[cfg(test)]
-static FAIL_COMPLETION_AFTER_PAYLOAD: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+static FAIL_COMPLETION_AFTER_PAYLOAD: std::sync::Mutex<Option<String>> =
+    std::sync::Mutex::new(None);
 
 #[cfg(test)]
-fn fail_next_completion_after_payload() {
-    FAIL_COMPLETION_AFTER_PAYLOAD.store(true, std::sync::atomic::Ordering::SeqCst);
+fn fail_completion_after_payload_for(invocation_id: &str) {
+    *FAIL_COMPLETION_AFTER_PAYLOAD.lock().unwrap() = Some(invocation_id.to_string());
 }
 
 impl Completion<'_> {
@@ -114,7 +114,7 @@ impl Completion<'_> {
     ) -> Result<(), String> {
         let (invocation, demand) = context;
         let id = &invocation.id;
-        self.service.authority.update(|s| {
+        let saved = self.service.authority.update(|s| {
             crate::workspace_scope::cancel_closed(s);
             let unknown_child = crate::work_payload::is_workspace(&invocation)
                 && s.data.invocations.values().any(|child| {
@@ -202,8 +202,12 @@ impl Completion<'_> {
             let _ = i;
             let finalized = (|| {
                 #[cfg(test)]
-                if FAIL_COMPLETION_AFTER_PAYLOAD.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    return Err("injected_completion_finalization_failure".into());
+                {
+                    let mut fail_after_payload = FAIL_COMPLETION_AFTER_PAYLOAD.lock().unwrap();
+                    if fail_after_payload.as_deref() == Some(id) {
+                        *fail_after_payload = None;
+                        return Err("injected_completion_finalization_failure".into());
+                    }
                 }
                 if !terminal_uncertain {
                     crate::idle::touch(s, &demand.id, now())?;
@@ -226,7 +230,11 @@ impl Completion<'_> {
                 }
             }
             finalized
-        })
+        });
+        if saved.is_ok() {
+            self.service.request_history_maintenance();
+        }
+        saved
     }
 }
 
@@ -265,7 +273,7 @@ mod tests {
     use std::fs;
 
     struct Fixture {
-        service: Service,
+        service: std::sync::Arc<Service>,
     }
 
     impl Fixture {
@@ -283,7 +291,7 @@ mod tests {
                 profile.evidence = vec!["synthetic-no-gpu".into()];
             }
             Self {
-                service: Service::new(config),
+                service: std::sync::Arc::new(Service::new(config)),
             }
         }
 
@@ -314,21 +322,21 @@ mod tests {
                 ttl_seconds: 60,
                 qualification: false,
             };
-            let demand = Admission {
+            let mut demand = Admission {
                 service: &self.service,
                 source,
             }
-            .acquire(request)
+            .prepare(request, 0)
             .unwrap();
+            demand.state = DemandState::Ready;
+            demand.ready_checked = true;
             self.service
                 .authority
                 .update(|s| {
-                    let saved = s.data.demands.get_mut(&demand.id).unwrap();
-                    saved.state = DemandState::Ready;
-                    saved.ready_checked = true;
-                    for resource in saved.profile.resources.clone() {
-                        s.claims.insert(resource, saved.id.clone());
+                    for resource in demand.profile.resources.clone() {
+                        s.claims.insert(resource, demand.id.clone());
                     }
+                    s.data.demands.insert(demand.id.clone(), demand.clone());
                     Ok(())
                 })
                 .unwrap();
@@ -369,6 +377,101 @@ mod tests {
     }
 
     #[test]
+    fn paused_history_maintenance_does_not_block_unrelated_execution_or_release() {
+        let fixture = Fixture::new();
+        let old = fixture.acquire_ready();
+        let old_invocation = crate::inference::Submission {
+            service: &fixture.service,
+        }
+        .submit(&old.owner, request(&old, "old-terminal"))
+        .unwrap();
+        let old_running = fixture
+            .service
+            .authority
+            .update(|s| {
+                let invocation = s.data.invocations.get_mut(&old_invocation.id).unwrap();
+                invocation.state = InvocationState::Running;
+                invocation.started = Some(now());
+                invocation.execution_deadline = Some(now() + 5);
+                invocation.activation = Some(old.generation.clone());
+                Ok(invocation.clone())
+            })
+            .unwrap();
+        Completion {
+            service: &fixture.service,
+        }
+        .save((old_running, old.clone()), Ok(completion_value(&old)))
+        .unwrap();
+
+        let pause = crate::history_archive::MaintenanceIoPause::new();
+        crate::history_archive::install_maintenance_io_pause(std::sync::Arc::clone(&pause));
+        let service = std::sync::Arc::clone(&fixture.service);
+        let maintenance = std::thread::spawn(move || service.retire_history_once());
+        pause.wait_until_entered();
+
+        let current = fixture.acquire_ready();
+        let invocation = crate::inference::Submission {
+            service: &fixture.service,
+        }
+        .submit(&current.owner, request(&current, "unrelated-live"))
+        .unwrap();
+        let running = fixture
+            .service
+            .authority
+            .update(|s| {
+                let invocation = s.data.invocations.get_mut(&invocation.id).unwrap();
+                invocation.state = InvocationState::Running;
+                invocation.started = Some(now());
+                invocation.execution_deadline = Some(now() + 5);
+                invocation.activation = Some(current.generation.clone());
+                Ok(invocation.clone())
+            })
+            .unwrap();
+        Completion {
+            service: &fixture.service,
+        }
+        .save((running, current.clone()), Ok(completion_value(&current)))
+        .unwrap();
+        let completed = fixture
+            .service
+            .result(&current.owner, &invocation.id)
+            .unwrap();
+        assert_eq!(completed.state, InvocationState::Completed);
+
+        crate::control::ReservationControl {
+            service: &fixture.service,
+        }
+        .control(crate::control::ControlContext {
+            owner: &current.owner,
+            id: &current.id,
+            request: crate::control::Control {
+                generation: current.generation.clone(),
+                action: crate::control::Action::Release,
+            },
+        })
+        .unwrap();
+        let releasing = fixture
+            .service
+            .inspect(&current.owner, &current.id)
+            .unwrap();
+        crate::retirement::Retirement {
+            service: &fixture.service,
+        }
+        .run(&releasing)
+        .unwrap();
+        let released = fixture
+            .service
+            .inspect(&current.owner, &current.id)
+            .unwrap();
+        assert_eq!(released.state, DemandState::Released);
+
+        pause.release();
+        let report = maintenance.join().unwrap().unwrap();
+        crate::history_archive::clear_maintenance_io_pause();
+        assert!(report.archived_invocations >= 1);
+    }
+
+    #[test]
     fn completion_finalization_failure_preserves_committed_request_sidecar() {
         let fixture = Fixture::new();
         let demand = fixture.acquire_ready();
@@ -391,7 +494,7 @@ mod tests {
             })
             .unwrap();
 
-        fail_next_completion_after_payload();
+        fail_completion_after_payload_for(&submitted.id);
         let failure = Completion {
             service: &fixture.service,
         }

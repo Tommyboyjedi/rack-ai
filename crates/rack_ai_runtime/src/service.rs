@@ -6,6 +6,7 @@ pub struct Service {
     pub admission_slots: std::sync::Arc<tokio::sync::Semaphore>,
     pub control_slots: std::sync::Arc<tokio::sync::Semaphore>,
     history_maintenance_after: std::sync::atomic::AtomicU64,
+    history_maintenance_running: std::sync::atomic::AtomicBool,
     pub authority: ManagedAuthority<State>,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -23,6 +24,7 @@ impl Service {
             admission_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
             control_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
             history_maintenance_after: std::sync::atomic::AtomicU64::new(0),
+            history_maintenance_running: std::sync::atomic::AtomicBool::new(false),
             authority: ManagedAuthority::new(config.authority_root.clone()),
             config,
         }
@@ -57,27 +59,64 @@ impl Service {
         }
     }
     pub fn retire_history_once(&self) -> Result<HistoryRetirementReport, String> {
-        let report = self
-            .authority
-            .update(|s| crate::history_archive::maintain(&self.config.authority_root, s, now()))?;
+        let root = self.config.authority_root.clone();
+        let mut total = crate::history_archive::MaintenanceReport::default();
+        for _ in 0..8 {
+            let at = now();
+            let Some(plan) = self
+                .authority
+                .read(|s| crate::history_archive::plan_maintenance(&root, s, at))?
+            else {
+                break;
+            };
+            let prepared = crate::history_archive::prepare_maintenance(&root, plan)?;
+            let report = self.authority.update(|s| {
+                crate::history_archive::commit_prepared_maintenance(&root, s, prepared)
+            })?;
+            let changed = report.archived_invocations > 0
+                || report.archived_reservations > 0
+                || report.expired_files > 0;
+            total.archived_invocations += report.archived_invocations;
+            total.archived_reservations += report.archived_reservations;
+            total.expired_files += report.expired_files;
+            if !changed {
+                break;
+            }
+        }
         Ok(HistoryRetirementReport {
-            archived_invocations: report.archived_invocations,
-            archived_reservations: report.archived_reservations,
-            expired_archives: report.expired_files,
+            archived_invocations: total.archived_invocations,
+            archived_reservations: total.archived_reservations,
+            expired_archives: total.expired_files,
         })
     }
 
+    pub fn request_history_maintenance(&self) {
+        self.history_maintenance_after
+            .store(0, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn retire_history_best_effort(&self) {
-        self.history_maintenance_after.store(
-            now().saturating_add(60),
-            std::sync::atomic::Ordering::Release,
-        );
-        if let Err(error) = self.retire_history_once() {
+        if self
+            .history_maintenance_running
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let result = self.retire_history_once();
+        self.history_maintenance_running
+            .store(false, std::sync::atomic::Ordering::Release);
+        if let Err(error) = result {
             eprintln!("history archive maintenance failed: {error}");
         }
     }
 
     pub fn history_maintenance_due(&self, at: u64) -> bool {
+        if self
+            .history_maintenance_running
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            return false;
+        }
         let next = self
             .history_maintenance_after
             .load(std::sync::atomic::Ordering::Acquire);

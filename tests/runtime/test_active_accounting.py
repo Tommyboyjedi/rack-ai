@@ -82,6 +82,42 @@ class ActiveAccountingTests(unittest.TestCase):
             finally:
                 rack.close()
 
+    def test_streamed_escaped_response_accounting_covers_stored_representation(self):
+        with tempfile.TemporaryDirectory(prefix='rack-active-stream-escaped-') as root:
+            def configure(config):
+                profile = next(p for p in config['profiles'] if p['tag']=='local-primary')
+                profile['streaming'] = True
+            rack = Rack(root, configure=configure)
+            try:
+                demand = rack.wait(rack.acquire('athba', 'local-primary', 'low'))
+                unit = '\\\\"\n\t'
+                content = unit
+                while True:
+                    candidate = content + unit * 1024
+                    raw = 'data: '+json.dumps({'model':'local-primary','choices':[{'delta':{'content':candidate}}]})+'\n\ndata: [DONE]\n\n'
+                    if len(raw.encode()) > 2900*1024:
+                        break
+                    content = candidate
+                raw = 'data: '+json.dumps({'model':'local-primary','choices':[{'delta':{'content':content}}]})+'\n\ndata: [DONE]\n\n'
+                self.assertLess(len(raw.encode()), 3*1024*1024)
+                rack.controls('local-primary', content=content)
+                invocation = rack.infer(demand, identity='stream-escaped', payload=dict(
+                    protocol='chat_completions',
+                    body=dict(model='local-primary',messages=[dict(role='user',content='stream')],stream=True,max_tokens=16)))
+                result = rack.result(invocation)
+                body = result['result']['rack_protocol_response']['body']
+                self.assertEqual(body, raw)
+                stored = self.stored_invocation(rack, invocation['id'])
+                request_bytes = stored['request_ref']['bytes']
+                result_bytes = stored['result_ref']['bytes']
+                self.assertEqual(stored['response_bytes'], 3*1024*1024)
+                self.assertGreater(result_bytes, len(raw.encode()))
+                reserved = request_bytes + max(stored['response_bytes']*2 + 4096, result_bytes)
+                actual = request_bytes + result_bytes
+                self.assertGreaterEqual(reserved, actual)
+            finally:
+                rack.close()
+
     def test_oversized_output_fails_bounded_and_next_job_succeeds(self):
         with tempfile.TemporaryDirectory(prefix='rack-active-oversized-') as root:
             def configure(config):

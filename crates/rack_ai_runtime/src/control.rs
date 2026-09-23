@@ -26,7 +26,12 @@ pub struct ReservationControl<'a> {
 }
 impl ReservationControl<'_> {
     pub fn control(&self, c: ControlContext<'_>) -> Result<Demand, String> {
-        self.service.authority.update(|s| self.apply(s, c))
+        let wake = matches!(c.request.action, Action::Release | Action::Cancel);
+        let result = self.service.authority.update(|s| self.apply(s, c));
+        if result.is_ok() && wake {
+            self.service.request_history_maintenance();
+        }
+        result
     }
     pub(crate) fn apply(&self, s: &mut Document, c: ControlContext<'_>) -> Result<Demand, String> {
         let current = owned(s, c.owner, c.id)?;
@@ -108,33 +113,35 @@ impl ReservationControl<'_> {
         Ok(d.clone())
     }
     pub fn cancel_invocation(&self, owner: &str, id: &str) -> Result<Invocation, String> {
-        self.service
-            .authority
-            .update(|s| {
-                let Some(i) = s.data.invocations.get_mut(id).filter(|i| i.owner == owner) else {
-                    return crate::history_archive::lookup_invocation(
-                        &self.service.config.authority_root,
-                        owner,
-                        id,
-                    )?
-                    .ok_or("not_found".into());
-                };
-                i.cancel();
-                let result = i.clone();
-                crate::workspace_scope::cancel_closed(s);
-                Ok(result)
-            })
-            .and_then(|invocation| {
-                crate::payload_store::hydrate_invocation(
+        let result = self.service.authority.update(|s| {
+            let Some(i) = s.data.invocations.get_mut(id).filter(|i| i.owner == owner) else {
+                return crate::history_archive::lookup_invocation(
                     &self.service.config.authority_root,
-                    invocation,
-                )
-            })
+                    owner,
+                    id,
+                )?
+                .ok_or("not_found".into());
+            };
+            i.cancel();
+            let result = i.clone();
+            crate::workspace_scope::cancel_closed(s);
+            Ok(result)
+        });
+        if result.is_ok() {
+            self.service.request_history_maintenance();
+        }
+        result.and_then(|invocation| {
+            crate::payload_store::hydrate_invocation(
+                &self.service.config.authority_root,
+                invocation,
+            )
+        })
     }
 }
 
 pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Result<(), String> {
-    service.authority.update(|s| {
+    let wake = !matches!(&input.2, Action::Renew { .. });
+    let result = service.authority.update(|s| {
         let (owner, id, action) = input;
         let d = match owned(s, owner, id) {
             Ok(demand) => demand,
@@ -181,5 +188,9 @@ pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Re
         }
         crate::workspace_scope::cancel_closed(s);
         Ok(())
-    })
+    });
+    if result.is_ok() && wake {
+        service.request_history_maintenance();
+    }
+    result
 }

@@ -147,7 +147,27 @@ pub fn remove_uncommitted_result_payloads(
 }
 
 pub fn active_payload_commitment(invocation: &Invocation) -> u64 {
-    request_bytes(invocation).saturating_add(invocation.response_bytes)
+    request_bytes(invocation).saturating_add(response_storage_commitment(invocation))
+}
+
+pub fn response_storage_bound(response_bytes: u64) -> u64 {
+    response_bytes.saturating_mul(2).saturating_add(4096)
+}
+
+fn response_storage_commitment(invocation: &Invocation) -> u64 {
+    let stored = invocation
+        .result_ref
+        .as_ref()
+        .map(|reference| reference.bytes)
+        .unwrap_or(0)
+        .saturating_add(
+            invocation
+                .late_result_ref
+                .as_ref()
+                .map(|reference| reference.bytes)
+                .unwrap_or(0),
+        );
+    response_storage_bound(invocation.response_bytes).max(stored)
 }
 
 fn request_bytes(invocation: &Invocation) -> u64 {
