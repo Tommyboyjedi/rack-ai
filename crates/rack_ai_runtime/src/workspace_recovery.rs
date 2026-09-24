@@ -11,6 +11,7 @@ use std::{
 
 pub const INTERVAL: Duration = Duration::from_secs(60);
 const WORKSPACE_RECOVERY_BLOCKER: &str = "recovery_active_or_unproven_workspace_invocation";
+const CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN: &str = "workspace_scoped_child_outcome_unknown";
 
 pub struct Monitor {
     pub service: Arc<Service>,
@@ -115,23 +116,16 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
     if candidate.invocation.error.as_deref() != Some("workspace_model_outcome_uncertain") {
         return Err("workspace_recovery_unsupported_parent_error".into());
     }
-    let (parent, scoped_children, scope_ok) = service.authority.read(|s| {
+    let (parent, scope_ok) = service.authority.read(|s| {
         fence(s, &candidate.demand)?;
         let parent = workspace_parent(s, candidate)?;
         Ok((
             parent.clone(),
-            scoped_child_summaries(s, &candidate.demand, parent),
             workspace_scope_closed_or_expired(s, &parent.id),
         ))
     })?;
     if !scope_ok {
         return Err("workspace_recovery_scope_open_or_missing".into());
-    }
-    let scoped_children_terminal = scoped_children_terminal_from_summaries(&scoped_children);
-    let scoped_children_physically_recoverable =
-        scoped_children_physically_recoverable_from_summaries(&scoped_children);
-    if !scoped_children_physically_recoverable {
-        return Err("workspace_recovery_scoped_child_unproven".into());
     }
     let parent = crate::payload_store::hydrate_invocation(&service.config.authority_root, parent)?;
     let result = parent
@@ -147,6 +141,18 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
     let packet_status = required_string(&packet, "status")?;
     if !terminal_packet_status(&packet_status) {
         return Err("workspace_recovery_packet_not_terminal".into());
+    }
+    reconcile_closed_scope_confined_running_children(service, candidate, &parent.id)?;
+    let scoped_children = service.authority.read(|s| {
+        fence(s, &candidate.demand)?;
+        let parent = workspace_parent(s, candidate)?;
+        Ok(scoped_child_summaries(s, &candidate.demand, parent))
+    })?;
+    let scoped_children_terminal = scoped_children_terminal_from_summaries(&scoped_children);
+    let scoped_children_physically_recoverable =
+        scoped_children_physically_recoverable_from_summaries(&scoped_children);
+    if !scoped_children_physically_recoverable {
+        return Err("workspace_recovery_scoped_child_unproven".into());
     }
     let work = parent.request.work.as_ref();
     let workspace = work.and_then(crate::work_payload::Work::workspace);
@@ -171,6 +177,54 @@ fn analyze(service: &Service, candidate: &Candidate) -> Result<WorkspaceRecovery
             packet_under_state_root: true,
             ownership_fence_intact: true,
         },
+    })
+}
+
+fn reconcile_closed_scope_confined_running_children(
+    service: &Service,
+    candidate: &Candidate,
+    parent_id: &str,
+) -> Result<(), String> {
+    service.authority.update(|s| {
+        fence(s, &candidate.demand)?;
+        let demand = s
+            .data
+            .demands
+            .get(&candidate.demand.id)
+            .cloned()
+            .ok_or("missing_transition")?;
+        let parent = workspace_parent(s, candidate)?.clone();
+        if parent.id != parent_id {
+            return Err("workspace_recovery_parent_changed".into());
+        }
+        if !workspace_scope_closed_or_expired(s, parent_id) {
+            return Err("workspace_recovery_scope_open_or_missing".into());
+        }
+        let confined_running_children = s
+            .data
+            .invocations
+            .values()
+            .filter(|child| scoped_to_parent(s, child, parent_id))
+            .filter(|child| child.state == InvocationState::Running)
+            .filter(|child| child_confined_to_demand_backend(s, &demand, &parent, child))
+            .map(|child| child.id.clone())
+            .collect::<Vec<_>>();
+        for child_id in confined_running_children {
+            let child = s
+                .data
+                .invocations
+                .get_mut(&child_id)
+                .ok_or("missing_invocation")?;
+            if child.state == InvocationState::Running {
+                child.cancel();
+                child.state = InvocationState::Uncertain;
+                child
+                    .error
+                    .get_or_insert_with(|| CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN.into());
+            }
+        }
+        crate::capacity::retention(s, &service.config.limits)?;
+        Ok(())
     })
 }
 
@@ -303,7 +357,7 @@ fn child_physical_effect(
             WorkspaceRecoveryChildPhysicalEffect::UnresolvedActive
         }
         InvocationState::Uncertain
-            if uncertain_child_confined_to_demand_backend(s, demand, parent, child) =>
+            if child_confined_to_demand_backend(s, demand, parent, child) =>
         {
             WorkspaceRecoveryChildPhysicalEffect::ConfinedToDemandBackend
         }
@@ -315,7 +369,7 @@ fn child_physical_effect(
     }
 }
 
-fn uncertain_child_confined_to_demand_backend(
+fn child_confined_to_demand_backend(
     s: &Document,
     demand: &Demand,
     parent: &Invocation,
@@ -1206,16 +1260,107 @@ mod tests {
     }
 
     #[test]
-    fn running_scoped_child_remains_fenced_after_scope_close() {
+    fn closed_running_confined_scoped_child_is_reconciled_to_uncertain_for_recovery() {
+        let fixture = Fixture::new();
+        let (demand, parent) = fixture.seed(false, false);
+        let demand = fixture.live_deadlock_pattern(demand, true);
+        fixture.mutate_scoped_child("uncertain-oversized", |child| {
+            child.state = InvocationState::Running;
+            child.error = None;
+            child.cancellation = Some(CancellationIntent {
+                requested_at: now(),
+            });
+            child.execution_deadline = Some(now() + 60);
+            child.result = None;
+            child.late_result = None;
+            child.result_ref = None;
+            child.late_result_ref = None;
+        });
+
+        Monitor {
+            service: Arc::clone(&fixture.service),
+        }
+        .tick()
+        .unwrap();
+
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                let saved = s.data.demands.get(&demand.id).unwrap();
+                let invocation = s.data.invocations.get(&parent.id).unwrap();
+                let child = s.data.invocations.get("uncertain-oversized").unwrap();
+                assert_eq!(child.state, InvocationState::Uncertain);
+                assert_eq!(
+                    child.error.as_deref(),
+                    Some(CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN)
+                );
+                assert!(child.cancellation.is_some());
+                assert!(allows_recovery(s, saved, invocation));
+                let analysis = saved.workspace_recovery_analyses.get(&parent.id).unwrap();
+                let child_evidence = analysis
+                    .scoped_children
+                    .iter()
+                    .find(|child| child.invocation_id == "uncertain-oversized")
+                    .unwrap();
+                assert_eq!(child_evidence.state, InvocationState::Uncertain);
+                assert_eq!(
+                    child_evidence.error.as_deref(),
+                    Some(CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN)
+                );
+                assert_eq!(
+                    child_evidence.physical_effect,
+                    WorkspaceRecoveryChildPhysicalEffect::ConfinedToDemandBackend
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        let fresh = fixture.service.inspect(&demand.owner, &demand.id).unwrap();
+        Transition {
+            service: &fixture.service,
+        }
+        .advance(&fresh)
+        .unwrap();
+        let released = fixture.service.inspect(&demand.owner, &demand.id).unwrap();
+        assert_eq!(released.state, DemandState::Released);
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                assert!(s.claims.is_empty());
+                let child = s.data.invocations.get("uncertain-oversized").unwrap();
+                assert_eq!(child.state, InvocationState::Uncertain);
+                assert_eq!(
+                    child.error.as_deref(),
+                    Some(CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN)
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn running_scoped_child_with_generation_mismatch_remains_fenced_after_scope_close() {
         let fixture = Fixture::new();
         let (demand, parent) = fixture.seed(false, false);
         let demand = fixture.live_deadlock_pattern(demand, false);
         fixture.mutate_scoped_child("uncertain-oversized", |child| {
             child.state = InvocationState::Running;
             child.error = None;
+            child.request.generation = "other-generation".into();
             child.execution_deadline = Some(now() + 60);
         });
         fixture.assert_fenced(&demand, &parent);
+        fixture
+            .service
+            .authority
+            .read(|s| {
+                let child = s.data.invocations.get("uncertain-oversized").unwrap();
+                assert_eq!(child.state, InvocationState::Running);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
