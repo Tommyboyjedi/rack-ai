@@ -660,6 +660,18 @@
             "type": "string"
           }
         },
+        "image_input": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "max_images_per_request": {"type": "integer", "minimum": 1},
+            "max_image_bytes": {"type": "integer", "minimum": 1},
+            "max_image_pixels": {"type": "integer", "minimum": 1},
+            "accepted_mime_types": {"type": "array", "items": {"type": "string"}},
+            "accepted_url_schemes": {"type": "array", "items": {"type": "string"}}
+          },
+          "required": ["max_images_per_request", "max_image_bytes", "max_image_pixels", "accepted_mime_types", "accepted_url_schemes"]
+        },
         "last_activity_at": {
           "type": [
             "integer",
@@ -1021,6 +1033,18 @@
                   "max_output_tokens": {
                     "type": "integer",
                     "minimum": 1
+                  },
+                  "image_input": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "max_images_per_request": {"type": "integer", "minimum": 1},
+                      "max_image_bytes": {"type": "integer", "minimum": 1},
+                      "max_image_pixels": {"type": "integer", "minimum": 1},
+                      "accepted_mime_types": {"type": "array", "items": {"type": "string"}},
+                      "accepted_url_schemes": {"type": "array", "items": {"type": "string"}}
+                    },
+                    "required": ["max_images_per_request", "max_image_bytes", "max_image_pixels", "accepted_mime_types", "accepted_url_schemes"]
                   }
                 },
                 "required": [

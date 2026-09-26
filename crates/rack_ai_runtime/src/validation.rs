@@ -67,6 +67,22 @@ pub fn validate(c: &Config) -> Result<(), String> {
     }
     Ok(())
 }
+const IMAGE_REQUEST_ENVELOPE_BYTES: usize = 16 * 1024;
+const DATA_IMAGE_PREFIX_BYTES: usize = 32;
+
+fn image_request_bytes(p: &Profile) -> usize {
+    let encoded = usize::try_from(p.max_image_bytes)
+        .ok()
+        .and_then(|bytes| bytes.checked_add(2))
+        .map(|bytes| (bytes / 3) * 4)
+        .unwrap_or(usize::MAX);
+    usize::try_from(p.max_images_per_request)
+        .ok()
+        .and_then(|count| count.checked_mul(encoded.saturating_add(DATA_IMAGE_PREFIX_BYTES)))
+        .and_then(|bytes| bytes.checked_add(IMAGE_REQUEST_ENVELOPE_BYTES))
+        .unwrap_or(usize::MAX)
+}
+
 struct ProfileValidation<'a> {
     config: &'a Config,
 }
@@ -126,6 +142,20 @@ impl ProfileValidation<'_> {
             ]
             .iter()
             .any(|n| *n == 0 || *n > 3600)
+        {
+            return Err(format!("invalid runtime profile: {}", p.tag));
+        }
+        if (p.max_images_per_request > 0 || p.max_image_bytes > 0 || p.max_image_pixels > 0)
+            && (!p
+                .capabilities
+                .contains(&rack_ai_application::GenericCapability::Visual)
+                || p.max_images_per_request == 0
+                || p.max_images_per_request > 4
+                || p.max_image_bytes == 0
+                || p.max_image_bytes > 768 * 1024
+                || p.max_image_pixels == 0
+                || p.max_image_pixels > 16 * 1024 * 1024
+                || image_request_bytes(p) > crate::api::MAX_HTTP_BODY_BYTES)
         {
             return Err(format!("invalid runtime profile: {}", p.tag));
         }

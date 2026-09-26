@@ -4,17 +4,21 @@ set -euo pipefail
 usage() {
   cat <<'USAGE'
 Usage:
-  rack-primary [--cwd DIR] -- PROMPT
-  rack-primary [--cwd DIR] --prompt-file FILE
+  rack-primary [--cwd DIR] [--gateway-url URL] [--idempotency-key KEY] [--image FILE_OR_DATA_URI] -- PROMPT
+  rack-primary [--cwd DIR] [--gateway-url URL] [--idempotency-key KEY] [--image FILE_OR_DATA_URI] --prompt-file FILE
   rack-primary [--cwd DIR]
 
 If no prompt argument is supplied, prompt text is read from stdin.
 USAGE
 }
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cwd="$(pwd)"
 prompt_file=""
 prompt=""
+gateway_url="${RACK_AI_SCOPED_GATEWAY:-}"
+idempotency_key=""
+images=()
 
 while (($#)); do
   case "$1" in
@@ -24,6 +28,18 @@ while (($#)); do
       ;;
     --prompt-file)
       prompt_file="$2"
+      shift 2
+      ;;
+    --gateway-url)
+      gateway_url="$2"
+      shift 2
+      ;;
+    --idempotency-key)
+      idempotency_key="$2"
+      shift 2
+      ;;
+    --image)
+      images+=("$2")
       shift 2
       ;;
     -h|--help)
@@ -49,10 +65,25 @@ elif [[ -z "$prompt" ]]; then
   prompt="$(cat)"
 fi
 
-if [[ -z "${prompt//[$' 	
-']/}" ]]; then
+if [[ -z "${prompt//[[:space:]]/}" ]]; then
   echo "Prompt is empty." >&2
   exit 2
+fi
+
+if ((${#images[@]})); then
+  if [[ -z "$gateway_url" ]]; then
+    echo "Image calls require --gateway-url or RACK_AI_SCOPED_GATEWAY from a managed reservation." >&2
+    exit 2
+  fi
+  args=(primary-worker --repo-root "$repo_root" --state-root "$repo_root" --cwd "$cwd" --gateway-url "$gateway_url")
+  if [[ -n "$idempotency_key" ]]; then
+    args+=(--idempotency-key "$idempotency_key")
+  fi
+  for image in "${images[@]}"; do
+    args+=(--image "$image")
+  done
+  cd "$repo_root"
+  exec cargo run -q -p rack_ai_cli -- "${args[@]}" -- "$prompt"
 fi
 
 exec /home/tomp/.local/bin/jcode --provider-profile local-primary --model local-primary -C "$cwd" run "$prompt"

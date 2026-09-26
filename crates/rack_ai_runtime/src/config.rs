@@ -36,6 +36,12 @@ pub struct Profile {
     pub protocols: Vec<crate::protocol::Protocol>,
     #[serde(default)]
     pub streaming: bool,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub max_images_per_request: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub max_image_bytes: u64,
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub max_image_pixels: u64,
     pub max_output_tokens: u32,
     pub resources: Vec<String>,
     pub device_mib: BTreeMap<String, u64>,
@@ -130,6 +136,10 @@ fn artifact_timeout() -> u64 {
 }
 
 fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
+fn is_zero_u64(value: &u64) -> bool {
     *value == 0
 }
 
