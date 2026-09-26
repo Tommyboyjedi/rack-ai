@@ -34,6 +34,7 @@ use rack_ai_infrastructure::FileSystemTaskSpecRepository;
 use rack_ai_infrastructure::FileSystemWorkerCatalog;
 use rack_ai_infrastructure::HealthcheckService;
 use rack_ai_infrastructure::HealthcheckServiceDependencies;
+use rack_ai_infrastructure::LocalPrimaryChat;
 use rack_ai_infrastructure::RegistryPaths;
 use rack_ai_infrastructure::RepositoryPaths;
 use rack_ai_infrastructure::UtcDateCommandClock;
@@ -85,6 +86,7 @@ struct TaskStep {
     worker: String,
     cwd: String,
     prompt: String,
+    images: Vec<String>,
     artifacts: Vec<ArtifactExpectation>,
 }
 
@@ -182,6 +184,8 @@ fn execute() -> Result<i32, String> {
         run_task_from_arguments(roots.repo_root, &arguments[2..])
     } else if command == "coordinator" {
         run_coordinator_command(roots.repo_root, &arguments[2..])
+    } else if command == "primary-worker" {
+        run_primary_worker(&arguments[2..])
     } else if command == "healthcheck" {
         healthcheck(roots.repo_root)
     } else if command == "change" {
@@ -497,6 +501,109 @@ fn run_task_command(
     }
 
     Ok(if final_result.ok { 0 } else { 1 })
+}
+
+fn run_primary_worker(arguments: &[String]) -> Result<i32, String> {
+    let mut cwd = ".".to_string();
+    let mut prompt_file: Option<String> = None;
+    let mut timeout_seconds = 900_u32;
+    let mut gateway_url: Option<String> = None;
+    let mut idempotency_key: Option<String> = None;
+    let mut model_id = "local-primary".to_string();
+    let mut image_sources = Vec::new();
+    let mut prompt: Option<String> = None;
+    let mut index = 0;
+    while index < arguments.len() {
+        match arguments[index].as_str() {
+            "--cwd" => {
+                cwd = arguments.get(index + 1).ok_or("missing cwd value")?.clone();
+                index += 2;
+            }
+            "--prompt-file" => {
+                prompt_file = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing prompt-file value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--gateway-url" => {
+                gateway_url = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing gateway-url value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--idempotency-key" => {
+                idempotency_key = Some(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing idempotency-key value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--model" => {
+                model_id = arguments
+                    .get(index + 1)
+                    .ok_or("missing model value")?
+                    .clone();
+                index += 2;
+            }
+            "--image" => {
+                image_sources.push(
+                    arguments
+                        .get(index + 1)
+                        .ok_or("missing image value")?
+                        .clone(),
+                );
+                index += 2;
+            }
+            "--timeout-seconds" => {
+                timeout_seconds = arguments
+                    .get(index + 1)
+                    .ok_or("missing timeout-seconds value")?
+                    .parse::<u32>()
+                    .map_err(|error| error.to_string())?;
+                index += 2;
+            }
+            "--repo-root" | "--state-root" | "--root" => {
+                index += 2;
+            }
+            "--" => {
+                prompt = Some(arguments[index + 1..].join(" "));
+                break;
+            }
+            value if value.starts_with("--") => return Err(format!("unknown argument: {value}")),
+            _ => {
+                prompt = Some(arguments[index..].join(" "));
+                break;
+            }
+        }
+    }
+    let prompt_text = if let Some(path) = prompt_file {
+        fs::read_to_string(path).map_err(|error| error.to_string())?
+    } else if let Some(value) = prompt {
+        value
+    } else {
+        read_stdin_text()?
+    };
+    let gateway_url = gateway_url
+        .or_else(|| env::var("RACK_AI_SCOPED_GATEWAY").ok())
+        .ok_or("primary-worker requires --gateway-url or RACK_AI_SCOPED_GATEWAY")?;
+    let workdir = PathBuf::from(cwd);
+    let response = LocalPrimaryChat::new(gateway_url, model_id).send(
+        &prompt_text,
+        &image_sources,
+        &workdir,
+        timeout_seconds,
+        idempotency_key.as_deref(),
+    )?;
+    println!("{response}");
+    Ok(0)
 }
 
 fn run_coordinator_command(repo_root: PathBuf, arguments: &[String]) -> Result<i32, String> {
@@ -827,6 +934,7 @@ fn build_task_steps(spec: &Map<String, Value>) -> Result<Vec<TaskStep>, String> 
     let worker = read_required_string(spec, "worker")?;
     let cwd = read_required_string(spec, "cwd")?;
     let prompt = read_required_string(spec, "prompt")?;
+    let images = parse_images(spec.get("images"))?;
     let artifacts = parse_artifacts(spec.get("artifacts"))?;
     Ok(vec![TaskStep {
         name: spec
@@ -837,6 +945,7 @@ fn build_task_steps(spec: &Map<String, Value>) -> Result<Vec<TaskStep>, String> 
         worker,
         cwd,
         prompt,
+        images,
         artifacts,
     }])
 }
@@ -854,6 +963,7 @@ fn build_task_step(value: &Value, default_name: &str) -> Result<TaskStep, String
         worker: read_required_string(object, "worker")?,
         cwd: read_required_string(object, "cwd")?,
         prompt: read_required_string(object, "prompt")?,
+        images: parse_images(object.get("images"))?,
         artifacts: parse_artifacts(object.get("artifacts"))?,
     })
 }
@@ -886,6 +996,27 @@ fn parse_artifacts(value: Option<&Value>) -> Result<Vec<ArtifactExpectation>, St
         .collect()
 }
 
+fn parse_images(value: Option<&Value>) -> Result<Vec<String>, String> {
+    let Some(array) = value else {
+        return Ok(vec![]);
+    };
+    let items = array
+        .as_array()
+        .ok_or("images must be a list".to_string())?;
+    items
+        .iter()
+        .map(|item| {
+            if let Some(source) = item.as_str() {
+                return Ok(source.to_string());
+            }
+            let object = item
+                .as_object()
+                .ok_or("image entries must be strings or objects".to_string())?;
+            read_required_string(object, "source")
+        })
+        .collect()
+}
+
 fn execute_task_step(
     repo_root: &Path,
     step: &TaskStep,
@@ -893,9 +1024,25 @@ fn execute_task_step(
 ) -> Result<TaskStepResult, String> {
     let worker_entrypoint = resolve_worker_entrypoint(repo_root, &step.worker)?;
     let started = now_system_time();
+    let mut command = vec![
+        worker_entrypoint.to_string_lossy().to_string(),
+        "--cwd".to_string(),
+        step.cwd.clone(),
+    ];
+    for image in &step.images {
+        command.push("--image".to_string());
+        command.push(image.clone());
+    }
+    command.push("--".to_string());
+    command.push(step.prompt.clone());
     let output = Command::new(&worker_entrypoint)
         .arg("--cwd")
         .arg(&step.cwd)
+        .args(
+            step.images
+                .iter()
+                .flat_map(|image| ["--image".to_string(), image.clone()]),
+        )
         .arg("--")
         .arg(&step.prompt)
         .output()
@@ -915,13 +1062,7 @@ fn execute_task_step(
         name: step.name.clone(),
         worker: step.worker.clone(),
         cwd: step.cwd.clone(),
-        command: vec![
-            worker_entrypoint.to_string_lossy().to_string(),
-            "--cwd".to_string(),
-            step.cwd.clone(),
-            "--".to_string(),
-            step.prompt.clone(),
-        ],
+        command,
         returncode,
         stdout,
         stderr,
@@ -1216,6 +1357,7 @@ mod tests {
     use rack_ai_application::WorkerBinding;
     use rack_ai_application::WorkerCatalog;
 
+    use super::build_task_steps;
     use super::choose_template;
     use super::extract_worker_ids;
     use super::normalize_submit_spec;
@@ -1265,6 +1407,25 @@ mod tests {
         assert_eq!(normalized.timeout_seconds, 120);
         assert!(normalized.dag_run_state.is_some());
         assert!(normalized.spec_json.contains("local-primary"));
+    }
+
+    #[test]
+    fn task_steps_accept_image_sources() {
+        let value = serde_json::json!({
+            "task_id": "vision-task",
+            "worker": "local-primary",
+            "cwd": "/tmp",
+            "prompt": "Inspect this.",
+            "images": ["screen.png", {"source": "https://example.test/screen.webp"}]
+        });
+        let steps = build_task_steps(value.as_object().unwrap()).unwrap();
+        assert_eq!(
+            steps[0].images,
+            vec![
+                "screen.png".to_string(),
+                "https://example.test/screen.webp".to_string()
+            ]
+        );
     }
 
     #[test]

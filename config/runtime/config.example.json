@@ -60,7 +60,8 @@
       "evidence": [],
       "capabilities": [
         "reasoning",
-        "coding"
+        "coding",
+        "visual"
       ],
       "context_tokens": 4096,
       "max_input_tokens": 3584,
@@ -70,6 +71,9 @@
         "responses"
       ],
       "streaming": true,
+      "max_images_per_request": 2,
+      "max_image_bytes": 262144,
+      "max_image_pixels": 4194304,
       "host_mib": 8192,
       "cpu_percent": 400,
       "executable": "/usr/bin/docker",

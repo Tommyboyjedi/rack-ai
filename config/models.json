@@ -14,8 +14,24 @@
         "model_profile_id": "local-primary-v1",
         "capabilities": [
           "reasoning",
-          "coding"
+          "coding",
+          "visual"
         ],
+        "image_input": {
+          "max_images_per_request": 2,
+          "max_image_bytes": 262144,
+          "max_image_pixels": 4194304,
+          "accepted_mime_types": [
+            "image/png",
+            "image/jpeg",
+            "image/webp",
+            "image/gif",
+            "image/bmp"
+          ],
+          "accepted_url_schemes": [
+            "data"
+          ]
+        },
         "max_complexity": "large",
         "large_context_eligible": true,
         "qualification_status": "qualified",

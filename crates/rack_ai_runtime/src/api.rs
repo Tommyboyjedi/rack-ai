@@ -64,6 +64,8 @@ pub enum Request {
         invocation_id: String,
     },
 }
+pub(crate) const MAX_HTTP_BODY_BYTES: usize = 1024 * 1024;
+
 pub fn router(service: Arc<Service>) -> Router {
     Router::new()
         .route("/runtime/v1", post(handle))
@@ -82,7 +84,7 @@ pub fn router(service: Arc<Service>) -> Router {
             "/scoped/{id}/{generation}/v1/scopes/{namespace}",
             post(crate::workspace_scope_api::handle),
         )
-        .layer(DefaultBodyLimit::max(1024 * 1024))
+        .layer(DefaultBodyLimit::max(MAX_HTTP_BODY_BYTES))
         .with_state(service)
 }
 async fn handle(
@@ -175,11 +177,8 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
     }
     let value = match request {
         Request::Discover => {
-            json!({"tags": service.config.profiles.iter().map(|p| json!({
-            "tag":p.tag,"version":p.version,"qualified":p.qualified,"capabilities":p.capabilities,
-              "context_tokens":p.context_tokens,"max_input_tokens":p.effective_max_input_tokens(),
-              "max_output_tokens":p.max_output_tokens
-        })).collect::<Vec<_>>(), "priorities":["low","medium","high","paramount"],"default_priority":"low"})
+            json!({"tags": service.config.profiles.iter().map(profile_summary).collect::<Vec<_>>(),
+                "priorities":["low","medium","high","paramount"],"default_priority":"low"})
         }
         Request::Reserve { request } => {
             (crate::reservation_admission::ReservationAdmission { service, source })
@@ -250,6 +249,38 @@ fn public_invocation(invocation: Invocation) -> Result<Value, String> {
     Ok(value)
 }
 
+fn profile_summary(p: &crate::config::Profile) -> Value {
+    let mut value = json!({
+        "tag": p.tag,
+        "version": p.version,
+        "qualified": p.qualified,
+        "capabilities": p.capabilities,
+        "context_tokens": p.context_tokens,
+        "max_input_tokens": p.effective_max_input_tokens(),
+        "max_output_tokens": p.max_output_tokens,
+    });
+    if let Some(image_input) = image_input_limits(p) {
+        value
+            .as_object_mut()
+            .expect("profile summary must be an object")
+            .insert("image_input".into(), image_input);
+    }
+    value
+}
+
+fn image_input_limits(p: &crate::config::Profile) -> Option<Value> {
+    if p.max_images_per_request == 0 || p.max_image_bytes == 0 || p.max_image_pixels == 0 {
+        return None;
+    }
+    Some(json!({
+        "max_images_per_request": p.max_images_per_request,
+        "max_image_bytes": p.max_image_bytes,
+        "max_image_pixels": p.max_image_pixels,
+        "accepted_mime_types": ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"],
+        "accepted_url_schemes": ["data"]
+    }))
+}
+
 pub(crate) fn public(d: Demand) -> Result<Value, String> {
     let mut value = serde_json::to_value(&d).map_err(|e| e.to_string())?;
     let object = value.as_object_mut().ok_or("invalid_public_record")?;
@@ -285,6 +316,9 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
         json!(d.profile.max_output_tokens),
     );
     object.insert("resources".into(), json!(d.profile.resources));
+    if let Some(image_input) = image_input_limits(&d.profile) {
+        object.insert("image_input".into(), image_input);
+    }
     Ok(value)
 }
 
