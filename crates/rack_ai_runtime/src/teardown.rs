@@ -40,7 +40,11 @@ impl Teardown {
             .as_deref()
             .filter(|id| !id.is_empty())
             .ok_or("systemd_invocation_unknown")?;
-        let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;
+        let systemd = rack_ai_media::systemd::Systemd { unit: unit.clone() };
+        if !systemd.loaded()? {
+            return Ok(true);
+        }
+        let observed = systemd.observe()?;
         if !observed.invocation.is_empty() && observed.invocation != expected {
             return Err("systemd_invocation_changed".into());
         }
@@ -64,5 +68,25 @@ impl Teardown {
             .try_exists()
             .map(|exists| !exists)
             .map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collected_transient_unit_is_gone() {
+        let activation = format!("missing-{}", crate::types::identity().unwrap());
+        let process = Process {
+            pid: 0,
+            boot: String::new(),
+            start: String::new(),
+            activation: activation.clone(),
+            unit: Some(format!("rack-runtime-{activation}.service")),
+            container: None,
+            invocation: Some("collected".into()),
+        };
+        assert!(Teardown::unit_gone(&process).unwrap());
     }
 }

@@ -122,7 +122,11 @@ impl HostedCleanup<'_> {
             if unit != &format!("rack-runtime-{}.service", process.activation) {
                 return Err("systemd_activation_changed".into());
             }
-            let observed = rack_ai_media::systemd::Systemd { unit: unit.clone() }.observe()?;
+            let systemd = rack_ai_media::systemd::Systemd { unit: unit.clone() };
+            if gone && !systemd.loaded()? {
+                return self.released(d);
+            }
+            let observed = systemd.observe()?;
             if gone
                 && observed.invocation.is_empty()
                 && observed.pid == 0
