@@ -1,5 +1,5 @@
 use crate::{process, types::*};
-use rack_ai_media::{command::run, systemd::Systemd};
+use rack_ai_media::systemd::Systemd;
 use std::{collections::BTreeMap, path::Path};
 
 pub(super) fn wait_absent(d: &Demand, invocation: &str) -> Result<(), String> {
@@ -40,32 +40,7 @@ pub(super) fn require_saved_gone(d: &Demand) -> Result<(), String> {
 }
 
 pub(super) fn loaded(unit: &str) -> Result<bool, String> {
-    let units = run(
-        "systemctl",
-        &[
-            "--user",
-            "list-units",
-            "--all",
-            "--plain",
-            "--no-legend",
-            "--full",
-            unit,
-        ],
-    )?;
-    if !units.trim().is_empty() {
-        if units.lines().count() != 1 || units.split_whitespace().next() != Some(unit) {
-            return Err("recovery_systemd_unit_ambiguous".into());
-        }
-        return Ok(true);
-    }
-    let files = run(
-        "systemctl",
-        &["--user", "list-unit-files", "--no-legend", unit],
-    )?;
-    if !files.trim().is_empty() {
-        return Err("recovery_systemd_foreign_unit_file".into());
-    }
-    Ok(false)
+    Systemd { unit: unit.into() }.loaded()
 }
 
 pub(super) fn cgroup_empty(cgroup: &str) -> Result<bool, String> {

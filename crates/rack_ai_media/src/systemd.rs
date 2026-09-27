@@ -16,6 +16,30 @@ impl Systemd {
             unit: config.unit.clone(),
         }
     }
+    pub fn loaded(&self) -> Result<bool, String> {
+        let units = list_query(&[
+            "--user",
+            "list-units",
+            "--all",
+            "--plain",
+            "--no-legend",
+            "--full",
+            &self.unit,
+        ])?;
+        if !units.trim().is_empty() {
+            if units.lines().count() != 1
+                || units.split_whitespace().next() != Some(self.unit.as_str())
+            {
+                return Err("ambiguous managed systemd unit".into());
+            }
+            return Ok(true);
+        }
+        let files = list_query(&["--user", "list-unit-files", "--no-legend", &self.unit])?;
+        if !files.trim().is_empty() {
+            return Err("foreign managed systemd unit file".into());
+        }
+        Ok(false)
+    }
     pub fn observe(&self) -> Result<Observation, String> {
         let text = run(
             "systemctl",
@@ -111,5 +135,13 @@ impl Systemd {
         let events =
             std::fs::read_to_string(path.join("cgroup.events")).map_err(|e| e.to_string())?;
         Ok(events.lines().any(|l| l == "populated 0"))
+    }
+}
+
+fn list_query(args: &[&str]) -> Result<String, String> {
+    match run("systemctl", args) {
+        Ok(text) => Ok(text),
+        Err(error) if error == "bounded systemctl failed (exit status: 1)" => Ok(String::new()),
+        Err(error) => Err(error),
     }
 }
