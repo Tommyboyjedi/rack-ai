@@ -40,11 +40,15 @@ async def startup(request, handler):
     machine = json.loads((root / "machine.json").read_text())
     if not machine["active"]:
         raise web.HTTPServiceUnavailable()
-    if request.path == "/rack-gate/status" and fault.get("gate_disconnect"):
-        request.transport.close()
-        return web.Response()
-    if request.path == "/rack-gate/status" and fault.get("gate_unavailable"):
-        raise web.HTTPServiceUnavailable()
+    if request.path == "/rack-gate/status":
+        fault["gate_status_started"] = fault.get("gate_status_started", 0) + 1
+        if fault.get("gate_disconnect"):
+            request.transport.close()
+            return web.Response()
+        if fault.get("gate_unavailable"):
+            raise web.HTTPServiceUnavailable()
+        if fault.get("gate_status_delay"):
+            await asyncio.sleep(float(fault["gate_status_delay"]))
     if invocation != machine["invocation"]:
         invocation = machine["invocation"]
         authority.activation = json.loads((root / "authority.json").read_text())["activation"]
