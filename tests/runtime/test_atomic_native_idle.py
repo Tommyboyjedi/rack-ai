@@ -116,3 +116,88 @@ class AtomicNativeIdleTests(unittest.TestCase):
                     shutil.copytree(root,ROOT/"evidence/idle-reservations-20260915"/root.name)
                     raise
                 finally:r.close()
+
+
+    def test_released_native_reservation_does_not_probe_activity_status(self):
+        with tempfile.TemporaryDirectory(prefix="rack-idle-released-probe-") as directory:
+            root=Path(directory)
+            def media_config(c):
+                c["principals"].append(dict(id="cb",token_sha256=hashlib.sha256(b"cb").hexdigest(),
+                                            operator=False))
+            with receiver(root/"media",configure=media_config) as media:
+                def configure(c):
+                    c["idle_timeout_seconds"]=30
+                    c["authority_root"]=media["config"]["resource_root"]
+                    c["devices"]["gpu-4080-super"]["uuid"]=media["config"]["media_uuid"]
+                    p=next(p for p in c["profiles"] if p["tag"]=="comfyui")
+                    p.update(tag="local-image",backend="comfyui",driver="systemd",media_mode="managed",
+                        media_config=str(media["root"]/"config.json"),
+                        media_config_sha256=hashlib.sha256((media["root"]/"config.json").read_bytes()).hexdigest(),
+                        endpoint=media["backend"],model=media["config"]["profile"]["checkpoint_sha256"],
+                        capabilities=["visual"],startup_seconds=15)
+                r=Rack(root/"runtime",configure=configure,environment=media["environment"])
+                try:
+                    group=r.call("cb","reserve",request=dict(acquisition_id="released-status",work_id="released-status",
+                        services=["local-image"],priority="paramount",ttl_seconds=60))
+                    image=r.wait(group["services"]["local-image"],seconds=20)
+                    control=media["backend"]+"/fixture/control"
+                    r.release(image)
+                    r.wait(image,"released",seconds=20)
+                    requests.post(control,json={"gate_status_started":0,"gate_unavailable":True},timeout=3).raise_for_status()
+                    time.sleep(.5)
+                    fault=requests.get(control,timeout=3).json()["fault"]
+                    self.assertEqual(fault.get("gate_status_started",0),0,fault)
+                except BaseException:
+                    import shutil
+                    shutil.copytree(root,ROOT/"evidence/idle-reservations-20260915"/root.name)
+                    raise
+                finally:r.close()
+
+
+    def test_slow_native_activity_probe_does_not_hold_authority_lock(self):
+        import fcntl
+        with tempfile.TemporaryDirectory(prefix="rack-idle-lock-scope-") as directory:
+            root=Path(directory)
+            def media_config(c):
+                c["principals"].append(dict(id="cb",token_sha256=hashlib.sha256(b"cb").hexdigest(),
+                                            operator=False))
+            with receiver(root/"media",configure=media_config) as media:
+                def configure(c):
+                    c["idle_timeout_seconds"]=30
+                    c["authority_root"]=media["config"]["resource_root"]
+                    c["devices"]["gpu-4080-super"]["uuid"]=media["config"]["media_uuid"]
+                    p=next(p for p in c["profiles"] if p["tag"]=="comfyui")
+                    p.update(tag="local-image",backend="comfyui",driver="systemd",media_mode="managed",
+                        media_config=str(media["root"]/"config.json"),
+                        media_config_sha256=hashlib.sha256((media["root"]/"config.json").read_bytes()).hexdigest(),
+                        endpoint=media["backend"],model=media["config"]["profile"]["checkpoint_sha256"],
+                        capabilities=["visual"],startup_seconds=15)
+                r=Rack(root/"runtime",configure=configure,environment=media["environment"])
+                try:
+                    group=r.call("cb","reserve",request=dict(acquisition_id="slow-status",work_id="slow-status",
+                        services=["local-image"],priority="paramount",ttl_seconds=60))
+                    image=r.wait(group["services"]["local-image"],seconds=20)
+                    control=media["backend"]+"/fixture/control"
+                    requests.post(control,json={"gate_status_started":0,"gate_status_delay":4},timeout=3).raise_for_status()
+                    wait_for(lambda:requests.get(control,timeout=1).json()["fault"].get("gate_status_started",0)>0,
+                             timeout=10)
+                    blocked=0
+                    lock_path=Path(r.config["authority_root"])/"authority.lock"
+                    with lock_path.open("r+") as lock:
+                        for _ in range(30):
+                            try:
+                                fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                            except BlockingIOError:
+                                blocked+=1
+                            else:
+                                fcntl.flock(lock,fcntl.LOCK_UN)
+                            time.sleep(.05)
+                    self.assertEqual(blocked,0,"slow native status probe held RackAI authority.lock")
+                    requests.post(control,json={"gate_status_delay":0},timeout=3).raise_for_status()
+                    self.assertEqual(r.inspect(image)["state"],"ready")
+                    r.release(image)
+                except BaseException:
+                    import shutil
+                    shutil.copytree(root,ROOT/"evidence/idle-reservations-20260915"/root.name)
+                    raise
+                finally:r.close()
