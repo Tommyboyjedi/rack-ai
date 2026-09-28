@@ -583,6 +583,73 @@ fn grouped_models(f: &Fixture) -> Vec<Demand> {
 }
 
 #[test]
+fn idempotent_group_reserve_reports_current_member_states() {
+    let f = Fixture::new();
+    let source = f
+        .service
+        .config
+        .sources
+        .iter()
+        .find(|s| s.source == "cb")
+        .unwrap();
+    let request = crate::reservation::Reserve {
+        acquisition_id: identity().unwrap(),
+        work_id: "shared-status".into(),
+        services: vec!["local-primary".into(), "local-coder".into()],
+        priority: Priority::Low,
+        ttl_seconds: 86400,
+    };
+    let initial = (crate::reservation_admission::ReservationAdmission {
+        service: &f.service,
+        source,
+    })
+    .reserve(request.clone())
+    .unwrap();
+    assert_eq!(initial["state"], "preparing");
+    assert_eq!(
+        initial["services"]["local-primary"]["why_not_ready"],
+        "starting_preflight"
+    );
+    assert_eq!(
+        initial["services"]["local-coder"]["why_not_ready"],
+        "starting_preflight"
+    );
+
+    let parent = f
+        .service
+        .inspect("cb", initial["id"].as_str().unwrap())
+        .unwrap();
+    let members: Vec<_> = parent
+        .services
+        .values()
+        .map(|id| f.service.inspect("cb", id).unwrap())
+        .collect();
+    for member in &members {
+        f.ready(member);
+    }
+
+    let refreshed = (crate::reservation_admission::ReservationAdmission {
+        service: &f.service,
+        source,
+    })
+    .reserve(request)
+    .unwrap();
+    assert_eq!(refreshed["state"], "ready");
+    assert_eq!(refreshed["services"]["local-primary"]["state"], "ready");
+    assert_eq!(refreshed["services"]["local-coder"]["state"], "ready");
+    assert!(
+        refreshed["services"]["local-primary"]
+            .get("why_not_ready")
+            .is_none()
+    );
+    assert!(
+        refreshed["services"]["local-coder"]
+            .get("why_not_ready")
+            .is_none()
+    );
+}
+
+#[test]
 fn grouped_model_activity_retains_idle_peer_until_shared_threshold() {
     for active_member in 0..2 {
         let f = Fixture::new();

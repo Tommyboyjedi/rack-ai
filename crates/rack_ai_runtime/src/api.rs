@@ -319,7 +319,37 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     if let Some(image_input) = image_input_limits(&d.profile) {
         object.insert("image_input".into(), image_input);
     }
+    if let Some(reason) = why_not_ready(&d) {
+        object.insert("why_not_ready".into(), json!(reason));
+    }
     Ok(value)
+}
+
+fn why_not_ready(d: &Demand) -> Option<String> {
+    if d.state == DemandState::Ready {
+        return None;
+    }
+    if let Some(reason) = &d.reason {
+        return Some(reason.clone());
+    }
+    Some(
+        match d.state {
+            DemandState::Unavailable => "unavailable",
+            DemandState::Preparing if !d.preflight_done => "starting_preflight",
+            DemandState::Preparing if d.process.is_none() => "waiting_for_backend_start",
+            DemandState::Preparing if !d.ready_checked => "waiting_for_healthcheck",
+            DemandState::Preparing => "waiting_for_group_ready",
+            DemandState::Preempting => "preempting_lower_priority_owner",
+            DemandState::Preempted => "preempted_by_higher_priority",
+            DemandState::Releasing => "releasing",
+            DemandState::Released => "released",
+            DemandState::Cancelled => "cancelled",
+            DemandState::Expired => "expired",
+            DemandState::RecoveryRequired => "recovery_required",
+            DemandState::Ready => unreachable!(),
+        }
+        .into(),
+    )
 }
 
 pub(crate) fn authenticate(

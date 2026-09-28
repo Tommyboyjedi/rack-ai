@@ -24,10 +24,7 @@ impl ReservationAdmission<'_> {
                 if d.reserve_request.as_ref() != Some(&request) {
                     return Err("identity_conflict".into());
                 }
-                return d
-                    .reserve_result
-                    .clone()
-                    .ok_or("original_reservation_receipt_missing".into());
+                return crate::reservation_view::view(s, (&self.source.source, &d.id));
             }
             if let Some((archived_request, result)) =
                 crate::history_archive::lookup_reservation_replay(
