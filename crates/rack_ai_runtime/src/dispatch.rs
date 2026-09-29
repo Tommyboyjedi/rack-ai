@@ -42,11 +42,9 @@ impl Dispatch<'_> {
                 return Ok(None);
             }
             if i.waiting_deadline <= now() || !active(&d) {
-                s.data
-                    .invocations
-                    .get_mut(id)
-                    .ok_or("missing_invocation")?
-                    .state = InvocationState::Expired;
+                let expired = s.data.invocations.get_mut(id).ok_or("missing_invocation")?;
+                expired.state = InvocationState::Expired;
+                expired.completed = Some(now());
                 return Ok(None);
             }
             if !crate::workers::eligible(s, &i)
@@ -135,6 +133,7 @@ impl Completion<'_> {
             }
             if unknown_child {
                 i.state = InvocationState::Uncertain;
+                i.completed = Some(now());
                 i.error = Some("workspace_model_outcome_uncertain".into());
                 if let Ok(value) = result {
                     crate::payload_store::store_late_result(
@@ -191,10 +190,12 @@ impl Completion<'_> {
                     if !valid {
                         i.error = Some("backend_result_identity_or_limits_unproven".into());
                     }
+                    i.completed = Some(now());
                 }
                 Err(e) => {
                     i.state = failure_state(&e);
                     i.error = Some(crate::capacity::diagnostic(e));
+                    i.completed = Some(now());
                 }
             }
             let terminal_uncertain = i.state == InvocationState::Uncertain;

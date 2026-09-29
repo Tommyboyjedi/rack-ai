@@ -10,7 +10,7 @@ Reservation and work operations below use the existing authenticated `POST /runt
 credentials as `POST /runtime/v1`. It is read-only and returns a JSON object:
 
 - `schema`: `rack-ai/runtime-contract/v1`.
-- `contract_version`: `1.2.0`, the published contract revision.
+- `contract_version`: `1.3.0`, the published contract revision.
 - `documentation`: the complete contents of this document as a string.
 - `request_schema`: `config/runtime/request.schema.json` as a JSON object.
 - `response_schema`: `config/runtime/response.schema.json` as a JSON object.
@@ -102,6 +102,8 @@ An unavailable service rejects new work without creating a pending invocation. A
 ```
 
 Work contains no priority and cannot select a service outside its reservation. `work_id` is unique within the authenticated principal. Repeating the exact request reconciles its original invocation; changing the reservation, service or payload conflicts. Neither a disconnected caller nor a retry creates another execution within the retained work record. `inspect_work` and `cancel_work` take `work_id` and enforce ownership.
+
+`inspect_work_execution` takes `work_id` and returns a sanitized, generic execution projection for the authenticated owner. It reports authoritative work identity, current/terminal outcome, cleanup/recovery closure, bounded activity/timing/count metadata, and opaque artifact IDs for diagnostic text. It does not expose server filesystem paths, private packet paths, workspace roots, scoped access secrets, or JCode-specific control details. `get_work_artifact` takes one of those opaque artifact IDs and returns a bounded read-only diagnostic payload after the same owner check. Artifacts remain ordinary retained evidence, not authority to execute again after expiry. See [work-execution-public-contract.md](work-execution-public-contract.md) for the evidence inventory and measurement semantics.
 
 The existing invocation record stores accepted/started/completed/cancelled/expired/uncertain state, result, cancellation intent and late evidence. Work inspection also reports waiting/Held from current reservation state. Cancellation before dispatch prevents execution. Cancellation after dispatch records intent and retains late evidence. Receiver restart marks unresolved started work uncertain, never automatically replaying it. Ordinary inference protocol/time limits remain unchanged. Service discovery publishes `context_tokens`, `max_input_tokens` and `max_output_tokens`; public Ready reservation members expose the same profile-frozen limits beside their model and profile version. RackAI enforces explicit output bounds against `max_output_tokens`. Scoped chat/completions and responses calls that omit an output bound receive the reserved profile's `max_output_tokens` before backend dispatch. RackAI does not infer tokenizer-specific prompt length from serialized HTTP bytes; clients and model runtimes remain responsible for true input-token enforcement against the published `max_input_tokens` contract.
 

@@ -143,6 +143,7 @@ impl Submission<'_> {
                 .ok_or("missing_reservation")?
                 .accepted_calls = accepted_calls.saturating_add(1);
             let queue_order = s.data.next_invocation_order;
+            let admitted_at = now();
             s.data.next_invocation_order = s.data.next_invocation_order.saturating_add(1);
             let response_bytes = if workspace {
                 crate::work_execution::WORKSPACE_RESPONSE_BYTES
@@ -167,7 +168,8 @@ impl Submission<'_> {
                 request_ref: None,
                 state: InvocationState::Queued,
                 queue_order,
-                waiting_deadline: now() + wait,
+                created: admitted_at,
+                waiting_deadline: admitted_at + wait,
                 execution_deadline: None,
                 response_bytes,
                 cancellation: None,
@@ -177,6 +179,7 @@ impl Submission<'_> {
                 result_ref: None,
                 late_result_ref: None,
                 started: None,
+                completed: None,
                 activation: None,
                 result: None,
                 error: None,

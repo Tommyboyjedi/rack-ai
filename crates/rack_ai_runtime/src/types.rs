@@ -208,6 +208,10 @@ pub struct Invocation {
     /// logical service and never uses global reservation priority.
     #[serde(default)]
     pub queue_order: u64,
+    /// Receiver-observed queue admission time. Legacy records use 0 and report
+    /// this measurement as unavailable in public execution metadata.
+    #[serde(default)]
+    pub created: u64,
     #[serde(alias = "deadline")]
     pub waiting_deadline: u64,
     #[serde(default)]
@@ -230,6 +234,8 @@ pub struct Invocation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub late_result_ref: Option<StoredPayloadRef>,
     pub started: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub completed: Option<u64>,
     pub activation: Option<String>,
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
@@ -442,12 +448,14 @@ impl Invocation {
             });
             if self.state == InvocationState::Queued {
                 self.state = InvocationState::Cancelled;
+                self.completed.get_or_insert_with(now);
             }
         }
     }
     pub fn cancel_queued_as_superseded(&mut self) {
         if self.state == InvocationState::Queued {
             self.state = InvocationState::Cancelled;
+            self.completed.get_or_insert_with(now);
             self.error = Some("reservation_superseded_by_higher_priority".into());
         }
     }

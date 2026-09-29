@@ -38,6 +38,12 @@ pub enum Request {
     InspectWork {
         work_id: String,
     },
+    InspectWorkExecution {
+        work_id: String,
+    },
+    GetWorkArtifact {
+        artifact_id: String,
+    },
     CancelWork {
         work_id: String,
     },
@@ -177,8 +183,16 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
     }
     let value = match request {
         Request::Discover => {
-            json!({"tags": service.config.profiles.iter().map(profile_summary).collect::<Vec<_>>(),
-                "priorities":["low","medium","high","paramount"],"default_priority":"low"})
+            json!({
+                "tags": service.config.profiles.iter().map(profile_summary).collect::<Vec<_>>(),
+                "priorities":["low","medium","high","paramount"],
+                "default_priority":"low",
+                "work_execution_contract": {
+                    "version": crate::work_execution_view::CONTRACT_VERSION,
+                    "operations": ["inspect_work_execution", "get_work_artifact"],
+                    "artifact_authorization": "owner_checked_opaque_id"
+                }
+            })
         }
         Request::Reserve { request } => {
             (crate::reservation_admission::ReservationAdmission { service, source })
@@ -205,6 +219,12 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
         }
         Request::InspectWork { work_id } => {
             crate::work::inspect(service, (&source.source, &work_id))?
+        }
+        Request::InspectWorkExecution { work_id } => {
+            crate::work_execution_view::inspect(service, (&source.source, &work_id))?
+        }
+        Request::GetWorkArtifact { artifact_id } => {
+            crate::work_execution_view::artifact(service, (&source.source, &artifact_id))?
         }
         Request::CancelWork { work_id } => {
             crate::work::cancel(service, (&source.source, &work_id))?
@@ -246,6 +266,8 @@ fn public_invocation(invocation: Invocation) -> Result<Value, String> {
     object.remove("request_ref");
     object.remove("result_ref");
     object.remove("late_result_ref");
+    object.remove("created");
+    object.remove("completed");
     Ok(value)
 }
 

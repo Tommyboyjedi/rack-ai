@@ -51,6 +51,7 @@ mod reservation_refresh;
 mod reservation_view;
 mod work;
 mod work_execution;
+mod work_execution_view;
 pub mod work_payload;
 pub mod workspace_recovery;
 
