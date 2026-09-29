@@ -11,6 +11,7 @@ use crate::ChangeRequestDocument;
 use crate::ChangeRequestResolution;
 use crate::ChangeWorkspace;
 use crate::CommandPolicy;
+use crate::ExecutionActivityEvent;
 use crate::GitWorktree;
 use crate::ImplementChangeRequest;
 use crate::ImplementWorkerRuntime;
@@ -75,16 +76,26 @@ impl<'a> ExecuteChange<'a> {
                 git: self.git,
             },
         )?;
+        let setup_started = unix_now();
         let workspace = PrepareChange::new(PrepareChangeDependencies {
             registry: self.registry,
             git: self.git,
         })
         .execute(&change_request)?;
+        let setup_completed = unix_now();
         let packet = self.execute_prepared(
             &request,
             &change_request,
             &workspace,
-            ReviewPacket::from_request(&change_request).with_workspace(&workspace),
+            ReviewPacket::from_request(&change_request)
+                .with_workspace(&workspace)
+                .with_execution_budget_seconds(u64::from(
+                    change_request.limits().timeout_seconds().value(),
+                ))
+                .with_activity_event(
+                    ExecutionActivityEvent::new("setup", "completed")
+                        .with_timing(setup_started, setup_completed),
+                ),
         );
         self.persist(packet)
     }
@@ -221,15 +232,38 @@ impl<'a> ExecuteChange<'a> {
         } else {
             implement_request
         };
+        let agent_started = unix_now();
         match implementer.implement(&implement_request) {
             Ok(result) => {
-                let packet = packet.with_implementer_output(result.output().to_string());
+                let agent_completed = unix_now();
+                let mut packet = packet
+                    .with_implementer_output(result.output().to_string())
+                    .with_tool_calls(result.tool_calls().to_vec());
                 if let Some(error) = result.protocol_error().or(result.worker_error()) {
+                    let timeout = is_execution_timeout(error);
+                    packet = packet.with_activity_event(
+                        ExecutionActivityEvent::new("agent_execution", "failed")
+                            .with_timing(agent_started, agent_completed)
+                            .with_detail(error.to_string()),
+                    );
+                    if timeout {
+                        packet = packet.with_deadline_ended_attempt("agent_execution");
+                    }
                     return Ok(fail(packet, ChangeStatus::Failed, error.to_string()));
                 }
-                Ok(packet)
+                Ok(packet.with_activity_event(
+                    ExecutionActivityEvent::new("agent_execution", "completed")
+                        .with_timing(agent_started, agent_completed),
+                ))
             }
-            Err(error) => Err((packet, error)),
+            Err(error) => Err((
+                packet.with_activity_event(
+                    ExecutionActivityEvent::new("agent_execution", "failed")
+                        .with_timing(agent_started, unix_now())
+                        .with_detail(error.clone()),
+                ),
+                error,
+            )),
         }
     }
 
@@ -253,6 +287,7 @@ impl<'a> ExecuteChange<'a> {
                     .to_string(),
             ));
         };
+        let acceptance_started = unix_now();
         let timeout = request.limits().timeout_seconds().value();
         let mut commands = Vec::new();
         for command in request.acceptance().commands() {
@@ -268,7 +303,11 @@ impl<'a> ExecuteChange<'a> {
                 Ok(execution) => commands.push(execution.evidence().clone()),
                 Err(error) => {
                     return Ok(fail(
-                        packet.with_commands(commands),
+                        packet.with_commands(commands).with_activity_event(
+                            ExecutionActivityEvent::new("acceptance", "failed")
+                                .with_timing(acceptance_started, unix_now())
+                                .with_detail(error.clone()),
+                        ),
                         check_status(&error),
                         error,
                     ));
@@ -284,21 +323,33 @@ impl<'a> ExecuteChange<'a> {
             } else {
                 format!("acceptance command failed: {}", failed.argv().join(" "))
             };
-            return Ok(fail(
-                packet.with_commands(commands.clone()),
-                ChangeStatus::ChecksFailed,
-                message,
-            ));
+            let mut packet = packet.with_commands(commands.clone()).with_activity_event(
+                ExecutionActivityEvent::new("acceptance", "failed")
+                    .with_timing(acceptance_started, unix_now())
+                    .with_detail(message.clone()),
+            );
+            if failed.timed_out() {
+                packet = packet.with_deadline_ended_attempt("acceptance");
+            }
+            return Ok(fail(packet, ChangeStatus::ChecksFailed, message));
         }
         if let Err(error) = self.assert_artifacts(executor, request, workspace) {
             return Ok(fail(
-                packet.with_commands(commands),
+                packet.with_commands(commands).with_activity_event(
+                    ExecutionActivityEvent::new("acceptance", "failed")
+                        .with_timing(acceptance_started, unix_now())
+                        .with_detail(error.clone()),
+                ),
                 ChangeStatus::ChecksFailed,
                 error,
             ));
         }
         Ok(packet
             .with_commands(commands)
+            .with_activity_event(
+                ExecutionActivityEvent::new("acceptance", "completed")
+                    .with_timing(acceptance_started, unix_now()),
+            )
             .with_status(ChangeStatus::ChecksPassed))
     }
 
@@ -343,6 +394,20 @@ impl<'a> ExecuteChange<'a> {
             packet_path,
         })
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+}
+
+fn is_execution_timeout(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("wall-clock timeout")
+        || lower.contains("worker timeout")
+        || lower.contains("timeout exceeded")
 }
 
 fn reject_disallowed(request: &ChangeRequest, packet: &ReviewPacket) -> Option<ReviewPacket> {

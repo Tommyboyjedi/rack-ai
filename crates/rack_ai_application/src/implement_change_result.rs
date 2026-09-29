@@ -1,4 +1,6 @@
-#[derive(Clone, Debug, Eq, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ToolCallRecord {
     pub name: String,
     pub arguments: String,

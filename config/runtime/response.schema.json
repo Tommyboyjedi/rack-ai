@@ -902,7 +902,7 @@
           "const": "rack-ai/work-execution/v1"
         },
         "contract_version": {
-          "const": "1.3.0"
+          "const": "1.4.0"
         },
         "work": {
           "type": "object",
@@ -1162,6 +1162,42 @@
                               "artifact_id",
                               "truncated"
                             ]
+                          },
+                          "started": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "completed": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "duration_seconds": {
+                            "anyOf": [
+                              {
+                                "type": "integer",
+                                "minimum": 0
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "outcome": {
+                            "type": "string"
                           }
                         },
                         "required": [
@@ -1170,6 +1206,10 @@
                           "exit_code",
                           "timed_out",
                           "succeeded",
+                          "outcome",
+                          "started",
+                          "completed",
+                          "duration_seconds",
                           "stdout",
                           "stderr"
                         ]
@@ -1177,6 +1217,16 @@
                     },
                     "evidence_status": {
                       "type": "string"
+                    },
+                    "last_error": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
                     }
                   },
                   "required": [
@@ -1185,6 +1235,7 @@
                     "accepted_revision",
                     "changed_paths",
                     "commands",
+                    "last_error",
                     "evidence_status"
                   ]
                 },
@@ -1251,6 +1302,91 @@
                 "total_tokens",
                 "finish_reason"
               ]
+            },
+            "attempt": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "known": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "category": {
+                  "type": "string"
+                },
+                "failure_category": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "execution_budget_seconds": {
+                  "anyOf": [
+                    {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deadline_ended_attempt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "known",
+                "status",
+                "category",
+                "failure_category",
+                "execution_budget_seconds",
+                "deadline_ended_attempt"
+              ]
+            },
+            "historical_invocation": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": {
+                  "type": "string"
+                },
+                "terminal": {
+                  "type": "boolean"
+                },
+                "outcome_known": {
+                  "type": "boolean"
+                },
+                "uncertainty_reason": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "state",
+                "terminal",
+                "outcome_known",
+                "uncertainty_reason"
+              ]
             }
           },
           "required": [
@@ -1261,7 +1397,9 @@
             "failure_category",
             "error",
             "workspace",
-            "model_usage"
+            "model_usage",
+            "attempt",
+            "historical_invocation"
           ]
         },
         "closure": {
@@ -1300,6 +1438,9 @@
                   "type": "null"
                 }
               ]
+            },
+            "replay_safety": {
+              "type": "string"
             }
           },
           "required": [
@@ -1307,6 +1448,7 @@
             "cleanup_state",
             "original_outcome_known",
             "safe_closure_known",
+            "replay_safety",
             "blocker",
             "retry_after_seconds"
           ]
@@ -1689,12 +1831,68 @@
                     "value",
                     "availability"
                   ]
+                },
+                "agent_execution_seconds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "availability": {
+                      "enum": [
+                        "recorded",
+                        "unavailable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "availability"
+                  ]
+                },
+                "prefill_seconds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "availability": {
+                      "enum": [
+                        "recorded",
+                        "unavailable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "availability"
+                  ]
                 }
               },
               "required": [
                 "queue_wait_seconds",
                 "active_execution_seconds",
                 "setup_seconds",
+                "agent_execution_seconds",
+                "prefill_seconds",
                 "acceptance_seconds",
                 "cleanup_seconds",
                 "first_token_seconds",
@@ -1711,18 +1909,288 @@
                     "type": "string"
                   },
                   "at": {
-                    "type": "integer",
-                    "minimum": 0
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   },
                   "state": {
-                    "type": "string"
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "phase": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "outcome": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "index": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "started": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "completed": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "duration_seconds": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "timed_out": {
+                    "anyOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "timing": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "availability": {
+                        "enum": [
+                          "recorded",
+                          "unavailable"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "value",
+                      "availability"
+                    ]
+                  },
+                  "invocation_id": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "finish_reason": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "usage": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "available": {
+                        "type": "boolean"
+                      },
+                      "prompt_tokens": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "completion_tokens": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "total_tokens": {
+                        "anyOf": [
+                          {
+                            "type": "integer",
+                            "minimum": 0
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "finish_reason": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "available",
+                      "prompt_tokens",
+                      "completion_tokens",
+                      "total_tokens",
+                      "finish_reason"
+                    ]
+                  },
+                  "error": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "required": [
-                  "kind",
-                  "at"
+                  "kind"
                 ]
               }
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "execution_seconds": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "type": "integer",
+                          "minimum": 0
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "availability": {
+                      "enum": [
+                        "recorded",
+                        "unavailable"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "value",
+                    "availability"
+                  ]
+                },
+                "deadline_ended_attempt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "execution_seconds",
+                "deadline_ended_attempt"
+              ]
             }
           },
           "required": [
@@ -1733,6 +2201,7 @@
             "terminal_reason",
             "counts",
             "timings",
+            "budget",
             "events"
           ]
         },
@@ -1779,7 +2248,7 @@
               "const": "rack-ai/runtime/v1"
             },
             "contract_version": {
-              "const": "1.3.0"
+              "const": "1.4.0"
             },
             "owner": {
               "type": "string"
@@ -2103,7 +2572,7 @@
               "additionalProperties": false,
               "properties": {
                 "version": {
-                  "const": "1.3.0"
+                  "const": "1.4.0"
                 },
                 "operations": {
                   "type": "array",
