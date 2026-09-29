@@ -138,6 +138,7 @@ impl PodmanWorkspaceExecutor {
         if stdin.is_some() {
             command.stdin(Stdio::piped());
         }
+        let started = unix_now();
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -173,7 +174,8 @@ impl PodmanWorkspaceExecutor {
                 let stderr = String::from_utf8_lossy(&output.stderr).to_string();
                 let evidence = CommandEvidence::new(argv, output.status.code().unwrap_or(1))
                     .with_stdout(stdout)
-                    .with_stderr(stderr);
+                    .with_stderr(stderr)
+                    .with_timing(started, unix_now());
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
             WaitOutcome::TimedOut => {
@@ -189,7 +191,8 @@ impl PodmanWorkspaceExecutor {
                 };
                 let evidence = CommandEvidence::new(argv, 124)
                     .with_stderr(stderr)
-                    .with_timed_out(true);
+                    .with_timed_out(true)
+                    .with_timing(started, unix_now());
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
         }
@@ -216,6 +219,13 @@ impl PodmanWorkspaceExecutor {
         };
         observer.container_finished()
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn wait_for_container_id(cidfile: &Path, timeout_seconds: u32) -> Option<String> {

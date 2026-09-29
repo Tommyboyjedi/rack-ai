@@ -10,7 +10,69 @@ use crate::ChangeWorkspace;
 use crate::CommandEvidence;
 use crate::GenericWorkerSelectionDecision;
 use crate::GitEvidence;
+use crate::ToolCallRecord;
 use crate::WorkerExecutionProvenance;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ExecutionActivityEvent {
+    phase: String,
+    outcome: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+impl ExecutionActivityEvent {
+    pub fn new(phase: impl Into<String>, outcome: impl Into<String>) -> Self {
+        Self {
+            phase: phase.into(),
+            outcome: outcome.into(),
+            started: None,
+            completed: None,
+            detail: None,
+        }
+    }
+
+    pub fn with_timing(mut self, started: u64, completed: u64) -> Self {
+        self.started = Some(started);
+        self.completed = Some(completed);
+        self
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn phase(&self) -> &str {
+        self.phase.as_str()
+    }
+
+    pub fn outcome(&self) -> &str {
+        self.outcome.as_str()
+    }
+
+    pub fn started(&self) -> Option<u64> {
+        self.started
+    }
+
+    pub fn completed(&self) -> Option<u64> {
+        self.completed
+    }
+
+    pub fn duration_seconds(&self) -> Option<u64> {
+        self.started
+            .zip(self.completed)
+            .map(|(started, completed)| completed.saturating_sub(started))
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ReviewPacket {
@@ -39,6 +101,14 @@ pub struct ReviewPacket {
     worker_provenance: Option<WorkerExecutionProvenance>,
     #[serde(default)]
     selection_decision: Option<GenericWorkerSelectionDecision>,
+    #[serde(default)]
+    activity_events: Vec<ExecutionActivityEvent>,
+    #[serde(default)]
+    tool_calls: Vec<ToolCallRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    execution_budget_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deadline_ended_attempt: Option<String>,
 }
 
 impl ReviewPacket {
@@ -67,6 +137,10 @@ impl ReviewPacket {
             last_error: None,
             worker_provenance: None,
             selection_decision: None,
+            activity_events: Vec::new(),
+            tool_calls: Vec::new(),
+            execution_budget_seconds: None,
+            deadline_ended_attempt: None,
         }
     }
 
@@ -105,6 +179,10 @@ impl ReviewPacket {
             last_error: None,
             worker_provenance: None,
             selection_decision: None,
+            activity_events: Vec::new(),
+            tool_calls: Vec::new(),
+            execution_budget_seconds: None,
+            deadline_ended_attempt: None,
         }
     }
 
@@ -213,6 +291,42 @@ impl ReviewPacket {
 
     pub fn worker_provenance(&self) -> Option<&WorkerExecutionProvenance> {
         self.worker_provenance.as_ref()
+    }
+
+    pub fn with_activity_event(mut self, event: ExecutionActivityEvent) -> Self {
+        self.activity_events.push(event);
+        self
+    }
+
+    pub fn with_tool_calls(mut self, tool_calls: Vec<ToolCallRecord>) -> Self {
+        self.tool_calls = tool_calls;
+        self
+    }
+
+    pub fn with_execution_budget_seconds(mut self, seconds: u64) -> Self {
+        self.execution_budget_seconds = Some(seconds);
+        self
+    }
+
+    pub fn with_deadline_ended_attempt(mut self, phase: impl Into<String>) -> Self {
+        self.deadline_ended_attempt = Some(phase.into());
+        self
+    }
+
+    pub fn activity_events(&self) -> &[ExecutionActivityEvent] {
+        self.activity_events.as_slice()
+    }
+
+    pub fn tool_calls(&self) -> &[ToolCallRecord] {
+        self.tool_calls.as_slice()
+    }
+
+    pub fn execution_budget_seconds(&self) -> Option<u64> {
+        self.execution_budget_seconds
+    }
+
+    pub fn deadline_ended_attempt(&self) -> Option<&str> {
+        self.deadline_ended_attempt.as_deref()
     }
 }
 

@@ -54,6 +54,7 @@ impl WorkspaceExecutor for HostWorkspaceExecutor {
         command.current_dir(request.worktree_path());
         command.stdout(Stdio::piped());
         command.stderr(Stdio::piped());
+        let started = unix_now();
         let child = command
             .spawn()
             .map_err(|error| map_spawn_error(&request.argv()[0], error))?;
@@ -64,7 +65,8 @@ impl WorkspaceExecutor for HostWorkspaceExecutor {
                     output.status.code().unwrap_or(1),
                 )
                 .with_stdout(String::from_utf8_lossy(&output.stdout).to_string())
-                .with_stderr(String::from_utf8_lossy(&output.stderr).to_string());
+                .with_stderr(String::from_utf8_lossy(&output.stderr).to_string())
+                .with_timing(started, unix_now());
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
             WaitOutcome::TimedOut => {
@@ -73,11 +75,19 @@ impl WorkspaceExecutor for HostWorkspaceExecutor {
                         "workspace command exceeded wall-clock timeout of {}s",
                         request.timeout_seconds()
                     ))
-                    .with_timed_out(true);
+                    .with_timed_out(true)
+                    .with_timing(started, unix_now());
                 Ok(WorkspaceExecutionResult::new(evidence))
             }
         }
     }
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 fn ensure_worktree(worktree_path: &Path) -> Result<(), String> {

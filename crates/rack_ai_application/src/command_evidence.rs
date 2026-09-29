@@ -8,6 +8,10 @@ pub struct CommandEvidence {
     stdout: String,
     stderr: String,
     timed_out: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    started: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    completed: Option<u64>,
 }
 
 impl CommandEvidence {
@@ -18,6 +22,8 @@ impl CommandEvidence {
             stdout: String::new(),
             stderr: String::new(),
             timed_out: false,
+            started: None,
+            completed: None,
         }
     }
 
@@ -33,6 +39,22 @@ impl CommandEvidence {
 
     pub fn with_timed_out(mut self, timed_out: bool) -> Self {
         self.timed_out = timed_out;
+        self
+    }
+
+    pub fn with_started(mut self, started: u64) -> Self {
+        self.started = Some(started);
+        self
+    }
+
+    pub fn with_completed(mut self, completed: u64) -> Self {
+        self.completed = Some(completed);
+        self
+    }
+
+    pub fn with_timing(mut self, started: u64, completed: u64) -> Self {
+        self.started = Some(started);
+        self.completed = Some(completed);
         self
     }
 
@@ -54,6 +76,20 @@ impl CommandEvidence {
 
     pub fn timed_out(&self) -> bool {
         self.timed_out
+    }
+
+    pub fn started(&self) -> Option<u64> {
+        self.started
+    }
+
+    pub fn completed(&self) -> Option<u64> {
+        self.completed
+    }
+
+    pub fn duration_seconds(&self) -> Option<u64> {
+        self.started
+            .zip(self.completed)
+            .map(|(started, completed)| completed.saturating_sub(started))
     }
 
     pub fn succeeded(&self) -> bool {

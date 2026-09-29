@@ -215,6 +215,7 @@ pub use read_file_request::ReadFileRequest;
 pub use registered_repository::RegisteredRepository;
 pub use repository_registry::RepositoryRegistry;
 pub use resolve_git_sha_request::ResolveGitShaRequest;
+pub use review_packet::ExecutionActivityEvent;
 pub use review_packet::ReviewPacket;
 pub use run_command_request::RunCommandRequest;
 pub use run_next_task::RunNextOutcome;

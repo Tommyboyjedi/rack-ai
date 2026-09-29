@@ -6,9 +6,10 @@ use std::path::{Component, Path, PathBuf};
 
 const EXECUTION_SCHEMA: &str = "rack-ai/work-execution/v1";
 const ARTIFACT_SCHEMA: &str = "rack-ai/work-artifact/v1";
-pub const CONTRACT_VERSION: &str = "1.3.0";
+pub const CONTRACT_VERSION: &str = "1.4.0";
 const ARTIFACT_PREFIX: &str = "wa1";
 const MAX_ARTIFACT_TEXT_BYTES: usize = 64 * 1024;
+const MAX_DIAGNOSTIC_TEXT_BYTES: usize = 8 * 1024;
 
 struct Snapshot {
     invocation: Invocation,
@@ -21,6 +22,17 @@ struct Snapshot {
 struct ScopedCounts {
     total: usize,
     unresolved: usize,
+    children: Vec<ScopedChild>,
+}
+
+struct ScopedChild {
+    invocation_id: String,
+    state: InvocationState,
+    started: Option<u64>,
+    completed: Option<u64>,
+    error: Option<String>,
+    usage: Option<Value>,
+    finish_reason: Option<String>,
 }
 
 struct ArtifactKey {
@@ -37,6 +49,12 @@ struct PacketView {
     commands: Vec<Value>,
     artifacts: Vec<Value>,
     evidence_status: String,
+    last_error: Option<String>,
+    any_command_timed_out: bool,
+    activity_events: Vec<Value>,
+    tool_calls: Vec<Value>,
+    execution_budget_seconds: Option<u64>,
+    deadline_ended_attempt: Option<String>,
 }
 
 pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> {
@@ -69,12 +87,17 @@ pub fn artifact(service: &Service, input: (&str, &str)) -> Result<Value, String>
     if text.is_empty() {
         return Err("not_found".into());
     }
-    let bytes = text.as_bytes();
-    let truncated = bytes.len() > MAX_ARTIFACT_TEXT_BYTES;
+    let redacted = redact_diagnostic(text);
+    let byte_len = redacted.len();
+    let truncated = byte_len > MAX_ARTIFACT_TEXT_BYTES;
     let safe_text = if truncated {
-        String::from_utf8_lossy(&bytes[..MAX_ARTIFACT_TEXT_BYTES]).into_owned()
+        let mut end = MAX_ARTIFACT_TEXT_BYTES;
+        while end > 0 && !redacted.is_char_boundary(end) {
+            end -= 1;
+        }
+        redacted[..end].to_string()
     } else {
-        text.to_string()
+        redacted
     };
     Ok(json!({
         "schema": ARTIFACT_SCHEMA,
@@ -84,7 +107,7 @@ pub fn artifact(service: &Service, input: (&str, &str)) -> Result<Value, String>
         "index": key.index,
         "content_type": "text/plain; charset=utf-8",
         "text": safe_text,
-        "bytes": bytes.len(),
+        "bytes": byte_len,
         "truncated": truncated
     }))
 }
@@ -140,6 +163,22 @@ fn scoped_counts(s: &Document, parent_id: &str) -> ScopedCounts {
         ) {
             counts.unresolved += 1;
         }
+        let result = child.result.as_ref().or(child.late_result.as_ref());
+        counts.children.push(ScopedChild {
+            invocation_id: child.id.clone(),
+            state: child.state,
+            started: child.started,
+            completed: child.completed,
+            error: child.error.clone(),
+            usage: result.and_then(|value| value.get("usage")).cloned(),
+            finish_reason: result
+                .and_then(|value| value.get("choices"))
+                .and_then(Value::as_array)
+                .and_then(|choices| choices.first())
+                .and_then(|choice| choice.get("finish_reason"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        });
     }
     counts
 }
@@ -189,20 +228,62 @@ fn outcome(invocation: &Invocation, packet: Option<&PacketView>) -> Value {
             "acceptance_verdict": packet.acceptance_verdict,
             "accepted_revision": packet.accepted_revision,
             "changed_paths": packet.changed_paths,
-            "commands": packet.commands,
+            "commands": packet.commands.iter().map(redact_value).collect::<Vec<_>>(),
+            "last_error": packet.last_error.as_deref().map(redact_diagnostic),
             "evidence_status": packet.evidence_status
         })
     });
+    let historical_outcome_known = invocation.state != InvocationState::Uncertain;
     json!({
         "kind": if invocation.request.work.as_ref().is_some_and(|w| w.workspace().is_some()) {"workspace"} else {"inference"},
         "terminal": terminal,
-        "outcome_known": invocation.state != InvocationState::Uncertain,
+        "outcome_known": historical_outcome_known,
         "category": outcome_category(invocation, packet),
         "failure_category": failure_category(invocation, packet),
-        "error": invocation.error,
+        "error": invocation.error.as_deref().map(redact_diagnostic),
+        "attempt": attempt_summary(invocation, packet),
+        "historical_invocation": {
+            "state": to_value(invocation.state),
+            "terminal": terminal,
+            "outcome_known": historical_outcome_known,
+            "uncertainty_reason": if invocation.state == InvocationState::Uncertain {
+                invocation.error.as_deref().map(redact_diagnostic)
+            } else {
+                None
+            }
+        },
         "workspace": workspace,
         "model_usage": model_usage(invocation)
     })
+}
+
+fn attempt_summary(invocation: &Invocation, packet: Option<&PacketView>) -> Value {
+    let known = attempt_known(invocation, packet);
+    json!({
+        "known": known,
+        "status": packet.map(|packet| packet.status.clone()).unwrap_or_else(|| to_string_value(invocation.state)),
+        "category": if known { attempt_category(invocation, packet) } else { "unknown" },
+        "failure_category": if known { failure_category(invocation, packet) } else { Some("outcome_uncertain") },
+        "execution_budget_seconds": packet.and_then(|packet| packet.execution_budget_seconds),
+        "deadline_ended_attempt": packet.and_then(|packet| packet.deadline_ended_attempt.clone())
+    })
+}
+
+fn attempt_known(invocation: &Invocation, packet: Option<&PacketView>) -> bool {
+    match packet {
+        Some(packet) => packet.evidence_status == "recorded",
+        None => !matches!(
+            invocation.state,
+            InvocationState::Queued | InvocationState::Running | InvocationState::Uncertain
+        ),
+    }
+}
+
+fn attempt_category(invocation: &Invocation, packet: Option<&PacketView>) -> &'static str {
+    if let Some(packet) = packet {
+        return workspace_category(Some(packet));
+    }
+    outcome_category(invocation, None)
 }
 
 fn closure(snapshot: &Snapshot) -> Value {
@@ -217,12 +298,25 @@ fn closure(snapshot: &Snapshot) -> Value {
     } else {
         "unavailable"
     });
+    let safe_closure_known = matches!(cleanup_state, "safely_closed" | "not_required" | "archived");
+    let replay_safety = if execution_active {
+        "blocked_active_execution"
+    } else if safe_closure_known {
+        "closed_inspection_only"
+    } else {
+        "blocked_unresolved_effect"
+    };
     json!({
         "execution_active": execution_active,
         "cleanup_state": cleanup_state,
         "original_outcome_known": invocation.state != InvocationState::Uncertain,
-        "safe_closure_known": matches!(cleanup_state, "safely_closed" | "not_required" | "archived"),
-        "blocker": demand.and_then(|d| d.recovery_error.clone()).or_else(|| invocation.error.clone()),
+        "safe_closure_known": safe_closure_known,
+        "replay_safety": replay_safety,
+        "blocker": demand
+            .and_then(|d| d.recovery_error.clone())
+            .or_else(|| invocation.error.clone())
+            .as_deref()
+            .map(redact_diagnostic),
         "retry_after_seconds": demand.and_then(|d| d.retry_after)
     })
 }
@@ -246,28 +340,35 @@ fn activity(snapshot: &Snapshot, packet: Option<&PacketView>) -> Value {
         "sequence": invocation.queue_order,
         "current": current_activity(invocation),
         "last_observed_at": invocation.completed.or(invocation.started).or(optional_time(invocation.created)),
-        "terminal_reason": invocation.error,
+        "terminal_reason": invocation.error.as_deref().map(redact_diagnostic),
         "counts": {
             "model_calls": metric_count(workspace_model_calls(snapshot), workspace_children_availability(snapshot)),
             "scoped_children": metric_count(snapshot.scoped_children.as_ref().map(|c| c.total as u64), workspace_children_availability(snapshot)),
             "unresolved_scoped_children": metric_count(snapshot.scoped_children.as_ref().map(|c| c.unresolved as u64), workspace_children_availability(snapshot)),
             "command_errors": metric_count(packet.map(command_errors), packet_availability(packet)),
-            "tool_calls": metric_count(None, "unavailable")
+            "tool_calls": metric_count(packet.map(|packet| packet.tool_calls.len() as u64), packet_availability(packet))
         },
         "timings": {
             "queue_wait_seconds": metric_duration(queue_wait(invocation)),
             "active_execution_seconds": metric_duration(active_execution(invocation)),
-            "setup_seconds": metric_duration(None),
-            "acceptance_seconds": metric_duration(None),
+            "setup_seconds": metric_duration(phase_duration(packet, "setup")),
+            "agent_execution_seconds": metric_duration(phase_duration(packet, "agent_execution")),
+            "acceptance_seconds": metric_duration(phase_duration(packet, "acceptance")),
             "cleanup_seconds": metric_duration(None),
             "first_token_seconds": metric_duration(None),
+            "prefill_seconds": metric_duration(None),
             "backend_queue_seconds": metric_duration(None)
         },
-        "events": events(invocation)
+        "budget": {
+            "execution_seconds": metric_count(packet.and_then(|packet| packet.execution_budget_seconds), packet_availability(packet)),
+            "deadline_ended_attempt": packet.and_then(|packet| packet.deadline_ended_attempt.clone())
+        },
+        "events": events(snapshot, packet)
     })
 }
 
-fn events(invocation: &Invocation) -> Vec<Value> {
+fn events(snapshot: &Snapshot, packet: Option<&PacketView>) -> Vec<Value> {
+    let invocation = &snapshot.invocation;
     let mut events = Vec::new();
     if let Some(at) = optional_time(invocation.created) {
         events.push(json!({"kind":"queued","at":at}));
@@ -275,10 +376,74 @@ fn events(invocation: &Invocation) -> Vec<Value> {
     if let Some(at) = invocation.started {
         events.push(json!({"kind":"running","at":at}));
     }
+    if let Some(packet) = packet {
+        events.extend(packet.activity_events.iter().map(redact_value));
+        for command in &packet.commands {
+            let started = command.get("started").and_then(Value::as_u64);
+            let completed = command.get("completed").and_then(Value::as_u64);
+            events.push(json!({
+                "kind": "command",
+                "phase": "acceptance_command",
+                "index": command.get("index").cloned().unwrap_or(Value::Null),
+                "outcome": command.get("outcome").cloned().unwrap_or(Value::Null),
+                "started": started,
+                "completed": completed,
+                "duration_seconds": started.zip(completed).map(|(started, completed)| completed.saturating_sub(started)),
+                "timed_out": command.get("timed_out").cloned().unwrap_or(Value::Bool(false))
+            }));
+        }
+        for (index, tool_call) in packet.tool_calls.iter().enumerate() {
+            events.push(json!({
+                "kind": "tool_call",
+                "index": index,
+                "name": tool_call.get("name").map(redact_value).unwrap_or(Value::Null),
+                "outcome": tool_call.get("outcome").cloned().unwrap_or_else(|| json!("recorded")),
+                "timing": metric_duration(None)
+            }));
+        }
+    }
+    if let Some(scoped_children) = snapshot.scoped_children.as_ref() {
+        for child in &scoped_children.children {
+            let duration = child
+                .started
+                .zip(child.completed)
+                .map(|(started, completed)| completed.saturating_sub(started));
+            events.push(json!({
+                "kind": "model_call",
+                "invocation_id": child.invocation_id,
+                "state": to_value(child.state),
+                "started": child.started,
+                "completed": child.completed,
+                "duration_seconds": duration,
+                "finish_reason": child.finish_reason,
+                "usage": child_usage(child),
+                "error": child.error.as_deref().map(redact_diagnostic)
+            }));
+        }
+    }
     if let Some(at) = invocation.completed {
         events.push(json!({"kind":"terminal","at":at,"state":to_value(invocation.state)}));
     }
     events
+}
+
+fn phase_duration(packet: Option<&PacketView>, phase: &str) -> Option<u64> {
+    packet
+        .into_iter()
+        .flat_map(|packet| packet.activity_events.iter())
+        .find(|event| event.get("phase").and_then(Value::as_str) == Some(phase))
+        .and_then(|event| event.get("duration_seconds"))
+        .and_then(Value::as_u64)
+}
+
+fn child_usage(child: &ScopedChild) -> Value {
+    let usage = child.usage.as_ref();
+    json!({
+        "available": usage.is_some(),
+        "prompt_tokens": usage.and_then(|u| u.get("prompt_tokens")).and_then(Value::as_u64),
+        "completion_tokens": usage.and_then(|u| u.get("completion_tokens")).and_then(Value::as_u64),
+        "total_tokens": usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_u64)
+    })
 }
 
 fn workspace_packet_view(
@@ -320,30 +485,56 @@ fn workspace_packet_view(
         .iter()
         .enumerate()
         .map(|(index, command)| {
-            let stdout = output_reference(owner, &invocation.id, "stdout", index, command.stdout());
-            let stderr = output_reference(owner, &invocation.id, "stderr", index, command.stderr());
+            let stdout_text = redact_diagnostic(command.stdout());
+            let stderr_text = redact_diagnostic(command.stderr());
+            let stdout = output_reference(owner, &invocation.id, "stdout", index, &stdout_text);
+            let stderr = output_reference(owner, &invocation.id, "stderr", index, &stderr_text);
             if let Some(artifact) = stdout.get("artifact_id").and_then(Value::as_str) {
-                artifacts.push(artifact_summary(
-                    artifact,
-                    "command_stdout",
-                    command.stdout(),
-                ));
+                artifacts.push(artifact_summary(artifact, "command_stdout", &stdout_text));
             }
             if let Some(artifact) = stderr.get("artifact_id").and_then(Value::as_str) {
-                artifacts.push(artifact_summary(
-                    artifact,
-                    "command_stderr",
-                    command.stderr(),
-                ));
+                artifacts.push(artifact_summary(artifact, "command_stderr", &stderr_text));
             }
             json!({
                 "index": index,
-                "argv": command.argv(),
+                "argv": command.argv().iter().map(|arg| redact_diagnostic(arg)).collect::<Vec<_>>(),
                 "exit_code": command.exit_code(),
                 "timed_out": command.timed_out(),
                 "succeeded": command.succeeded(),
+                "outcome": command_outcome(command.succeeded(), command.timed_out()),
+                "started": command.started(),
+                "completed": command.completed(),
+                "duration_seconds": command.duration_seconds(),
                 "stdout": stdout,
                 "stderr": stderr
+            })
+        })
+        .collect::<Vec<_>>();
+    let any_command_timed_out = packet.commands().iter().any(|command| command.timed_out());
+    let activity_events = packet
+        .activity_events()
+        .iter()
+        .map(|event| {
+            json!({
+                "kind": "phase",
+                "phase": event.phase(),
+                "outcome": event.outcome(),
+                "started": event.started(),
+                "completed": event.completed(),
+                "duration_seconds": event.duration_seconds(),
+                "detail": event.detail().map(redact_diagnostic)
+            })
+        })
+        .collect();
+    let tool_calls = packet
+        .tool_calls()
+        .iter()
+        .map(|tool_call| {
+            json!({
+                "name": redact_diagnostic(&tool_call.name),
+                "arguments": redact_diagnostic(&tool_call.arguments),
+                "result": redact_diagnostic(&tool_call.result),
+                "outcome": if tool_call.result.trim().is_empty() {"recorded"} else {"completed"}
             })
         })
         .collect();
@@ -355,6 +546,12 @@ fn workspace_packet_view(
         commands,
         artifacts,
         evidence_status: "recorded".into(),
+        last_error: packet.last_error().map(|error| redact_diagnostic(error)),
+        any_command_timed_out,
+        activity_events,
+        tool_calls,
+        execution_budget_seconds: packet.execution_budget_seconds(),
+        deadline_ended_attempt: packet.deadline_ended_attempt().map(str::to_string),
     }))
 }
 
@@ -367,6 +564,22 @@ fn unavailable_packet_view(status: &str) -> PacketView {
         commands: Vec::new(),
         artifacts: Vec::new(),
         evidence_status: status.into(),
+        last_error: None,
+        any_command_timed_out: false,
+        activity_events: Vec::new(),
+        tool_calls: Vec::new(),
+        execution_budget_seconds: None,
+        deadline_ended_attempt: None,
+    }
+}
+
+fn command_outcome(succeeded: bool, timed_out: bool) -> &'static str {
+    if succeeded {
+        "succeeded"
+    } else if timed_out {
+        "timed_out"
+    } else {
+        "failed"
     }
 }
 
@@ -484,6 +697,8 @@ fn workspace_category(packet: Option<&PacketView>) -> &'static str {
         "completed_evidence_unavailable"
     } else if matches!(packet.status.as_str(), "checks_passed" | "prepared") {
         "completed"
+    } else if packet.status == "failed" {
+        "failed"
     } else {
         "rejected"
     }
@@ -498,7 +713,9 @@ fn failure_category(invocation: &Invocation, packet: Option<&PacketView>) -> Opt
             Some("backend_response_oversized") => "response_oversized",
             _ => "execution_failed",
         }),
-        InvocationState::Uncertain => Some("outcome_uncertain"),
+        InvocationState::Uncertain => {
+            workspace_failure_category(packet).or(Some("outcome_uncertain"))
+        }
         InvocationState::Completed => workspace_failure_category(packet),
         _ => None,
     }
@@ -506,6 +723,15 @@ fn failure_category(invocation: &Invocation, packet: Option<&PacketView>) -> Opt
 
 fn workspace_failure_category(packet: Option<&PacketView>) -> Option<&'static str> {
     let packet = packet?;
+    if packet.deadline_ended_attempt.is_some()
+        || packet.any_command_timed_out
+        || packet
+            .last_error
+            .as_deref()
+            .is_some_and(is_public_execution_timeout)
+    {
+        return Some("execution_timeout");
+    }
     match packet.status.as_str() {
         "checks_failed" => Some("acceptance_command_failed"),
         "path_policy_failed" => Some("path_policy_failed"),
@@ -516,6 +742,14 @@ fn workspace_failure_category(packet: Option<&PacketView>) -> Option<&'static st
         }
         _ => None,
     }
+}
+
+fn is_public_execution_timeout(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("wall-clock timeout")
+        || lower.contains("worker timeout")
+        || lower.contains("timeout exceeded")
+        || lower.contains("execution timeout")
 }
 
 fn model_usage(invocation: &Invocation) -> Value {
@@ -621,6 +855,79 @@ fn to_string_value<T: Serialize>(value: T) -> String {
         .to_string()
 }
 
+fn redact_value(value: &Value) -> Value {
+    match value {
+        Value::String(value) => Value::String(redact_diagnostic(value)),
+        Value::Array(values) => Value::Array(values.iter().map(redact_value).collect()),
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| (key.clone(), redact_value(value)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+fn redact_diagnostic(input: &str) -> String {
+    let mut words = Vec::new();
+    let mut redact_next_bearer = false;
+    for word in input.split_whitespace() {
+        if redact_next_bearer {
+            words.push("<redacted:credential>".to_string());
+            redact_next_bearer = false;
+            continue;
+        }
+        if word.eq_ignore_ascii_case("bearer") {
+            words.push("Bearer".to_string());
+            redact_next_bearer = true;
+            continue;
+        }
+        words.push(redact_diagnostic_word(word));
+    }
+    truncate_public_diagnostic(words.join(" "))
+}
+
+fn redact_diagnostic_word(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    if lower.contains("token=")
+        || lower.contains("password=")
+        || lower.contains("secret=")
+        || lower.contains("capability=")
+        || lower.contains("access_key=")
+        || lower.contains("authorization:")
+    {
+        return "<redacted:credential>".to_string();
+    }
+    if lower.contains("/srv/")
+        || lower.contains("/home/")
+        || lower.contains("/tmp/")
+        || lower.contains("\\srv\\")
+        || lower.contains("\\home\\")
+        || lower.contains("\\tmp\\")
+    {
+        return "<redacted:path>".to_string();
+    }
+    let core = word.trim_matches(|ch: char| !ch.is_ascii_alphanumeric());
+    if core.len() >= 32 && core.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        return "<redacted:credential>".to_string();
+    }
+    word.to_string()
+}
+
+fn truncate_public_diagnostic(value: String) -> String {
+    if value.len() <= MAX_DIAGNOSTIC_TEXT_BYTES {
+        return value;
+    }
+    let mut end = MAX_DIAGNOSTIC_TEXT_BYTES;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut truncated = value[..end].to_string();
+    truncated.push_str(" <truncated>");
+    truncated
+}
+
 #[allow(dead_code)]
 fn safe_relative(path: &Path) -> bool {
     !path.is_absolute()
@@ -633,6 +940,7 @@ fn safe_relative(path: &Path) -> bool {
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::{collections::BTreeMap, path::PathBuf};
 
     fn workspace_work() -> crate::work_payload::Work {
         serde_json::from_value(json!({
@@ -698,6 +1006,100 @@ mod tests {
         }
     }
 
+    fn children(total: usize, unresolved: usize) -> ScopedCounts {
+        ScopedCounts {
+            total,
+            unresolved,
+            children: Vec::new(),
+        }
+    }
+
+    fn demand(state: DemandState) -> Demand {
+        Demand {
+            reservation_id: Some("reservation".into()),
+            services: BTreeMap::new(),
+            reserve_request: None,
+            reserve_result: None,
+            reservation_closed: None,
+            recovery_reconciliation: None,
+            recovery_error: None,
+            workspace_recovery_analyses: BTreeMap::new(),
+            id: "reservation".into(),
+            owner: "athba".into(),
+            request: Acquire {
+                schema: VERSION.into(),
+                source_system: "athba".into(),
+                work_id: "work".into(),
+                acquisition_id: "acquisition".into(),
+                tag: "local-coder".into(),
+                priority: Some(Priority::Low),
+                capabilities: Vec::new(),
+                context_tokens: 4096,
+                ttl_seconds: 60,
+                qualification: false,
+            },
+            priority: Priority::Low,
+            profile: crate::config::Profile {
+                tag: "local-coder".into(),
+                version: "fixture".into(),
+                model: "fixture".into(),
+                backend: crate::config::Backend::Vllm,
+                driver: crate::config::Driver::Fixture,
+                qualified: true,
+                evidence: Vec::new(),
+                capabilities: Vec::new(),
+                context_tokens: 4096,
+                max_input_tokens: 3968,
+                protocols: crate::protocol::default_protocols(),
+                streaming: false,
+                max_images_per_request: 0,
+                max_image_bytes: 0,
+                max_image_pixels: 0,
+                max_output_tokens: 128,
+                resources: Vec::new(),
+                device_mib: BTreeMap::new(),
+                host_mib: 0,
+                cpu_percent: 0,
+                endpoint: "http://127.0.0.1:1".into(),
+                executable: PathBuf::from("/bin/true"),
+                container_image: None,
+                container_mounts: BTreeMap::new(),
+                executable_sha256: "0".repeat(64),
+                args: Vec::new(),
+                media_config: None,
+                media_config_sha256: None,
+                media_mode: None,
+                artifact: None,
+                artifact_sha256: None,
+                artifact_verify_seconds: 1,
+                startup_seconds: 1,
+                drain_seconds: 1,
+                stop_seconds: 1,
+                inference_seconds: 1,
+            },
+            profile_hash: "profile".into(),
+            state,
+            reason: None,
+            retry_after: None,
+            preempted_by: None,
+            ready_checked: true,
+            accepted_calls: 0,
+            generation: "generation".into(),
+            access_key: "access".into(),
+            backend_activation: None,
+            created: 10,
+            last_activity_at: None,
+            order: 0,
+            deadline: 70,
+            transition_deadline: 80,
+            victims: Vec::new(),
+            process: None,
+            effect_started: false,
+            preflight_done: true,
+            released: matches!(state, DemandState::Released),
+        }
+    }
+
     fn packet(accepted_revision: Option<&str>, status: &str, verdict: Option<&str>) -> PacketView {
         PacketView {
             status: status.into(),
@@ -710,6 +1112,10 @@ mod tests {
                 "exit_code": 0,
                 "timed_out": false,
                 "succeeded": true,
+                "outcome": "succeeded",
+                "started": 13,
+                "completed": 14,
+                "duration_seconds": 1,
                 "stdout": {"available": true, "bytes": 4, "artifact_id": artifact_id("athba", "invocation", "stdout", 0), "truncated": false},
                 "stderr": {"available": false, "bytes": 0, "artifact_id": null, "truncated": false}
             })],
@@ -719,6 +1125,20 @@ mod tests {
                 "pass",
             )],
             evidence_status: "recorded".into(),
+            last_error: None,
+            any_command_timed_out: false,
+            activity_events: vec![json!({
+                "kind": "phase",
+                "phase": "setup",
+                "outcome": "completed",
+                "started": 12,
+                "completed": 13,
+                "duration_seconds": 1,
+                "detail": null
+            })],
+            tool_calls: Vec::new(),
+            execution_budget_seconds: Some(30),
+            deadline_ended_attempt: None,
         }
     }
 
@@ -728,20 +1148,20 @@ mod tests {
             invocation: invocation(InvocationState::Completed, None),
             demand: None,
             archived: false,
-            scoped_children: Some(ScopedCounts {
-                total: 2,
-                unresolved: 0,
-            }),
+            scoped_children: Some(children(2, 0)),
         };
         let value = report(
             "athba",
             &snapshot,
             Some(&packet(Some("abc123"), "checks_passed", Some("approved"))),
         );
+        assert_eq!(value["contract_version"], "1.4.0");
         assert_eq!(value["outcome"]["kind"], "workspace");
         assert_eq!(value["outcome"]["category"], "accepted");
+        assert_eq!(value["outcome"]["attempt"]["known"], true);
         assert_eq!(value["outcome"]["workspace"]["accepted_revision"], "abc123");
         assert_eq!(value["activity"]["counts"]["model_calls"]["value"], 2);
+        assert_eq!(value["activity"]["timings"]["setup_seconds"]["value"], 1);
         let rendered = value.to_string();
         assert!(!rendered.contains("packet_path"));
         assert!(!rendered.contains("worktree_path"));
@@ -750,27 +1170,89 @@ mod tests {
     }
 
     #[test]
-    fn workspace_report_preserves_rejection_and_uncertainty_semantics() {
-        let completed = Snapshot {
-            invocation: invocation(InvocationState::Completed, None),
-            demand: None,
+    fn confirmed_agent_timeout_is_reported_without_rewriting_uncertain_history() {
+        let mut timeout_packet = packet(None, "failed", None);
+        timeout_packet.last_error =
+            Some("JCode wall-clock timeout exceeded in /srv/rack-ai/private".into());
+        timeout_packet.deadline_ended_attempt = Some("agent_execution".into());
+        timeout_packet.activity_events = vec![json!({
+            "kind": "phase",
+            "phase": "agent_execution",
+            "outcome": "failed",
+            "started": 13,
+            "completed": 43,
+            "duration_seconds": 30,
+            "detail": "JCode wall-clock timeout exceeded"
+        })];
+        let snapshot = Snapshot {
+            invocation: invocation(
+                InvocationState::Uncertain,
+                Some("workspace_model_outcome_uncertain"),
+            ),
+            demand: Some(demand(DemandState::Releasing)),
             archived: false,
-            scoped_children: Some(ScopedCounts {
-                total: 1,
-                unresolved: 0,
-            }),
+            scoped_children: Some(children(1, 0)),
         };
-        let rejected = report(
-            "athba",
-            &completed,
-            Some(&packet(None, "checks_failed", Some("rejected"))),
-        );
-        assert_eq!(rejected["outcome"]["category"], "rejected");
-        assert_eq!(
-            rejected["outcome"]["failure_category"],
-            "acceptance_command_failed"
-        );
 
+        let view = report("athba", &snapshot, Some(&timeout_packet));
+
+        assert_eq!(view["outcome"]["category"], "uncertain");
+        assert_eq!(view["outcome"]["outcome_known"], false);
+        assert_eq!(view["outcome"]["failure_category"], "execution_timeout");
+        assert_eq!(view["outcome"]["attempt"]["known"], true);
+        assert_eq!(view["outcome"]["attempt"]["category"], "failed");
+        assert_eq!(
+            view["outcome"]["attempt"]["failure_category"],
+            "execution_timeout"
+        );
+        assert_eq!(
+            view["outcome"]["attempt"]["deadline_ended_attempt"],
+            "agent_execution"
+        );
+        assert_eq!(
+            view["outcome"]["historical_invocation"]["state"],
+            "uncertain"
+        );
+        assert_eq!(
+            view["outcome"]["historical_invocation"]["outcome_known"],
+            false
+        );
+        assert_eq!(view["closure"]["safe_closure_known"], false);
+        assert_eq!(
+            view["closure"]["replay_safety"],
+            "blocked_unresolved_effect"
+        );
+        assert_eq!(
+            view["activity"]["timings"]["agent_execution_seconds"]["value"],
+            30
+        );
+        assert!(!view.to_string().contains("/srv/rack-ai/private"));
+    }
+
+    #[test]
+    fn safe_closure_can_be_known_while_historical_uncertainty_remains() {
+        let snapshot = Snapshot {
+            invocation: invocation(
+                InvocationState::Uncertain,
+                Some("workspace_model_outcome_uncertain"),
+            ),
+            demand: Some(demand(DemandState::Released)),
+            archived: false,
+            scoped_children: None,
+        };
+        let view = report("athba", &snapshot, Some(&packet(None, "failed", None)));
+        assert_eq!(view["outcome"]["category"], "uncertain");
+        assert_eq!(
+            view["outcome"]["historical_invocation"]["state"],
+            "uncertain"
+        );
+        assert_eq!(view["closure"]["cleanup_state"], "safely_closed");
+        assert_eq!(view["closure"]["safe_closure_known"], true);
+        assert_eq!(view["closure"]["replay_safety"], "closed_inspection_only");
+    }
+
+    #[test]
+    fn truly_unknown_and_active_work_do_not_become_safe_replay() {
         let uncertain = Snapshot {
             invocation: invocation(
                 InvocationState::Uncertain,
@@ -778,15 +1260,101 @@ mod tests {
             ),
             demand: None,
             archived: false,
-            scoped_children: Some(ScopedCounts {
-                total: 1,
-                unresolved: 1,
-            }),
+            scoped_children: Some(children(1, 1)),
         };
-        let view = report("athba", &uncertain, None);
-        assert_eq!(view["outcome"]["category"], "uncertain");
-        assert_eq!(view["outcome"]["outcome_known"], false);
-        assert_eq!(view["closure"]["original_outcome_known"], false);
+        let unknown = report("athba", &uncertain, None);
+        assert_eq!(unknown["outcome"]["attempt"]["known"], false);
+        assert_eq!(unknown["outcome"]["attempt"]["category"], "unknown");
+        assert_eq!(unknown["closure"]["safe_closure_known"], false);
+
+        let active = Snapshot {
+            invocation: invocation(InvocationState::Running, None),
+            demand: None,
+            archived: false,
+            scoped_children: Some(children(0, 0)),
+        };
+        let view = report("athba", &active, None);
+        assert_eq!(view["closure"]["execution_active"], true);
+        assert_eq!(view["closure"]["safe_closure_known"], false);
+        assert_eq!(view["closure"]["replay_safety"], "blocked_active_execution");
+    }
+
+    #[test]
+    fn diagnostic_projection_redacts_paths_and_credentials() {
+        let mut packet = packet(None, "failed", None);
+        let secret = "abcd1234abcd1234abcd1234abcd1234";
+        packet.last_error = Some(format!(
+            "failed at /srv/rack-ai/state token={secret} Bearer {secret}"
+        ));
+        packet.commands = vec![json!({
+            "index": 0,
+            "argv": ["/srv/rack-ai/bin/tool", format!("access_key={secret}")],
+            "exit_code": 1,
+            "timed_out": false,
+            "succeeded": false,
+            "outcome": "failed",
+            "started": null,
+            "completed": null,
+            "duration_seconds": null,
+            "stdout": {"available": true, "bytes": 16, "artifact_id": artifact_id("athba", "invocation", "stdout", 0), "truncated": false},
+            "stderr": {"available": true, "bytes": 16, "artifact_id": artifact_id("athba", "invocation", "stderr", 0), "truncated": false}
+        })];
+        packet.artifacts = vec![artifact_summary(
+            &artifact_id("athba", "invocation", "stdout", 0),
+            "command_stdout",
+            "<redacted:path>",
+        )];
+        packet.activity_events = vec![json!({
+            "kind": "phase",
+            "phase": "agent_execution",
+            "outcome": "failed",
+            "started": 12,
+            "completed": 13,
+            "duration_seconds": 1,
+            "detail": format!("/home/tomp/private token={secret}")
+        })];
+        packet.tool_calls = vec![json!({
+            "name": "shell",
+            "arguments": format!("cat /tmp/private capability={secret}"),
+            "result": format!("Bearer {secret}")
+        })];
+
+        let snapshot = Snapshot {
+            invocation: invocation(InvocationState::Completed, None),
+            demand: None,
+            archived: false,
+            scoped_children: Some(children(0, 0)),
+        };
+        let rendered = report("athba", &snapshot, Some(&packet)).to_string();
+        assert!(!rendered.contains("/srv/"));
+        assert!(!rendered.contains("/home/tomp"));
+        assert!(!rendered.contains("/tmp/"));
+        assert!(!rendered.contains(secret));
+        assert!(rendered.contains("<redacted:path>"));
+        assert!(rendered.contains("<redacted:credential>"));
+    }
+
+    #[test]
+    fn missing_optional_metrics_are_explicitly_unavailable() {
+        let snapshot = Snapshot {
+            invocation: invocation(InvocationState::Completed, None),
+            demand: None,
+            archived: false,
+            scoped_children: None,
+        };
+        let view = report("athba", &snapshot, None);
+        assert_eq!(
+            view["activity"]["timings"]["first_token_seconds"]["availability"],
+            "unavailable"
+        );
+        assert_eq!(
+            view["activity"]["timings"]["prefill_seconds"]["availability"],
+            "unavailable"
+        );
+        assert_eq!(
+            view["activity"]["counts"]["scoped_children"]["availability"],
+            "unavailable"
+        );
     }
 
     #[test]
