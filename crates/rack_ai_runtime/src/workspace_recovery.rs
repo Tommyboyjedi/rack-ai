@@ -218,6 +218,7 @@ fn reconcile_closed_scope_confined_running_children(
             if child.state == InvocationState::Running {
                 child.cancel();
                 child.state = InvocationState::Uncertain;
+                child.completed = Some(now());
                 child
                     .error
                     .get_or_insert_with(|| CLOSED_SCOPE_CHILD_OUTCOME_UNKNOWN.into());
@@ -676,6 +677,7 @@ mod tests {
                 request_ref: None,
                 state: InvocationState::Uncertain,
                 queue_order: 1,
+                created: now() - 360,
                 waiting_deadline: now() + 60,
                 execution_deadline: Some(now() - 1),
                 response_bytes: 64 * 1024,
@@ -692,6 +694,7 @@ mod tests {
                 result_ref: None,
                 late_result_ref: None,
                 started: Some(now() - 300),
+                completed: None,
                 activation: Some(demand.generation.clone()),
                 result: None,
                 error: Some("workspace_model_outcome_uncertain".into()),
@@ -789,6 +792,7 @@ mod tests {
                                 InvocationState::Cancelled
                             },
                             queue_order: 2,
+                            created: now() - 2,
                             waiting_deadline: now() + 60,
                             execution_deadline: Some(now() + 60),
                             response_bytes: 1024,
@@ -809,6 +813,7 @@ mod tests {
                             result_ref: None,
                             late_result_ref: None,
                             started: Some(now() - 1),
+                            completed: None,
                             activation: Some(demand.generation.clone()),
                             result: None,
                             error: None,
@@ -934,6 +939,7 @@ mod tests {
                 request_ref: None,
                 state,
                 queue_order: 2,
+                created: 1,
                 waiting_deadline: now() + 60,
                 execution_deadline: if state == InvocationState::Queued {
                     None
@@ -956,6 +962,7 @@ mod tests {
                 result_ref: None,
                 late_result_ref: None,
                 started: (state != InvocationState::Queued).then(|| now() - 1),
+                completed: None,
                 activation: activation.or_else(|| {
                     (state != InvocationState::Queued).then(|| demand.generation.clone())
                 }),

@@ -16,7 +16,7 @@ static CONTRACT: LazyLock<Value> = LazyLock::new(|| {
             .expect("embedded runtime response schema must be valid JSON");
     json!({
         "schema": "rack-ai/runtime-contract/v1",
-        "contract_version": "1.2.0",
+        "contract_version": crate::work_execution_view::CONTRACT_VERSION,
         "documentation": include_str!("../../../docs/reservation-work.md"),
         "request_schema": request,
         "response_schema": response,

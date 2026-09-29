@@ -148,8 +148,8 @@ class ContractTests(unittest.TestCase):
         primary_worker = next(w for w in workers['workers'] if w['id'] == 'local-primary')
         primary_model = next(m for m in models['models'] if m['id'] == primary_worker['model_id'])
         qualified = primary_model['eligibility_profile']['capabilities']
-        self.assertEqual(primary_profile['capabilities'], ['reasoning', 'coding'])
-        self.assertEqual(qualified, ['reasoning', 'coding'])
+        self.assertEqual(primary_profile['capabilities'], ['reasoning', 'coding', 'visual'])
+        self.assertEqual(qualified, ['reasoning', 'coding', 'visual'])
         self.assertLessEqual(set(primary_profile['capabilities']), set(qualified))
         self.assertEqual(primary_worker['provider_profile'], 'local-primary')
         self.assertEqual(primary_model['api_model_id'], 'local-primary')
@@ -196,7 +196,7 @@ class ContractEndpointTests(unittest.TestCase):
                 status, body = self.get_contract(r, 'Bearer athba')
                 self.assertEqual(status, 200)
                 self.assertEqual(body, dict(
-                    schema='rack-ai/runtime-contract/v1', contract_version='1.2.0',
+                    schema='rack-ai/runtime-contract/v1', contract_version='1.3.0',
                     documentation=(ROOT/'docs/reservation-work.md').read_text(),
                     request_schema=json.loads((ROOT/'config/runtime/request.schema.json').read_text()),
                     response_schema=json.loads((ROOT/'config/runtime/response.schema.json').read_text())))
