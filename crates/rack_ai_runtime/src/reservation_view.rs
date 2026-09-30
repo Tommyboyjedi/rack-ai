@@ -19,10 +19,17 @@ pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
     let d = owned(s, input.0, input.1)?;
     let root = crate::reservation::root(s, d)?;
     let ids = crate::reservation::members(s, root)?;
+    let mut members = Vec::new();
+    for id in ids {
+        members.push(owned(s, input.0, &id)?.clone());
+    }
+    project(root, &members)
+}
+
+pub(crate) fn project(root: &Demand, members: &[Demand]) -> Result<Value, String> {
     let mut services = serde_json::Map::new();
     let mut states = Vec::new();
-    for id in ids {
-        let member = owned(s, input.0, &id)?;
+    for member in members {
         states.push(member.state);
         let mut view = crate::api::public(member.clone())?;
         if member.state == DemandState::Unavailable {
@@ -33,7 +40,17 @@ pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
         }
         services.insert(member.profile.tag.clone(), view);
     }
-    let state = if let Some(closed) = root.reservation_closed {
+    let state = aggregate_state(root, &states);
+    Ok(json!({"id":root.id,"priority":root.priority,"state":state,
+        "acquisition_id":root.reserve_request.as_ref().map(|r| &r.acquisition_id),
+        "requested_services":root.reserve_request.as_ref().map(|r| &r.services),"services":services}))
+}
+
+fn aggregate_state(root: &Demand, states: &[DemandState]) -> Value {
+    if states.is_empty() {
+        return json!(root.state);
+    }
+    if let Some(closed) = root.reservation_closed {
         if states.iter().all(|s| {
             matches!(
                 s,
@@ -53,8 +70,5 @@ pub(crate) fn view(s: &Document, input: (&str, &str)) -> Result<Value, String> {
         json!(states[0])
     } else {
         json!("partial")
-    };
-    Ok(json!({"id":root.id,"priority":root.priority,"state":state,
-        "acquisition_id":root.reserve_request.as_ref().map(|r| &r.acquisition_id),
-        "requested_services":root.reserve_request.as_ref().map(|r| &r.services),"services":services}))
+    }
 }
