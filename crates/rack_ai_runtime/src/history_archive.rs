@@ -484,7 +484,43 @@ pub fn lookup_reservation_view(
     if archive.owner != owner || expired(archive.expires_at, now()) {
         return Ok(None);
     }
+    if let Some(view) = archived_reservation_view(&archive)? {
+        return Ok(Some(view));
+    }
     Ok(archive.result)
+}
+
+fn archived_reservation_view(archive: &ReservationArchive) -> Result<Option<Value>, String> {
+    let Some(root) = archive
+        .demands
+        .iter()
+        .find(|d| d.id == archive.reservation_id && d.owner == archive.owner)
+    else {
+        return Ok(None);
+    };
+    let Some(member_ids) = archived_member_ids(root) else {
+        return Ok(None);
+    };
+    let mut members = Vec::new();
+    for id in member_ids {
+        let Some(member) = archive
+            .demands
+            .iter()
+            .find(|d| d.id == id && d.owner == archive.owner)
+        else {
+            return Ok(None);
+        };
+        members.push(member.clone());
+    }
+    crate::reservation_view::project(root, &members).map(Some)
+}
+
+fn archived_member_ids(root: &Demand) -> Option<Vec<String>> {
+    if root.services.is_empty() {
+        return Some(vec![root.id.clone()]);
+    }
+    let ids = root.services.values().cloned().collect::<Vec<_>>();
+    (!ids.is_empty()).then_some(ids)
 }
 
 pub fn lookup_demand(root: &Path, owner: &str, id: &str) -> Result<Option<Demand>, String> {
@@ -1697,6 +1733,155 @@ mod tests {
                 ..State::default()
             },
         }
+    }
+
+    fn reservation_request(id: &str) -> Reserve {
+        Reserve {
+            acquisition_id: format!("acquire-{id}"),
+            work_id: format!("work-{id}"),
+            services: vec!["local-primary".into(), "local-coder".into()],
+            priority: GenericPriority::Low,
+            ttl_seconds: 60,
+        }
+    }
+
+    fn acquisition_receipt(root_id: &str, coder_id: &str) -> Value {
+        json!({
+            "id": root_id,
+            "priority": "low",
+            "state": "preparing",
+            "acquisition_id": format!("acquire-{root_id}"),
+            "requested_services": ["local-primary", "local-coder"],
+            "services": {
+                "local-primary": {"id": root_id, "state": "preparing"},
+                "local-coder": {"id": coder_id, "state": "preparing"}
+            }
+        })
+    }
+
+    fn reservation_pair(root_id: &str, coder_id: &str, state: DemandState) -> (Demand, Demand) {
+        let mut root = demand(root_id, state);
+        root.services = BTreeMap::from([
+            ("local-primary".into(), root_id.into()),
+            ("local-coder".into(), coder_id.into()),
+        ]);
+        root.reserve_request = Some(reservation_request(root_id));
+        root.reserve_result = Some(acquisition_receipt(root_id, coder_id));
+        root.reservation_closed = None;
+        root.reason = None;
+        root.released = false;
+
+        let mut coder = demand(coder_id, state);
+        coder.reservation_id = Some(root_id.into());
+        coder.profile.tag = "local-coder".into();
+        coder.request.tag = "local-coder".into();
+        coder.reservation_closed = None;
+        coder.reason = None;
+        coder.released = false;
+
+        (root, coder)
+    }
+
+    fn close_released(demand: &mut Demand) {
+        demand.state = DemandState::Released;
+        demand.reservation_closed = Some(DemandState::Released);
+        demand.reason = Some("released".into());
+        demand.released = true;
+    }
+
+    fn reservation_document(root: Demand, member: Demand) -> Document {
+        Document {
+            claims: BTreeMap::new(),
+            data: State {
+                demands: BTreeMap::from([(root.id.clone(), root), (member.id.clone(), member)]),
+                ..State::default()
+            },
+        }
+    }
+
+    #[test]
+    fn archived_reservation_inspect_projects_terminal_demand_evidence() {
+        let root_dir = root("reservation-inspect");
+        let (mut root_demand, mut coder) =
+            reservation_pair("reservation", "coder", DemandState::Preparing);
+        let request = root_demand.reserve_request.clone().unwrap();
+
+        let preparing =
+            crate::reservation_view::project(&root_demand, &[root_demand.clone(), coder.clone()])
+                .unwrap();
+        assert_eq!(preparing["state"], json!("preparing"));
+
+        root_demand.state = DemandState::Ready;
+        coder.state = DemandState::Ready;
+        let ready =
+            crate::reservation_view::project(&root_demand, &[root_demand.clone(), coder.clone()])
+                .unwrap();
+        assert_eq!(ready["state"], json!("ready"));
+
+        close_released(&mut root_demand);
+        close_released(&mut coder);
+        let mut doc = reservation_document(root_demand.clone(), coder.clone());
+        let report = maintain(&root_dir, &mut doc, now()).unwrap();
+        assert_eq!(report.archived_reservations, 1);
+        assert!(doc.data.demands.is_empty());
+
+        let archived = lookup_reservation_view(&root_dir, "athba", "reservation")
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived["state"], json!("released"));
+        assert_eq!(
+            archived["services"]["local-primary"]["state"],
+            json!("released")
+        );
+        assert_eq!(
+            archived["services"]["local-coder"]["state"],
+            json!("released")
+        );
+
+        let replay = lookup_reservation_replay(&root_dir, "athba", "acquire-reservation")
+            .unwrap()
+            .unwrap();
+        assert_eq!(replay.0, request);
+        assert_eq!(replay.1["state"], json!("preparing"));
+        assert_eq!(
+            replay.1["services"]["local-primary"]["state"],
+            json!("preparing")
+        );
+
+        assert!(
+            lookup_reservation_view(&root_dir, "other", "reservation")
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            lookup_reservation_replay(&root_dir, "other", "acquire-reservation")
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(root_dir).unwrap();
+    }
+
+    #[test]
+    fn incomplete_legacy_archive_does_not_fabricate_terminal_inspection() {
+        let root_dir = root("reservation-inspect-incomplete");
+        let (mut root_demand, mut coder) =
+            reservation_pair("reservation", "coder", DemandState::Released);
+        close_released(&mut root_demand);
+        close_released(&mut coder);
+        let mut doc = reservation_document(root_demand.clone(), coder);
+        maintain(&root_dir, &mut doc, now()).unwrap();
+
+        let mut archive = read_reservation(&root_dir, "athba", "reservation")
+            .unwrap()
+            .unwrap();
+        archive.demands.clear();
+        write_reservation_archive(&root_dir, &archive).unwrap();
+
+        let view = lookup_reservation_view(&root_dir, "athba", "reservation")
+            .unwrap()
+            .unwrap();
+        assert_eq!(view["state"], json!("preparing"));
+        fs::remove_dir_all(root_dir).unwrap();
     }
 
     #[test]
