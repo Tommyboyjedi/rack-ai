@@ -44,7 +44,7 @@ impl WebState {
                 .map_err(|e| e.to_string())?,
             connections: Arc::new(tokio::sync::Semaphore::new(crate::limits::HTTP_CONCURRENCY)),
             native_connections: Arc::new(tokio::sync::Semaphore::new(
-                crate::limits::HTTP_CONCURRENCY,
+                crate::limits::NATIVE_CONCURRENCY,
             )),
             native_waiters: Arc::new(tokio::sync::Semaphore::new(crate::limits::NATIVE_WAITERS)),
             native_static_grant: Arc::new(Mutex::new(None)),
