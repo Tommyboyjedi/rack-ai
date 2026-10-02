@@ -117,16 +117,16 @@ fn authorize_native(
         clear_static_grant(app);
         return Ok(Access::Absent);
     };
-    if frontend_read {
-        if let Some(secret) = cached_static_grant(
+    if frontend_read
+        && let Some(secret) = cached_static_grant(
             app,
             &principal.id,
             &session_id,
             &state.service.activation,
             &invocation,
-        ) {
-            return Ok(Access::Ready(secret));
-        }
+        )
+    {
+        return Ok(Access::Ready(secret));
     }
     let runtime = crate::runtime::Runtime::new((*app.config).clone())?;
     crate::lifecycle::Lifecycle { runtime: &runtime }.verify(&state.service)?;

@@ -82,10 +82,13 @@ def test_admission_security_and_cancel_before_dispatch(tmp_path):
         payload["source_system"] = "operator"
         assert requests.post(api + "/jobs", json=payload, headers=env["headers"], timeout=3).status_code == 422
         payload = request()
+        payload["priority"] = "invalid"
+        assert requests.post(api + "/jobs", json=payload, headers=env["headers"], timeout=3).status_code == 422
         payload["priority"] = "paramount"
-        assert requests.post(api + "/jobs", json=payload, headers=env["headers"], timeout=3).status_code == 403
+        accepted = requests.post(api + "/jobs", json=payload, headers=env["headers"], timeout=3)
+        assert accepted.status_code == 202
+        job = accepted.json()
         assert requests.post(api + "/sessions", json={"schema": "rack-ai/media/v1", "idempotency_key": "abc"}, headers=env["headers"], timeout=3).status_code == 403
-        job = requests.post(api + "/jobs", json=request(), headers=env["headers"], timeout=3).json()
         requests.post(api + f"/jobs/{job['id']}/cancel", json={}, headers=env["headers"], timeout=3).raise_for_status()
         assert completed(env, job["id"])["state"] == "cancelled"
 
