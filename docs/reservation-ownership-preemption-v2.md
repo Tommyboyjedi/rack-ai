@@ -154,19 +154,25 @@ ready and usable.
 
 ## Capacity and evidence model
 
-There are three intentional, independently bounded capacities:
+Reservations have no lifetime call quota. The cumulative `accepted_calls` counter
+records usage and indicates when archived replay lookup is required; it does not
+limit admission. The legacy `max_calls_per_reservation` configuration key is
+accepted but ignored.
+
+There are two independently bounded capacities:
 
 1. `max_pending` and `max_pending_per_reservation` limit live queued/running
    calls. These are the queue contract for a Ready reservation.
-2. `max_calls_per_reservation` limits the number of durable idempotency receipts
-   admitted over one reservation lifetime. It is explicit client-visible call
-   capacity, not a global scheduling or evidence-storage fallback.
-3. `terminal_evidence_bytes` bounds full terminal result payloads. Older
+2. `terminal_evidence_bytes` bounds full terminal result payloads. Older
    terminal payload bodies are compacted to durable SHA-256 receipt fields while
    retaining the invocation identity, request, terminal state, error, and digest
    for reconciliation. Queued, running, and uncertain records are never
    compacted. `retention_admission_bytes` then reserves compact control data; active
    request/result payload commitments are accounted separately.
+
+Completed calls retire to owner-scoped archives even while a reservation remains
+open, as specified in `resource-accounting-retirement-policy.md`. Their results
+and retry identities remain available without release/reacquisition.
 
 This prevents completed historical output from causing
 `capacity_active_control` or `capacity_active_payload` for ordinary calls under
