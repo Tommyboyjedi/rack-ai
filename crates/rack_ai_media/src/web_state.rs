@@ -1,5 +1,15 @@
 use crate::{config::Config, store::Store};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+#[derive(Clone)]
+pub struct NativeStaticGrant {
+    pub principal_id: String,
+    pub session_id: String,
+    pub activation: String,
+    pub invocation: String,
+    pub secret: String,
+    pub expires_at: u64,
+}
+
 #[derive(Clone)]
 pub struct WebState {
     pub config: Arc<Config>,
@@ -12,6 +22,7 @@ pub struct WebState {
     pub sockets: Arc<tokio::sync::Semaphore>,
     pub native_connections: Arc<tokio::sync::Semaphore>,
     pub native_waiters: Arc<tokio::sync::Semaphore>,
+    pub native_static_grant: Arc<Mutex<Option<NativeStaticGrant>>>,
 }
 impl WebState {
     pub fn new(config: Config) -> Result<Self, String> {
@@ -36,6 +47,7 @@ impl WebState {
                 crate::limits::HTTP_CONCURRENCY,
             )),
             native_waiters: Arc::new(tokio::sync::Semaphore::new(crate::limits::NATIVE_WAITERS)),
+            native_static_grant: Arc::new(Mutex::new(None)),
             sockets: Arc::new(tokio::sync::Semaphore::new(
                 crate::limits::SOCKET_CONCURRENCY,
             )),
