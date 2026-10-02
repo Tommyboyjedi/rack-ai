@@ -11,6 +11,7 @@ use rack_ai_infrastructure::{
 };
 pub const MAX_WORKSPACE_SECONDS: u64 = 3600;
 pub const WORKSPACE_RESPONSE_BYTES: u64 = 64 * 1024;
+pub const WORKSPACE_JCODE_TOOL_PROFILE: &str = "minimal";
 pub fn selection(
     service: &Service,
     input: (&Demand, &Work),
@@ -50,7 +51,8 @@ pub fn selection(
     {
         let selector = RegistryWorkspaceWorkerSelector::new(paths.clone())
             .for_reserved_worker(model.worker_id.clone())
-            .with_reserved_context_window(context_window);
+            .with_reserved_context_window(context_window)
+            .with_reserved_tool_profile(WORKSPACE_JCODE_TOOL_PROFILE);
         if let Ok(selected) = selector.select(&parsed)
             && selected
                 .runtime()
@@ -101,10 +103,12 @@ pub fn execute(
     };
     let implementer = JCodeChangeImplementer::new(paths.clone(), None)
         .with_reserved_context_window(context_window)
+        .with_reserved_tool_profile(WORKSPACE_JCODE_TOOL_PROFILE)
         .with_reserved_access(access);
     let selector = RegistryWorkspaceWorkerSelector::new(paths)
         .for_reserved_worker(selected.runtime().worker_id().into())
-        .with_reserved_context_window(context_window);
+        .with_reserved_context_window(context_window)
+        .with_reserved_tool_profile(WORKSPACE_JCODE_TOOL_PROFILE);
     let result = ExecuteWorkspace::new(ExecuteWorkspaceDependencies {
         registry: &registry,
         command_policy: &policy,
@@ -193,6 +197,11 @@ mod tests {
             "released": false
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn workspace_jcode_tool_profile_is_minimal_without_changing_limits() {
+        assert_eq!(super::WORKSPACE_JCODE_TOOL_PROFILE, "minimal");
     }
 
     #[test]

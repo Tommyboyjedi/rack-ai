@@ -55,6 +55,11 @@ impl WorkspaceWorkerSelection {
         self
     }
 
+    pub fn with_tool_profile(mut self, tool_profile: impl Into<String>) -> Self {
+        self.runtime = self.runtime.with_tool_profile(Some(tool_profile.into()));
+        self
+    }
+
     pub fn selection_decision(&self) -> Option<&GenericWorkerSelectionDecision> {
         self.selection_decision.as_ref()
     }
