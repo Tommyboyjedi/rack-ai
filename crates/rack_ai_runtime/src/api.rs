@@ -143,7 +143,6 @@ async fn handle(
             let status = match error.as_str() {
                 "capacity_pending_global"
                 | "capacity_pending_reservation"
-                | "capacity_reservation_call_history"
                 | "capacity_active_evidence"
                 | "capacity_active_control"
                 | "capacity_active_payload" => StatusCode::TOO_MANY_REQUESTS,

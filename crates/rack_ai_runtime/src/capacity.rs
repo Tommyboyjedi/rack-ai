@@ -12,7 +12,9 @@ const PAYLOAD_COMPLETION_HEADROOM_BYTES: u64 = 64 * 1024;
 pub struct Limits {
     pub max_pending: usize,
     pub max_pending_per_reservation: usize,
-    pub max_calls_per_reservation: u64,
+    /// Legacy configuration input, ignored; reservations have no lifetime call quota.
+    #[serde(rename = "max_calls_per_reservation")]
+    pub legacy_max_calls_per_reservation: Option<u64>,
     pub max_dispatch_workers: usize,
     pub max_transition_workers: usize,
     pub max_gateway_waiters: usize,
@@ -29,7 +31,7 @@ impl Default for Limits {
         Self {
             max_pending: 32,
             max_pending_per_reservation: 16,
-            max_calls_per_reservation: 256,
+            legacy_max_calls_per_reservation: None,
             max_dispatch_workers: 4,
             max_transition_workers: 8,
             max_gateway_waiters: 32,
@@ -46,8 +48,6 @@ impl Limits {
             || self.max_pending > 1024
             || self.max_pending_per_reservation == 0
             || self.max_pending_per_reservation > self.max_pending
-            || self.max_calls_per_reservation < self.max_pending_per_reservation as u64
-            || self.max_calls_per_reservation > 16384
             || self.max_dispatch_workers == 0
             || self.max_dispatch_workers > 64
             || self.max_transition_workers == 0
@@ -83,14 +83,10 @@ impl Limits {
         {
             return Err("capacity_pending_reservation".into());
         }
-        let demand = s
-            .data
+        s.data
             .demands
             .get(reservation)
             .ok_or("missing_reservation")?;
-        if demand.accepted_calls >= self.max_calls_per_reservation {
-            return Err("capacity_reservation_call_history".into());
-        }
         Ok(())
     }
 }
@@ -279,7 +275,6 @@ mod tests {
         for value in [
             serde_json::json!({"max_pending":0}),
             serde_json::json!({"max_pending_per_reservation":33}),
-            serde_json::json!({"max_calls_per_reservation":1}),
             serde_json::json!({"max_dispatch_workers":0}),
             serde_json::json!({"max_transition_workers":0}),
             serde_json::json!({"max_gateway_waiters":129}),
@@ -297,6 +292,21 @@ mod tests {
         }
         assert!(serde_json::from_value::<Limits>(serde_json::json!({"unbounded":true})).is_err());
         assert!(Limits::default().validate().is_ok());
+    }
+
+    #[test]
+    fn legacy_lifetime_call_limit_is_accepted_but_ignored() {
+        for previous_limit in [0, 1, 256, u64::MAX] {
+            let limits: Limits = serde_json::from_value(serde_json::json!({
+                "max_calls_per_reservation": previous_limit
+            }))
+            .unwrap();
+            assert_eq!(
+                limits.legacy_max_calls_per_reservation,
+                Some(previous_limit)
+            );
+            assert!(limits.validate().is_ok());
+        }
     }
 
     use crate::{
@@ -660,6 +670,135 @@ mod tests {
             })
             .unwrap();
         demand
+    }
+
+    #[test]
+    fn long_lived_reservation_admits_past_256_and_preserves_archived_replay() {
+        const CALLS: u64 = 260;
+        let (service, config) = fixture_service();
+        let demand = ready_demand(&service);
+        let first_request = protocol_request("sequential-0", &demand.id, &demand.profile.model, 32);
+        let mut first_id = String::new();
+        for index in 0..CALLS {
+            let request = protocol_request(
+                &format!("sequential-{index}"),
+                &demand.id,
+                &demand.profile.model,
+                32,
+            );
+            let invocation = Submission { service: &service }
+                .submit(&demand.owner, request)
+                .unwrap();
+            if index == 0 {
+                first_id = invocation.id.clone();
+            }
+            service
+                .authority
+                .update(|s| {
+                    let saved = s.data.invocations.get_mut(&invocation.id).unwrap();
+                    saved.state = InvocationState::Completed;
+                    saved.completed = Some(now());
+                    saved.result = Some(json!({"ok": true}));
+                    Ok(())
+                })
+                .unwrap();
+            assert_eq!(
+                service.retire_history_once().unwrap().archived_invocations,
+                1
+            );
+            service
+                .authority
+                .read(|s| {
+                    assert!(s.data.invocations.is_empty());
+                    assert_eq!(s.data.demands[&demand.id].accepted_calls, index + 1);
+                    assert_eq!(s.data.demands[&demand.id].state, DemandState::Ready);
+                    Ok(())
+                })
+                .unwrap();
+        }
+        let reloaded = Service::new(config.clone());
+        let replay = Submission { service: &reloaded }
+            .submit(&demand.owner, first_request.clone())
+            .unwrap();
+        assert_eq!(replay.id, first_id);
+        assert_eq!(replay.state, InvocationState::Completed);
+        assert_eq!(replay.result, Some(json!({"ok": true})));
+        let mut changed = first_request.clone();
+        changed.prompt = "different request".into();
+        assert_eq!(
+            Submission { service: &reloaded }
+                .submit(&demand.owner, changed)
+                .unwrap_err(),
+            "identity_conflict"
+        );
+        assert_eq!(
+            Submission { service: &reloaded }
+                .submit("other", first_request)
+                .unwrap_err(),
+            "not_found"
+        );
+        reloaded
+            .authority
+            .update(|s| {
+                assert_eq!(s.data.demands[&demand.id].accepted_calls, CALLS);
+                s.data.demands.get_mut(&demand.id).unwrap().accepted_calls = u64::MAX;
+                Ok(())
+            })
+            .unwrap();
+        let request = protocol_request(
+            "after-counter-saturation",
+            &demand.id,
+            &demand.profile.model,
+            32,
+        );
+        assert_eq!(
+            Submission { service: &reloaded }
+                .submit(&demand.owner, request)
+                .unwrap()
+                .state,
+            InvocationState::Queued
+        );
+        fs::remove_dir_all(&config.authority_root).unwrap();
+    }
+
+    #[test]
+    fn lifetime_usage_does_not_bypass_pending_queue_limits() {
+        let (service, config) = fixture_service();
+        let mut demand = ready_demand(&service);
+        demand.accepted_calls = u64::MAX;
+        let mut document = empty_document();
+        document
+            .data
+            .demands
+            .insert(demand.id.clone(), demand.clone());
+        let request = protocol_request("queued", &demand.id, &demand.profile.model, 32);
+        document.data.invocations.insert(
+            "queued".into(),
+            invocation("queued", InvocationState::Queued, request, 1024),
+        );
+        let per_reservation = Limits {
+            max_pending_per_reservation: 1,
+            ..Limits::default()
+        };
+        assert_eq!(
+            per_reservation.pending(&document, &demand.id).unwrap_err(),
+            "capacity_pending_reservation"
+        );
+        let global = Limits {
+            max_pending: 1,
+            ..Limits::default()
+        };
+        assert_eq!(
+            global.pending(&document, &demand.id).unwrap_err(),
+            "capacity_pending_global"
+        );
+        document.data.invocations.clear();
+        assert!(Limits::default().pending(&document, &demand.id).is_ok());
+        assert_eq!(
+            Limits::default().pending(&document, "missing").unwrap_err(),
+            "missing_reservation"
+        );
+        fs::remove_dir_all(&config.authority_root).unwrap();
     }
 
     #[test]
