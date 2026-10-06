@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   runtime:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     timeout-minutes: 20
     env:
       RACK_AI_RESOURCE_ROOT: /tmp/rackai-ci-test-resources
@@ -17,6 +17,8 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: bwrap --ro-bind / / --unshare-user --unshare-pid /usr/bin/true
       - run: cargo fetch --locked
       - run: cargo fmt --check
       - run: cargo check --workspace --offline

@@ -135,9 +135,9 @@ pub fn read<T: DeserializeOwned>(path: &Path) -> Result<T, String> {
         .map_err(|e| e.to_string())?;
     serde_json::from_slice(&bytes).map_err(|e| e.to_string())
 }
-pub fn write<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
+pub fn write_bounded<T: Serialize>(path: &Path, value: &T, bound: u64) -> Result<(), String> {
     let bytes = serde_json::to_string(value).map_err(|e| e.to_string())?;
-    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+    if bytes.len() as u64 > bound.min(MAX_DOCUMENT_BYTES) {
         return Err("diagnostic_document_oversized".into());
     }
     atomic_write_private(path, &bytes)
@@ -163,7 +163,7 @@ pub fn lease(dir: &Path) -> Result<Lease, String> {
     read(&dir.join(LEASE_FILE))
 }
 pub fn save_lease(dir: &Path, lease: &Lease) -> Result<(), String> {
-    write(&dir.join(LEASE_FILE), lease)
+    write_bounded(&dir.join(LEASE_FILE), lease, METADATA_BYTES)
 }
 pub fn starts(dir: &Path, limit: usize) -> Result<Vec<Start>, String> {
     let mut calls = Vec::new();

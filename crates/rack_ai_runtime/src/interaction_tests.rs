@@ -498,3 +498,17 @@ fn concurrent_capture_cannot_overspend_and_sweep_cursor_is_fair() {
         1
     );
 }
+
+#[test]
+fn oversized_identity_metadata_cannot_escape_reservation_bytes() {
+    let mut f = Fixture::new(true);
+    f.demand.profile.version = "v".repeat(100000);
+    assert!(f.capture(1, json!({"messages":["one"]})).is_none());
+    let dir = store::directory(&f.service, (&f.demand.owner, &f.demand.id));
+    assert_eq!(store::starts(&dir, 128).unwrap().len(), 0);
+    let bytes = fs::read_dir(&dir)
+        .unwrap()
+        .map(|p| p.unwrap().metadata().unwrap().len())
+        .sum::<u64>();
+    assert!(bytes <= crate::interaction_diagnostics::METADATA_BYTES);
+}

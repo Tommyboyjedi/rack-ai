@@ -35,7 +35,7 @@ fn prepare<'a>(
     input: (&Demand, &Invocation, &Value),
 ) -> Result<Option<Capture<'a>>, String> {
     let (d, i, effective) = input;
-    let Some(identity) = diagnostics::identity(service, (d, i))? else {
+    let Some(mut identity) = diagnostics::identity(service, (d, i))? else {
         return Ok(None);
     };
     let _lock = store::lock(service)?;
@@ -88,6 +88,8 @@ fn prepare<'a>(
     let redactor = service
         .authority
         .read(|s| Ok(Redactor::new(&service.config, s)))?;
+    identity.model = redactor.text(&identity.model);
+    identity.profile_version = redactor.text(&identity.profile_version);
     let start = Start {
         identity: identity.clone(),
         artifact_id: store::artifact_id(&identity, &i.owner),
@@ -100,7 +102,7 @@ fn prepare<'a>(
     if path.exists() {
         return Err("duplicate_diagnostic_call".into());
     }
-    store::write(&path, &start)?;
+    store::write_bounded(&path, &start, request_bound + METADATA_BYTES / 2)?;
     Ok(Some(Capture {
         service,
         owner: i.owner.clone(),
@@ -166,6 +168,6 @@ impl Capture<'_> {
         if path.exists() {
             return Err("duplicate_diagnostic_completion".into());
         }
-        store::write(&path, &end)
+        store::write_bounded(&path, &end, self.start.response_bound + METADATA_BYTES / 2)
     }
 }
