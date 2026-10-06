@@ -1,0 +1,34 @@
+name: RackAI runtime gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    env:
+      RACK_AI_RESOURCE_ROOT: /tmp/rackai-ci-test-resources
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap
+      - run: bwrap --ro-bind / / --unshare-user --unshare-pid /usr/bin/true
+      - run: cargo fetch --locked
+      - run: cargo fmt --check
+      - run: cargo check --workspace --offline
+      - run: cargo test -p rack_ai_runtime --offline
+      - run: cargo test --workspace --offline
+      - run: cargo build --workspace --offline
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m venv .ci-venv
+      - run: .ci-venv/bin/python -m pip install pytest==9.1.1 jsonschema==4.26.0
+      - run: .ci-venv/bin/python -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py -q
+      - run: git diff --check

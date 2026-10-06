@@ -559,6 +559,7 @@ fn grouped_models(f: &Fixture) -> Vec<Demand> {
         source,
     })
     .reserve(crate::reservation::Reserve {
+        diagnostics: Default::default(),
         acquisition_id: identity().unwrap(),
         work_id: "shared-idle".into(),
         services: vec!["local-primary".into(), "local-coder".into()],
@@ -593,6 +594,7 @@ fn idempotent_group_reserve_reports_current_member_states() {
         .find(|s| s.source == "cb")
         .unwrap();
     let request = crate::reservation::Reserve {
+        diagnostics: Default::default(),
         acquisition_id: identity().unwrap(),
         work_id: "shared-status".into(),
         services: vec!["local-primary".into(), "local-coder".into()],

@@ -51,6 +51,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if control().get('uncertain'):
             self.connection.close()
             return
+        if control().get('response') is not None:
+            self.reply(control()['response']);event('complete');return
         if self.path=='/v1/responses':
             self.reply({'id':activation,'model':model,'status':'completed','output':[{'type':'message','content':[{'type':'output_text','text':'fixture'}]}]})
             event('complete'); return

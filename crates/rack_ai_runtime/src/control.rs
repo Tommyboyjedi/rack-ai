@@ -30,6 +30,17 @@ impl ReservationControl<'_> {
         let result = self.service.authority.update(|s| self.apply(s, c));
         if result.is_ok() && wake {
             self.service.request_history_maintenance();
+            if let Ok(demand) = &result {
+                let root = demand.reservation_id.as_deref().unwrap_or(&demand.id);
+                if let Err(error) =
+                    crate::interaction_cleanup::close(self.service, (&demand.owner, root))
+                {
+                    eprintln!(
+                        "interaction diagnostics cleanup pending: {}",
+                        crate::capacity::diagnostic(error)
+                    );
+                }
+            }
         }
         result
     }
@@ -191,6 +202,12 @@ pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Re
     });
     if result.is_ok() && wake {
         service.request_history_maintenance();
+        if let Err(error) = crate::interaction_cleanup::close(service, (input.0, input.1)) {
+            eprintln!(
+                "interaction diagnostics cleanup pending: {}",
+                crate::capacity::diagnostic(error)
+            );
+        }
     }
     result
 }

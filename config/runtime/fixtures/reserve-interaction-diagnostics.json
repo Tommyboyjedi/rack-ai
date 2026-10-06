@@ -1,0 +1,15 @@
+{
+  "operation": "reserve",
+  "request": {
+    "acquisition_id": "dev-observation",
+    "work_id": "generic-work",
+    "services": [
+      "local-primary"
+    ],
+    "priority": "low",
+    "ttl_seconds": 1800,
+    "diagnostics": {
+      "retained_model_interactions": true
+    }
+  }
+}

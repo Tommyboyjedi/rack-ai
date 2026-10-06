@@ -44,51 +44,94 @@ impl BackendAccess<'_> {
         }
         process::endpoint_owned(process, &d.profile)
     }
-    pub fn infer(&self, d: &Demand, invocation: &Invocation) -> Result<Value, String> {
-        // The caller persisted Started and revalidated the generation before entering.
-        // No automatic retry is allowed after this boundary.
-        let request = &invocation.request;
-        let path = request
-            .payload
-            .as_ref()
-            .map_or("/v1/chat/completions", |p| p.path());
-        process::endpoint_owned(
-            d.process.as_ref().ok_or("activation_process_missing")?,
-            &d.profile,
-        )?;
-        if d.profile.backend == Backend::Chatterbox {
-            return crate::speech_backend::synthesize((d, invocation), &self.config.authority_root);
-        }
-        let bound = invocation.response_bytes;
-        if let Some(payload) = &request.payload {
-            let response = client(request.timeout_seconds)?
-                .post(format!(
-                    "{}{}",
-                    d.profile.endpoint.trim_end_matches('/'),
-                    path
-                ))
-                .json(&payload.body)
-                .send()
-                .map_err(|_| "backend_transport_uncertain")?;
-            if !response.status().is_success() {
-                return Err("backend_http_failure".into());
-            }
-            let mut bytes = Vec::new();
-            response
-                .take(bound + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|_| "backend_read_uncertain")?;
-            if bytes.len() as u64 > bound {
-                return Err("backend_response_oversized".into());
-            }
-            return crate::protocol::raw_result(
-                String::from_utf8(bytes).map_err(|_| "invalid_protocol_encoding")?,
-                payload,
-            );
-        }
-        decode(client(request.timeout_seconds)?.post(format!("{}/v1/chat/completions", d.profile.endpoint.trim_end_matches('/')))
-            .json(&json!({"model": d.profile.model, "messages": [{"role":"user","content":request.prompt}],
-                "max_tokens":request.max_tokens,"stream":false})).send(), bound)
+}
+pub fn infer(
+    service: &crate::service::Service,
+    input: (&Demand, &Invocation),
+) -> Result<Value, String> {
+    let (d, invocation) = input;
+    let config = &service.config;
+    let request = &invocation.request;
+    process::endpoint_owned(
+        d.process.as_ref().ok_or("activation_process_missing")?,
+        &d.profile,
+    )?;
+    if d.profile.backend == Backend::Chatterbox {
+        return crate::speech_backend::synthesize((d, invocation), &config.authority_root);
+    }
+    let client = client(request.timeout_seconds)?;
+    let body = request
+        .payload
+        .as_ref()
+        .map(|p| std::borrow::Cow::Borrowed(&p.body))
+        .unwrap_or_else(|| {
+            std::borrow::Cow::Owned(json!({
+        "model":d.profile.model,"messages":[{"role":"user","content":request.prompt}],
+        "max_tokens":request.max_tokens,"stream":false}))
+        });
+    let path = request
+        .payload
+        .as_ref()
+        .map_or("/v1/chat/completions", |p| p.path());
+    let call = client
+        .post(format!(
+            "{}{}",
+            d.profile.endpoint.trim_end_matches('/'),
+            path
+        ))
+        .json(&body);
+    let mut capture = crate::interaction_capture::begin(service, (d, invocation, &body));
+    if let Some(capture) = capture.as_mut() {
+        capture.dispatched();
+    }
+    let mut observed = None;
+    let result = receive(call, (invocation, capture.is_some(), &mut observed));
+    if let Some(capture) = capture {
+        capture.finish((observed, &result));
+    }
+    result
+}
+
+fn receive(
+    call: reqwest::blocking::RequestBuilder,
+    input: (&Invocation, bool, &mut Option<Value>),
+) -> Result<Value, String> {
+    let (invocation, capture_enabled, observed) = input;
+    let response = call.send().map_err(|_| "backend_transport_uncertain")?;
+    let status = response.status();
+    if !status.is_success() && !capture_enabled {
+        return Err(http_error(invocation, status));
+    }
+    let mut bytes = Vec::new();
+    let read = response
+        .take(invocation.response_bytes + 1)
+        .read_to_end(&mut bytes);
+    if capture_enabled {
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        *observed = Some(serde_json::from_str(&text).unwrap_or(Value::String(text)));
+    }
+    if !status.is_success() {
+        return Err(http_error(invocation, status));
+    }
+    read.map_err(|_| "backend_read_uncertain")?;
+    if bytes.len() as u64 > invocation.response_bytes {
+        return Err("backend_response_oversized".into());
+    }
+    if let Some(payload) = &invocation.request.payload {
+        crate::protocol::raw_result(
+            String::from_utf8(bytes).map_err(|_| "invalid_protocol_encoding")?,
+            payload,
+        )
+    } else {
+        serde_json::from_slice(&bytes).map_err(|e| e.to_string())
+    }
+}
+
+fn http_error(invocation: &Invocation, status: reqwest::StatusCode) -> String {
+    if invocation.request.payload.is_some() {
+        "backend_http_failure".into()
+    } else {
+        format!("backend_http_{status}")
     }
 }
 fn client(seconds: u64) -> Result<Client, String> {

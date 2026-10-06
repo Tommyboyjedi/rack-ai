@@ -261,6 +261,16 @@
         "ttl_seconds": {
           "type": "integer",
           "minimum": 1
+        },
+        "diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "retained_model_interactions": {
+              "type": "boolean",
+              "default": false
+            }
+          }
         }
       },
       "required": [

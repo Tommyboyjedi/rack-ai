@@ -59,6 +59,7 @@ impl Service {
         }
     }
     pub fn retire_history_once(&self) -> Result<HistoryRetirementReport, String> {
+        crate::interaction_diagnostics::maintenance(self);
         let root = self.config.authority_root.clone();
         let mut total = crate::history_archive::MaintenanceReport::default();
         for _ in 0..8 {

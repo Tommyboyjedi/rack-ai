@@ -235,3 +235,15 @@ restart. Conflicting or missing ownership evidence retains the claim and
 ## Shared reservation inactivity
 
 Services in one public reservation share the inactivity window (30 minutes by default). Recent accepted/executed model activity or unresolved running work on any member protects the other members from idle retirement. The group becomes idle only after every member has been inactive for the full window and no member has unresolved work. Separate reservations remain independent. Inspection, refresh and renewal do not count as model activity; explicit release/cancel, preemption and backend-failure cleanup retain their existing authority. For public reservations, verified activity on any owned Ready member extends the live members' persisted ownership deadlines to at least one full inactivity window after that activity. Running or uncertain work retains the same protection. The requested TTL bounds initial acquisition and remains effective when there is no workload activity; it is not a hard lifetime cap on an active group. Terminal, preempted, unowned and already elapsed members are never revived. Native media activity is observed through its authenticated queue barrier. A native member is closed only when the group is idle, and its peers wait for that close before idle retirement.
+
+## Opt-in development interaction diagnostics
+
+Public reserve optionally accepts diagnostics: {"retained_model_interactions": true}.
+It defaults off and participates in frozen acquisition identity. Existing
+inspect_work_execution advertises owner-scoped opaque interaction IDs while the
+reservation is live; get_work_artifact retrieves one bounded record using schema
+rack-ai/model-interaction/v1. Release/cancel immediately revokes retrieval and
+heavyweight documents are deleted, with bounded maintenance retry on I/O failure.
+They do not use ordinary 14-day history retention. See
+[reservation interaction diagnostics](reservation-interaction-diagnostics.md)
+for effective capture, limits, redaction, unavailable metrics and restart.

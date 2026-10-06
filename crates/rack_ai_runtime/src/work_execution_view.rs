@@ -61,11 +61,25 @@ pub fn inspect(service: &Service, input: (&str, &str)) -> Result<Value, String> 
     let owner = input.0;
     let snapshot = load_by_work(service, input)?;
     let packet = workspace_packet_view(service, owner, &snapshot.invocation)?;
-    Ok(report(owner, &snapshot, packet.as_ref()))
+    let mut report = report(owner, &snapshot, packet.as_ref());
+    match crate::interaction_store::summaries(service, (owner, &snapshot.invocation)) {
+        Ok(Some(summary)) => {
+            report["model_interactions"] = summary;
+        }
+        Ok(None) => {}
+        Err(_) => {
+            report["model_interactions"] = json!({"schema":crate::interaction_diagnostics::SCHEMA,
+            "records":[],"availability":"storage_unavailable"});
+        }
+    }
+    Ok(report)
 }
 
 pub fn artifact(service: &Service, input: (&str, &str)) -> Result<Value, String> {
     let owner = input.0;
+    if input.1.starts_with("mi1.") {
+        return crate::interaction_store::retrieve(service, input);
+    }
     let key = parse_artifact_id(input.1)?;
     if artifact_id(owner, &key.invocation_id, &key.kind, key.index) != input.1 {
         return Err("not_found".into());
@@ -442,7 +456,8 @@ fn child_usage(child: &ScopedChild) -> Value {
         "available": usage.is_some(),
         "prompt_tokens": usage.and_then(|u| u.get("prompt_tokens")).and_then(Value::as_u64),
         "completion_tokens": usage.and_then(|u| u.get("completion_tokens")).and_then(Value::as_u64),
-        "total_tokens": usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_u64)
+        "total_tokens": usage.and_then(|u| u.get("total_tokens")).and_then(Value::as_u64),
+        "finish_reason": child.finish_reason
     })
 }
 
@@ -888,6 +903,28 @@ fn redact_diagnostic(input: &str) -> String {
     truncate_public_diagnostic(words.join(" "))
 }
 
+pub(crate) fn redact_interaction_word(word: &str) -> String {
+    let lower = word.to_ascii_lowercase();
+    if lower.contains("token=")
+        || lower.contains("password=")
+        || lower.contains("secret=")
+        || lower.contains("capability=")
+        || lower.contains("access_key=")
+        || lower.contains("authorization:")
+    {
+        return "<redacted:credential>".into();
+    }
+    if [
+        "/srv/", "/home/", "/tmp/", "/var/", "/etc/", "/root/", "/opt/", "/run/", "\\srv\\",
+        "\\home\\", "\\tmp\\", ":\\", "/Users/",
+    ]
+    .iter()
+    .any(|p| lower.contains(&p.to_ascii_lowercase()))
+    {
+        return "<redacted:path>".into();
+    }
+    word.to_string()
+}
 fn redact_diagnostic_word(word: &str) -> String {
     let lower = word.to_ascii_lowercase();
     if lower.contains("token=")

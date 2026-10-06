@@ -12,6 +12,19 @@ pub struct Reserve {
     pub services: Vec<String>,
     pub priority: Priority,
     pub ttl_seconds: u64,
+    #[serde(default, skip_serializing_if = "Diagnostics::disabled")]
+    pub diagnostics: Diagnostics,
+}
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Diagnostics {
+    #[serde(default)]
+    pub retained_model_interactions: bool,
+}
+impl Diagnostics {
+    fn disabled(&self) -> bool {
+        !self.retained_model_interactions
+    }
 }
 pub fn root<'a>(s: &'a Document, d: &'a Demand) -> Result<&'a Demand, String> {
     match &d.reservation_id {
