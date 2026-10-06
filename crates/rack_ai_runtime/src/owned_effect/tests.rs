@@ -47,6 +47,12 @@ fn saved_fixture_process_is_verified_and_not_replayed() {
         .env("RACK_RUNTIME_ACTIVATION", &d.generation)
         .spawn()
         .unwrap();
+    let readiness = wait_for_activation(child.id(), &d.generation);
+    if let Err(error) = readiness {
+        child.kill().unwrap();
+        child.wait().unwrap();
+        panic!("fixture activation did not become visible: {error}");
+    }
     d.process = Some(crate::process::capture(child.id(), &d.generation).unwrap());
     let result = resolve(&d);
     let pid = child.id();
@@ -65,10 +71,37 @@ fn fixture_saved_process_generation_change_is_fenced() {
         .env("RACK_RUNTIME_ACTIVATION", &d.generation)
         .spawn()
         .unwrap();
+    let readiness = wait_for_activation(child.id(), &d.generation);
+    if let Err(error) = readiness {
+        child.kill().unwrap();
+        child.wait().unwrap();
+        panic!("fixture activation did not become visible: {error}");
+    }
     d.process = Some(crate::process::capture(child.id(), &d.generation).unwrap());
     d.process.as_mut().unwrap().start.push('0');
     let result = resolve(&d);
     child.kill().unwrap();
     child.wait().unwrap();
     assert_eq!(result.unwrap_err(), "recovery_fixture_process_changed");
+}
+
+// A successful exec can close the spawn handshake before /proc exposes env_end.
+// Wait for fixture readiness, then invoke the production recovery check once.
+fn wait_for_activation(pid: u32, generation: &str) -> Result<(), String> {
+    let expected = format!("RACK_RUNTIME_ACTIVATION={generation}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+    loop {
+        let environment =
+            std::fs::read(format!("/proc/{pid}/environ")).map_err(|e| e.to_string())?;
+        if environment
+            .split(|byte| *byte == 0)
+            .any(|value| value == expected.as_bytes())
+        {
+            return Ok(());
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err("activation readiness deadline".into());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
 }
