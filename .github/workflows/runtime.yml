@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      RACK_AI_RESOURCE_ROOT: ${{ runner.temp }}/rackai-test-resources
+      RACK_AI_RESOURCE_ROOT: /tmp/rackai-ci-test-resources
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
