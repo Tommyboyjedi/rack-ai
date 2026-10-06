@@ -1737,6 +1737,7 @@ mod tests {
 
     fn reservation_request(id: &str) -> Reserve {
         Reserve {
+            diagnostics: Default::default(),
             acquisition_id: format!("acquire-{id}"),
             work_id: format!("work-{id}"),
             services: vec!["local-primary".into(), "local-coder".into()],

@@ -186,6 +186,7 @@ fn execute(service: &Service, call: (&crate::config::Source, Request)) -> Result
                 "tags": service.config.profiles.iter().map(profile_summary).collect::<Vec<_>>(),
                 "priorities":["low","medium","high","paramount"],
                 "default_priority":"low",
+                "model_interaction_diagnostics":crate::interaction_diagnostics::supported(),
                 "work_execution_contract": {
                     "version": crate::work_execution_view::CONTRACT_VERSION,
                     "operations": ["inspect_work_execution", "get_work_artifact"],

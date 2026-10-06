@@ -1,0 +1,28 @@
+name: RackAI runtime gates
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      RACK_AI_RESOURCE_ROOT: ${{ runner.temp }}/rackai-test-resources
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fetch --locked
+      - run: cargo fmt --check
+      - run: cargo check --workspace --offline
+      - run: cargo test -p rack_ai_runtime --offline
+      - run: cargo test --workspace --offline
+      - run: cargo build --workspace --offline
+      - run: python3 -m pip install pytest jsonschema
+      - run: python3 -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py -q
+      - run: git diff --check

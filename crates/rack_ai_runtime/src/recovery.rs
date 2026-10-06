@@ -162,7 +162,9 @@ impl Reconciliation<'_> {
             };
             s.claims.retain(|_, owner| owner != &d.id);
             Ok(())
-        })
+        })?;
+        self.service.request_history_maintenance();
+        Ok(())
     }
 }
 

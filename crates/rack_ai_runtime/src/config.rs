@@ -88,6 +88,8 @@ pub struct Device {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub interaction_diagnostics: crate::interaction_diagnostics::Limits,
+    #[serde(default)]
     pub workspace: Option<crate::work_payload::WorkspaceConfig>,
     pub schema: String,
     pub listen: String,

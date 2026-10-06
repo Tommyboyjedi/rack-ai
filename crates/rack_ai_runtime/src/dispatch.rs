@@ -81,10 +81,7 @@ impl Dispatch<'_> {
         let result = if crate::work_payload::is_workspace(&invocation) {
             crate::work_execution::execute(self.service, (&demand, &invocation))
         } else {
-            (BackendAccess {
-                config: &self.service.config,
-            })
-            .infer(&demand, &invocation)
+            crate::backend::infer(self.service, (&demand, &invocation))
         };
         Completion {
             service: self.service,
@@ -239,7 +236,7 @@ impl Completion<'_> {
     }
 }
 
-fn failure_state(error: &str) -> InvocationState {
+pub(crate) fn failure_state(error: &str) -> InvocationState {
     match error {
         "backend_response_oversized" => InvocationState::Failed,
         "backend_transport_uncertain"

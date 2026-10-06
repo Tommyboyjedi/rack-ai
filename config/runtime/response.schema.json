@@ -264,6 +264,16 @@
         "ttl_seconds": {
           "type": "integer",
           "minimum": 1
+        },
+        "diagnostics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "retained_model_interactions": {
+              "type": "boolean",
+              "default": false
+            }
+          }
         }
       },
       "required": [
@@ -2259,6 +2269,66 @@
             "contract_version",
             "owner"
           ]
+        },
+        "model_interactions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "schema": {
+              "const": "rack-ai/model-interaction/v1"
+            },
+            "records": {
+              "type": "array",
+              "maxItems": 1024,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "artifact_id": {
+                    "type": "string",
+                    "pattern": "^mi1\\.[a-f0-9]{64}\\.[a-f0-9]{64}$"
+                  },
+                  "invocation_id": {
+                    "type": "string"
+                  },
+                  "sequence": {
+                    "type": "integer"
+                  },
+                  "request_truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "artifact_id",
+                  "invocation_id",
+                  "sequence",
+                  "request_truncated"
+                ]
+              }
+            },
+            "availability": {
+              "enum": [
+                "recorded",
+                "no_records",
+                "storage_unavailable"
+              ]
+            },
+            "omitted_interactions": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "omitted_scope": {
+              "const": "reservation"
+            },
+            "limits": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "schema",
+            "records",
+            "availability"
+          ]
         }
       },
       "required": [
@@ -2322,6 +2392,228 @@
         "text",
         "bytes",
         "truncated"
+      ]
+    },
+    "modelInteraction": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "rack-ai/model-interaction/v1"
+        },
+        "artifact_id": {
+          "type": "string",
+          "pattern": "^mi1\\.[a-f0-9]{64}\\.[a-f0-9]{64}$"
+        },
+        "identity": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reservation_id": {
+              "type": "string"
+            },
+            "work_id": {
+              "type": "string"
+            },
+            "parent_invocation_id": {
+              "type": "string"
+            },
+            "invocation_id": {
+              "type": "string"
+            },
+            "service": {
+              "type": "string"
+            },
+            "model": {
+              "type": "string"
+            },
+            "profile_version": {
+              "type": "string"
+            },
+            "profile_hash": {
+              "type": "string"
+            },
+            "sequence": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "protocol": {
+              "enum": [
+                "chat_completions",
+                "responses"
+              ]
+            },
+            "accepted": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "started": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "reservation_id",
+            "work_id",
+            "parent_invocation_id",
+            "invocation_id",
+            "service",
+            "model",
+            "profile_version",
+            "profile_hash",
+            "sequence",
+            "protocol",
+            "accepted",
+            "started"
+          ]
+        },
+        "request": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "body": {},
+            "text_prefix": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "original_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "unavailable_reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "body",
+            "text_prefix",
+            "original_bytes",
+            "truncated",
+            "unavailable_reason"
+          ]
+        },
+        "response": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "body": {},
+            "text_prefix": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "original_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "truncated": {
+              "type": "boolean"
+            },
+            "unavailable_reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "body",
+            "text_prefix",
+            "original_bytes",
+            "truncated",
+            "unavailable_reason"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "terminal_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "diagnostic_complete": {
+          "type": "boolean"
+        },
+        "timing": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "dispatched_ms": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "completed_ms": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "duration_seconds": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "prefill_seconds": {
+              "type": "null"
+            },
+            "first_token_seconds": {
+              "type": "null"
+            },
+            "backend_queue_seconds": {
+              "type": "null"
+            },
+            "unavailable_reason": {
+              "const": "backend_does_not_report_phase_metrics"
+            }
+          },
+          "required": [
+            "dispatched_ms",
+            "completed_ms",
+            "duration_seconds",
+            "prefill_seconds",
+            "first_token_seconds",
+            "backend_queue_seconds",
+            "unavailable_reason"
+          ]
+        }
+      },
+      "required": [
+        "schema",
+        "artifact_id",
+        "identity",
+        "request",
+        "response",
+        "error",
+        "terminal_state",
+        "diagnostic_complete",
+        "timing"
       ]
     }
   },
@@ -2592,6 +2884,34 @@
                 "operations",
                 "artifact_authorization"
               ]
+            },
+            "model_interaction_diagnostics": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "supported": {
+                  "const": true
+                },
+                "schema": {
+                  "const": "rack-ai/model-interaction/v1"
+                },
+                "enablement": {
+                  "const": "reserve.diagnostics.retained_model_interactions"
+                },
+                "retrieval_operation": {
+                  "const": "get_work_artifact"
+                },
+                "retention": {
+                  "const": "active_reservation_only"
+                }
+              },
+              "required": [
+                "supported",
+                "schema",
+                "enablement",
+                "retrieval_operation",
+                "retention"
+              ]
             }
           },
           "required": [
@@ -2780,6 +3100,9 @@
         },
         {
           "$ref": "#/$defs/workArtifact"
+        },
+        {
+          "$ref": "#/$defs/modelInteraction"
         }
       ]
     }

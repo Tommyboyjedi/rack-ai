@@ -78,7 +78,11 @@ class OwnedProcessRecovery(unittest.TestCase):
     def test_owned_effect_is_cleaned_uncertainty_retained_and_fresh_request_acquires(self):
         rack = self.rack
         old = rack.wait(rack.acquire('athba', 'local-primary', 'low', identity='old-owner'))
-        invocation = rack.result(rack.infer(old, identity='historical-result-lost'))
+        # Seed genuine in-flight uncertainty: completed calls may already have
+        # retired into the archive before a stopped-receiver fixture can edit them.
+        rack.controls('local-primary', delay=2)
+        invocation = rack.result(rack.infer(old, identity='historical-result-lost'), 'running')
+        wait_until(lambda: rack.counts('dispatch')['local-primary'] == 1)
         before = rack.counts('dispatch')['local-primary']
         state = seed_recovery(rack, old)
         uncertain = state['data']['invocations'][invocation['id']]
@@ -93,7 +97,7 @@ class OwnedProcessRecovery(unittest.TestCase):
         self.assertEqual(released['reason'], 'start_outcome_unknown')
         self.assertFalse(alive(old['process']))
         after = document(rack)
-        retained = after['data']['demands'][old['id']]
+        retained = rack.inspect(old)
         proof = retained['recovery_reconciliation']
         self.assertEqual(proof['historical_outcome'], 'start_outcome_unknown')
         self.assertEqual(proof['current_effect'], 'proven_absent')
@@ -114,7 +118,7 @@ class OwnedProcessRecovery(unittest.TestCase):
         self.assertEqual(document(rack)['claims'], {})
         self.assertEqual(rack.counts('start')['local-primary'], 1)
         self.assertEqual(rack.counts('dispatch')['local-primary'], before)
-        self.assertEqual(document(rack)['data']['demands'][old['id']]['recovery_reconciliation'], proof)
+        self.assertEqual(rack.inspect(old)['recovery_reconciliation'], proof)
         fresh = rack.wait(rack.acquire('athba', 'local-primary', 'low', identity='fresh-owner'))
         self.assertNotEqual(fresh['id'], old['id'])
         self.assertNotEqual(fresh['generation'], old['generation'])

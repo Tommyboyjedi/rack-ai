@@ -11,6 +11,9 @@ mod history_archive;
 pub mod hosting;
 pub mod idle;
 pub mod inference;
+mod interaction_diagnostics;
+mod interaction_redaction;
+mod interaction_store;
 pub mod media;
 mod media_idle;
 mod payload_store;
@@ -69,3 +72,9 @@ mod owned_effect;
 mod recovery;
 mod recovery_media;
 mod recovery_media_group;
+
+mod interaction_capture;
+mod interaction_cleanup;
+
+#[cfg(test)]
+mod interaction_tests;
