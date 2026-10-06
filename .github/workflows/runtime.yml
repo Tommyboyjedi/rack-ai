@@ -25,6 +25,10 @@ jobs:
       - run: cargo test -p rack_ai_runtime --offline
       - run: cargo test --workspace --offline
       - run: cargo build --workspace --offline
-      - run: python3 -m pip install pytest jsonschema
-      - run: python3 -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py -q
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python3 -m venv .ci-venv
+      - run: .ci-venv/bin/python -m pip install pytest==9.1.1 jsonschema==4.26.0
+      - run: .ci-venv/bin/python -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py -q
       - run: git diff --check
