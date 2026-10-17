@@ -103,13 +103,13 @@ class TinyProfileRegistration(unittest.TestCase):
         self.assertEqual(profile["resources"], ["gpu-2060"])
         self.assertLessEqual(profile["device_mib"]["gpu-2060"], 6144)
         self.assertEqual((profile["context_tokens"], profile["max_input_tokens"],
-                          profile["max_output_tokens"]), (4096, 3072, 1024))
+                          profile["max_output_tokens"]), (8192, 7168, 1024))
         self.assertEqual(profile["protocols"], ["chat_completions"])
         self.assertEqual(profile["artifact"], "/srv/models/qwen3.5-4b-heretic/model-Q6_K.gguf")
         for pin in ("artifact_sha256", "executable_sha256"):
             self.assertRegex(profile[pin], "^[0-9a-f]{64}$")
         args = profile["args"]
-        expected = {"--alias": TAG, "--ctx-size": "4096", "--n-gpu-layers": "all",
+        expected = {"--alias": TAG, "--ctx-size": "8192", "--n-gpu-layers": "all",
                     "--parallel": "1", "--temp": "0", "--chat-template-kwargs": '{"enable_thinking":false}'}
         for option, value in expected.items():
             self.assertEqual(args[args.index(option) + 1], value)
@@ -121,7 +121,7 @@ class TinyProfileRegistration(unittest.TestCase):
             discovered = next(p for p in rack.call("cb", "discover")["tags"] if p["tag"] == TAG)
             self.assertFalse(discovered["qualified"])
             self.assertEqual((discovered["context_tokens"], discovered["max_input_tokens"],
-                              discovered["max_output_tokens"]), (4096, 3072, 1024))
+                              discovered["max_output_tokens"]), (8192, 7168, 1024))
             denied = reserve(rack)
             self.assertEqual(denied["state"], "unavailable")
             self.assertEqual(denied["services"][TAG]["reason"], "unqualified_profile")

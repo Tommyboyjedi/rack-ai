@@ -74,9 +74,13 @@ capabilities/context, qualification, expiry, output/time limits and one active i
 reservation immediately before dispatch. The basic request contains a prompt and explicit
 output/time limits. `payload`, when present, carries a qualified Chat Completions or Responses
 body without dropping tool definitions, structured-output settings or conversation messages.
-Input uses a conservative UTF-8 byte bound against the qualified context envelope; outputs
+Input token limits are published without treating serialized HTTP bytes as tokens; outputs
 are explicitly bounded. HTTP request bodies are limited to 1 MiB. Each accepted invocation freezes its response byte bound. The production/operator-approved `limits.max_response_bytes` baseline is **3 MiB** (`3145728` bytes).
 Backend calls have connect and overall deadlines and no automatic retry.
+Opted-in qualified text profiles expose exact, non-generating scoped input
+preflight; see [reservation-work.md](reservation-work.md#exact-input-preflight).
+Callers must check its fit result and current member/profile/generation binding.
+This does not introduce mandatory input counting on existing inference paths.
 
 The owner also receives `gateway_path`: append `/chat/completions` or `/responses` to that
 path on the receiver origin. It is a secret bearer capability, bound to the authenticated

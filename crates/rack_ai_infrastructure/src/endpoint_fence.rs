@@ -100,6 +100,22 @@ impl EndpointFence {
             .map_err(|_| "legacy_dispatch_still_draining".to_string())
     }
 }
+/// Hold the existing dispatch barrier while an owned managed endpoint is read.
+/// Callers must authenticate and validate the current managed grant separately.
+pub fn managed_read_guard(root: &Path, endpoint: &str) -> Result<File, String> {
+    let port = port(endpoint)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(root.join(format!("endpoint-{port}.lock")))
+        .map_err(|_| "input_preflight_endpoint_unavailable")?;
+    file.try_lock_shared()
+        .map_err(|_| "input_preflight_endpoint_busy")?;
+    Ok(file)
+}
+
 fn port(endpoint: &str) -> Result<u16, String> {
     endpoint
         .strip_prefix("http://127.0.0.1:")
@@ -108,4 +124,28 @@ fn port(endpoint: &str) -> Result<u16, String> {
         .and_then(|s| s.parse::<u16>().ok())
         .filter(|port| *port != 0)
         .ok_or_else(|| "unqualified local endpoint".into())
+}
+
+#[cfg(test)]
+mod managed_read_tests {
+    use super::*;
+    #[test]
+    fn shared_managed_reads_block_port_reuse_without_blocking_other_ports() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("rack-endpoint-read-{}-{nonce}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let first = managed_read_guard(&root, "http://127.0.0.1:18023").unwrap();
+        let second = managed_read_guard(&root, "http://127.0.0.1:18023").unwrap();
+        assert!(EndpointFence::quiescent(&root, "http://127.0.0.1:18023").is_err());
+        assert!(EndpointFence::quiescent(&root, "http://127.0.0.1:18024").is_ok());
+        drop(first);
+        assert!(EndpointFence::quiescent(&root, "http://127.0.0.1:18023").is_err());
+        drop(second);
+        assert!(EndpointFence::quiescent(&root, "http://127.0.0.1:18023").is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

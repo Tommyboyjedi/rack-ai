@@ -247,3 +247,139 @@ heavyweight documents are deleted, with bounded maintenance retry on I/O failure
 They do not use ordinary 14-day history retention. See
 [reservation interaction diagnostics](reservation-interaction-diagnostics.md)
 for effective capture, limits, redaction, unavailable metrics and restart.
+
+
+## Exact input preflight
+
+Qualified text Chat Completions profiles may opt in with the administrator-owned
+`input_token_preflight` flag. It defaults false and is omitted from serialization
+when false, preserving existing frozen profile hashes. Discovery and reservation
+members advertise `input_preflight` only for opted-in profiles, including
+`schema: "rack-ai/input-preflight/v1"`, `generates_tokens: false` and
+`enforcement: "caller_must_check_fits"`. Ordinary qualification still applies.
+
+Use the advertised member path, or append `/chat/completions/preflight` to its
+`gateway_path`, on the same receiver origin:
+
+```http
+POST <member.gateway_path>/chat/completions/preflight
+Authorization: Bearer <owner credential>
+Content-Type: application/json
+
+{"model":"tiny-uncd","messages":[{"role":"user","content":"Extract the current scene."}],"max_tokens":700,"temperature":0,"chat_template_kwargs":{"enable_thinking":false},"response_format":{"type":"json_object"}}
+```
+
+The bearer must identify the reservation member's owner. Possession of the
+scoped URL alone does not authorize this endpoint. The member must remain Ready,
+active and owner of every claimed resource, with the same generation, frozen
+profile and backend process. The URL is a secret capability; never log it.
+
+
+A successful HTTP 200 response is the preflight object directly, without the
+ordinary runtime `result` wrapper. Example values below are illustrative:
+
+```json
+{
+  "schema": "rack-ai/input-preflight/v1",
+  "service": "tiny-uncd",
+  "model": "tiny-uncd",
+  "reservation_id": "member-activation-id",
+  "generation": "current-generation",
+  "profile_hash": "frozen-profile-sha256",
+  "profile_version": "qwen3.5-4b-heretic-q6k-llama-5cb679dce989-8k-preflight-v2",
+  "input_tokens": 3712,
+  "max_input_tokens": 7168,
+  "max_output_tokens": 1024,
+  "context_tokens": 8192,
+  "requested_output_tokens": 700,
+  "total_reserved_tokens": 4412,
+  "fits": true,
+  "reason": "fits"
+}
+```
+
+`reservation_id` identifies the selected service member/activation carried by
+its scoped path; in a multi-service group it may differ from the public group's
+root ID. Compare it with that member's `id`, along with `generation`,
+`profile_hash` and `profile_version`. Limits are frozen with that member.
+
+`input_tokens` counts the rendered prompt, not serialized HTTP bytes.
+`total_reserved_tokens` is input plus requested output; its name denotes the
+fit arithmetic, not a new resource or token reservation. `fits` requires input
+at most `max_input_tokens`, output at most `max_output_tokens`, and the combined
+count at most `context_tokens`. A lower requested output does not raise the
+published input ceiling. Non-fitting HTTP 200 results use `input_limit_exceeded`,
+`output_limit_exceeded` or `context_limit_exceeded` in that precedence order.
+
+
+Send the complete Chat Completions body, including messages, tool definitions,
+`response_format`, and admitted `chat_template_kwargs`. If no output bound is
+present, preflight inserts the frozen profile's normal output maximum, matching
+the scoped inference gateway. Zero, malformed and ambiguous output bounds are
+rejected. Supported content is a nonempty messages array with string roles and
+string content. Media/content-part arrays, Responses and unsupported template
+options fail closed. Explicit schema and thinking controls remain unchanged.
+
+For qualified llama.cpp profiles, the service applies the actual server template
+to the complete admitted body, then tokenizes that prompt with both
+`add_special=true` and `parse_special=true`. Missing/malformed template or token
+results never become a fit result. Required BOS/EOS and applicable role/tool
+framing are included. Do not count JSON transport keys or assume the schema's
+serialized bytes are prompt tokens. The tested Qwen template adds zero prompt
+tokens for its JSON Schema constraint; other models/templates must be qualified
+for their actual rendering behavior. Clock/environment-dependent templates are
+unsupported unless their rendering/count consistency is separately established.
+
+This capability is opt-in for a frozen qualified profile, not a claim that any
+upstream llama.cpp checkout matches every installed binary. Qualification must
+compare against actual Chat Completions `usage.prompt_tokens`, including cached
+input, and cover supported roles, Unicode, tools, schemas and thinking defaults.
+Changes to model, server implementation, template or defaults require fresh
+qualification. The boolean flag does not grant callers paths, GPUs or runtimes.
+
+
+Preflight shares the existing bounded gateway waiter pool. A permit remains held
+until the blocking operation finishes, including after a client disconnect. The
+two backend reads share a 10-second overall HTTP budget, with a 2-second connect
+bound; each response uses the configured response-byte maximum. Incoming HTTP
+bodies retain the 1 MiB limit. Redirects and proxies are disabled. The existing
+endpoint barrier prevents port reuse during the read, and ownership, process,
+generation and profile are verified again before returning. Release, expiry or
+preemption can invalidate the operation; failure never returns guessed counts.
+
+Preflight performs no generation, creates no work/invocation ledger record and
+does not renew inactivity or ownership. It does not reserve future input space
+or extend a reservation. No authority lock is held over backend HTTP. It does
+not replace normal inference admission or introduce mandatory input enforcement
+into existing inference paths. Callers must reject `fits=false`, preserve the
+complete measured payload, check the returned member/profile/generation binding,
+and submit only while that same member remains Ready. Recount changed payloads
+or replacement activations. A positive response describes the checked instant;
+it cannot guarantee later capacity or continued ownership.
+
+The plain `submit_work` inference payload cannot carry `response_format` or
+`chat_template_kwargs`. Structured requests use the existing scoped Chat
+Completions interface. Do not truncate scene facts, histories or schemas to
+satisfy a serialized-byte heuristic, and do not bypass RackAI through a raw
+hosting endpoint to obtain counts.
+
+
+Handler errors use `{"schema":"rack-ai/input-preflight/v1","error":"code"}`:
+
+| HTTP | Codes and meaning |
+|---|---|
+| 401 | `unauthorized`: missing or invalid bearer |
+| 404 | `not_found`: absent member or another owner's member |
+| 403 | `invalid_scoped_capability`: bearer owner supplied the wrong capability |
+| 409 | `reservation_not_dispatchable`, `stale_generation_or_profile`: ownership or binding changed |
+| 409 | `input_preflight_unqualified`: profile/backend/protocol not qualified for counting |
+| 409 | `input_preflight_backend_identity_unproven`, `input_preflight_endpoint_busy`: process or dispatch barrier could not be proven |
+| 429 | `capacity_gateway_waiters`: shared bounded waiter pool full |
+| 400 | Normal Chat validation errors, `inference_limits`, or `input_preflight_unsupported_content` |
+| 502 | `input_preflight_backend_failure`, `input_preflight_backend_invalid_json`, `input_preflight_invalid_template`, `input_preflight_invalid_tokens`: backend/count proof unavailable |
+| 502 | `input_preflight_response_oversized`, `input_preflight_worker_failure`, `input_preflight_endpoint_unavailable`: bounded read or worker/fence failure |
+
+Malformed HTTP/JSON and oversized requests may use the receiver's normal
+extractor errors, including 413. None of these failures proves that the payload
+fits; do not replace a missing count with a byte estimate. Existing inference
+transport errors and durable reconciliation semantics remain unchanged.

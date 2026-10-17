@@ -420,7 +420,7 @@
     },
     {
       "tag": "tiny-uncd",
-      "version": "qwen3.5-4b-heretic-q6k-llama-5cb679dce989-4k-v1",
+      "version": "qwen3.5-4b-heretic-q6k-llama-5cb679dce989-8k-preflight-v2",
       "model": "tiny-uncd",
       "backend": "llama_cpp",
       "driver": "systemd",
@@ -429,8 +429,8 @@
       "capabilities": [
         "reasoning"
       ],
-      "context_tokens": 4096,
-      "max_input_tokens": 3072,
+      "context_tokens": 8192,
+      "max_input_tokens": 7168,
       "max_output_tokens": 1024,
       "protocols": [
         "chat_completions"
@@ -457,7 +457,7 @@
         "--port",
         "8023",
         "--ctx-size",
-        "4096",
+        "8192",
         "--n-gpu-layers",
         "all",
         "--parallel",
@@ -475,7 +475,8 @@
       "startup_seconds": 300,
       "drain_seconds": 120,
       "stop_seconds": 30,
-      "inference_seconds": 120
+      "inference_seconds": 120,
+      "input_token_preflight": true
     }
   ],
   "limits": {
