@@ -417,6 +417,65 @@
         "--voices",
         "/etc/rack-ai/voices.json"
       ]
+    },
+    {
+      "tag": "tiny-uncd",
+      "version": "qwen3.5-4b-heretic-q6k-llama-5cb679dce989-4k-v1",
+      "model": "tiny-uncd",
+      "backend": "llama_cpp",
+      "driver": "systemd",
+      "qualified": false,
+      "evidence": [],
+      "capabilities": [
+        "reasoning"
+      ],
+      "context_tokens": 4096,
+      "max_input_tokens": 3072,
+      "max_output_tokens": 1024,
+      "protocols": [
+        "chat_completions"
+      ],
+      "streaming": true,
+      "resources": [
+        "gpu-2060"
+      ],
+      "device_mib": {
+        "gpu-2060": 5700
+      },
+      "host_mib": 8192,
+      "cpu_percent": 400,
+      "endpoint": "http://127.0.0.1:8023",
+      "executable": "/srv/rack-ai/runtimes/llama-cpp/llama-server",
+      "executable_sha256": "5cb679dce989d69935aca461984b1423f65e7d6ee80f5066a00c87f94b961e06",
+      "args": [
+        "--model",
+        "/srv/models/qwen3.5-4b-heretic/model-Q6_K.gguf",
+        "--alias",
+        "tiny-uncd",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8023",
+        "--ctx-size",
+        "4096",
+        "--n-gpu-layers",
+        "all",
+        "--parallel",
+        "1",
+        "--temp",
+        "0",
+        "--jinja",
+        "--chat-template-kwargs",
+        "{\"enable_thinking\":false}",
+        "--log-disable"
+      ],
+      "artifact": "/srv/models/qwen3.5-4b-heretic/model-Q6_K.gguf",
+      "artifact_sha256": "5693ee63d29a204b61b44e72ce0c34fde5762a9180bd87f694cdd1e5554c3215",
+      "artifact_verify_seconds": 900,
+      "startup_seconds": 300,
+      "drain_seconds": 120,
+      "stop_seconds": 30,
+      "inference_seconds": 120
     }
   ],
   "limits": {
