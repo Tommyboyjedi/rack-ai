@@ -83,6 +83,10 @@ pub fn router(service: Arc<Service>) -> Router {
             )),
         )
         .route(
+            "/scoped/{id}/{generation}/v1/chat/completions/preflight",
+            post(crate::input_preflight::handle),
+        )
+        .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
         )
@@ -281,6 +285,12 @@ fn profile_summary(p: &crate::config::Profile) -> Value {
         "max_input_tokens": p.effective_max_input_tokens(),
         "max_output_tokens": p.max_output_tokens,
     });
+    if p.input_token_preflight {
+        value
+            .as_object_mut()
+            .expect("profile summary object")
+            .insert("input_preflight".into(), preflight_description(None));
+    }
     if let Some(image_input) = image_input_limits(p) {
         value
             .as_object_mut()
@@ -326,6 +336,9 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     }
     if !d.profile.native_media() {
         object.insert("model".into(), json!(d.profile.model));
+    }
+    if d.profile.input_token_preflight {
+        object.insert("input_preflight".into(), preflight_description(Some(&d)));
     }
     object.insert("profile_version".into(), json!(d.profile.version));
     object.insert("context_tokens".into(), json!(d.profile.context_tokens));
@@ -384,4 +397,18 @@ pub(crate) fn authenticate(
         .and_then(|h| h.strip_prefix("Bearer "))
         .unwrap_or("");
     config.authenticate(token)
+}
+
+fn preflight_description(demand: Option<&Demand>) -> Value {
+    let mut value = json!({"schema":"rack-ai/input-preflight/v1",
+        "protocol":"chat_completions", "authentication":"owner_bearer_and_scoped_capability",
+        "request":"same_chat_completions_body", "generates_tokens":false,
+        "enforcement":"caller_must_check_fits", "media":"unsupported"});
+    if let Some(d) = demand {
+        value["path"] = json!(format!(
+            "/scoped/{}/{}/v1/chat/completions/preflight",
+            d.id, d.access_key
+        ));
+    }
+    value
 }

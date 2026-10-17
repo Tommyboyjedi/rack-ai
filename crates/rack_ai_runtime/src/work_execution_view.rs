@@ -1089,6 +1089,7 @@ mod tests {
                 max_input_tokens: 3968,
                 protocols: crate::protocol::default_protocols(),
                 streaming: false,
+                input_token_preflight: false,
                 max_images_per_request: 0,
                 max_image_bytes: 0,
                 max_image_pixels: 0,

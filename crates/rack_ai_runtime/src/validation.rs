@@ -91,6 +91,14 @@ impl ProfileValidation<'_> {
     fn validate(&self, p: &Profile) -> Result<(), String> {
         let c = self.config;
         crate::speech::profile(p)?;
+        if p.input_token_preflight
+            && (p.backend != Backend::LlamaCpp
+                || !p
+                    .protocols
+                    .contains(&crate::protocol::Protocol::ChatCompletions))
+        {
+            return Err("input preflight requires llama_cpp chat_completions".into());
+        }
         if p.backend == Backend::Chatterbox
             && !c.fixture_mode
             && c.devices

@@ -17,7 +17,9 @@ changed by adding these source files. `local-uncd` remains a separate profile.
   no CUDA ordinal is stored in this profile.
 - Admission budget: 5700 MiB on the 6144 MiB RTX 2060; this is a reservation
   allowance, not a measured model allocation. Host allowance: 8192 MiB, 400% CPU.
-- Context: 4096; published input ceiling: 3072; output ceiling: 1024 tokens.
+- Context: 8192; published input ceiling: 7168; output ceiling: 1024 tokens.
+- Exact input preflight: opt-in `input_token_preflight=true`, qualified for this
+  frozen llama.cpp/model/template profile.
 - One parallel slot, all GPU layers, temperature default 0, Jinja enabled.
 - Thinking default: `--chat-template-kwargs '{"enable_thinking":false}'`.
 - Startup: 300 s; inference/drain: 120 s; stop: 30 s; artifact verification: 900 s.
@@ -53,7 +55,9 @@ backend payload logging. No consumer-specific routing or API is introduced.
 
 After qualification/deployment, ordinary authenticated clients discover and
 reserve `tiny-uncd` through `POST /runtime/v1`, then send Chat Completions through
-the returned scoped gateway or the existing `submit_work` payload contract.
+the returned scoped gateway. The `submit_work` inference payload accepts a plain
+prompt and bounds; explicit JSON Schema and template controls use scoped Chat
+Completions.
 `response_format` is forwarded unchanged, including `json_object` and
 `json_schema`. Schema enforcement is delegated to llama.cpp. The managed
 adversarial schema test below exercises that constraint. RackAI does not
@@ -107,7 +111,10 @@ actual token counts and times; never present configured VRAM or the standalone
 reference as a managed measurement. Keep synthetic payloads and credentials in
 private RAM and retain only sanitized metrics.
 
-## Verified gpurack installation, 2026-10-17
+## Historical 4K qualification, 2026-10-17
+
+The measurements in this section describe the earlier 4096-token profile;
+the current 8192-token qualification is recorded below.
 
 The deployed profile is qualified and uses only RTX 2060 UUID
 `GPU-357ef569-8fac-7c7d-ee1c-51677efb174f`. Ordinary authenticated discovery,
@@ -157,3 +164,48 @@ The immutable deployed binary includes the rack's pre-existing uncommitted
 local-uncd readiness/residency work unchanged. This feature's publication contains
 only tiny-uncd files and the generic template-control extension; it does not
 publish that separate work or alter local-uncd's model/profile.
+
+
+## Current 8K input preflight qualification, 2026-10-17
+
+The current profile is `qwen3.5-4b-heretic-q6k-llama-5cb679dce989-8k-preflight-v2`:
+8192 context, 7168 input and 1024 output tokens, with the same model, executable,
+RTX 2060 UUID, one parallel slot and non-thinking/temperature defaults.
+The increase follows measured token counts rather than serialized byte lengths.
+
+Four supplied neutral scene fixtures counted 1901, 3712, 2540 and 480 input
+tokens. The 3712-token fixture with 700 requested output tokens exceeds both the
+old 3072 input ceiling and old 4096 combined context (4412 total); it fits the
+new limits. All four runtime preflight counts exactly matched actual Chat
+Completions `usage.prompt_tokens`, and all four schema-constrained generations
+completed with `stop` and no visible reasoning. Messages, histories, trackers,
+memories, schemas and requested output bounds remained intact.
+
+Model allocation on the RTX 2060 measured 3784 MiB. A bounded 512-token decode
+sample measured 63.2269 decode tokens/second and 52.8925 tokens/second end to end
+(about 9.680 seconds). Stable ownership was held for five seconds and then
+released with verified cleanup. Separate bounded conformance cases also matched
+counts exactly: plain text 15, Unicode/roles 41, strict schema 18 and tools 268.
+Evidence is retained under `/srv/rack-ai/evidence/input-preflight-20261017T160544Z/`.
+
+
+The exact count uses the installed service's complete `/apply-template` parse,
+then `/tokenize` with `add_special=true`, `parse_special=true` and
+`with_pieces=false`. It counts the final template tokens, including applicable
+role/tool/special-token overhead and the service thinking default. For this
+qualified Qwen template, tested JSON Schema constraints add zero prompt tokens;
+they constrain decoding instead. That result is not a rule for other templates.
+The embedded template showed no detected clock/random/environment identifiers.
+
+The matching original source checkout is unavailable. Qualification therefore
+binds the installed model/runtime and observed count-to-usage equality, rather
+than asserting that an arbitrary upstream checkout matches this binary. Requalify
+on model, server implementation, template, default or supported-content changes.
+Other services default to preflight disabled; `local-uncd` remains unchanged.
+
+See [reservation-work.md](reservation-work.md#exact-input-preflight) for the
+scoped bearer-authenticated preflight. It reports fit without inference, activity
+renewal or an invocation ledger entry. Callers must check `fits`, preserve the
+same payload and compare the returned member generation/profile binding before
+submission. Normal inference admission is unchanged; preflight is not a token
+reservation or a durable authorization to submit later.

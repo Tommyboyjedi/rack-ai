@@ -158,7 +158,7 @@ def discover(client):
     if len(matches) != 1 or matches[0].get("qualified") is not True:
         raise ProbeError("tiny_uncd_not_published_qualified")
     profile = matches[0]
-    if profile.get("context_tokens") != 4096:
+    if profile.get("context_tokens") != 8192:
         raise ProbeError("unexpected_context")
     if profile.get("max_output_tokens", 0) < OUTPUT_TOKENS:
         raise ProbeError("insufficient_published_output_limit")

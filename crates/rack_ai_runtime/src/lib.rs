@@ -78,3 +78,5 @@ mod interaction_cleanup;
 
 #[cfg(test)]
 mod interaction_tests;
+
+mod input_preflight;

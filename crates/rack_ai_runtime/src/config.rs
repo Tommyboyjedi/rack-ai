@@ -36,6 +36,8 @@ pub struct Profile {
     pub protocols: Vec<crate::protocol::Protocol>,
     #[serde(default)]
     pub streaming: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub input_token_preflight: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_images_per_request: u32,
     #[serde(default, skip_serializing_if = "is_zero_u64")]
