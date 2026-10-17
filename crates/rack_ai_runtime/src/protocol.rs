@@ -1,3 +1,5 @@
+mod template;
+
 use base64::Engine;
 use rack_ai_application::GenericCapability;
 use serde::{Deserialize, Serialize};
@@ -25,6 +27,7 @@ impl Payload {
             return Err("use_speech_interface".into());
         }
         let body = self.body.as_object().ok_or("invalid_protocol_body")?;
+        template::validate(self, &d.profile.backend)?;
         let allowed = match self.protocol {
             Protocol::ChatCompletions => &[
                 "model",
@@ -37,6 +40,7 @@ impl Payload {
                 "tools",
                 "tool_choice",
                 "response_format",
+                "chat_template_kwargs",
                 "parallel_tool_calls",
                 "reasoning_effort",
                 "stream_options",
