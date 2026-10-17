@@ -285,11 +285,17 @@ fn profile_summary(p: &crate::config::Profile) -> Value {
         "max_input_tokens": p.effective_max_input_tokens(),
         "max_output_tokens": p.max_output_tokens,
     });
+    if p.launch.is_some() {
+        value["runtime_features"] = runtime_features(p);
+    }
+    if p.context_reserve_tokens > 0 {
+        value["context_reserve_tokens"] = json!(p.context_reserve_tokens);
+    }
     if p.input_token_preflight {
         value
             .as_object_mut()
             .expect("profile summary object")
-            .insert("input_preflight".into(), preflight_description(None));
+            .insert("input_preflight".into(), preflight_description(p, None));
     }
     if let Some(image_input) = image_input_limits(p) {
         value
@@ -337,8 +343,20 @@ pub(crate) fn public(d: Demand) -> Result<Value, String> {
     if !d.profile.native_media() {
         object.insert("model".into(), json!(d.profile.model));
     }
+    if d.profile.launch.is_some() {
+        object.insert("runtime_features".into(), runtime_features(&d.profile));
+    }
+    if d.profile.context_reserve_tokens > 0 {
+        object.insert(
+            "context_reserve_tokens".into(),
+            json!(d.profile.context_reserve_tokens),
+        );
+    }
     if d.profile.input_token_preflight {
-        object.insert("input_preflight".into(), preflight_description(Some(&d)));
+        object.insert(
+            "input_preflight".into(),
+            preflight_description(&d.profile, Some(&d)),
+        );
     }
     object.insert("profile_version".into(), json!(d.profile.version));
     object.insert("context_tokens".into(), json!(d.profile.context_tokens));
@@ -399,16 +417,30 @@ pub(crate) fn authenticate(
     config.authenticate(token)
 }
 
-fn preflight_description(demand: Option<&Demand>) -> Value {
+fn preflight_description(p: &crate::config::Profile, demand: Option<&Demand>) -> Value {
     let mut value = json!({"schema":"rack-ai/input-preflight/v1",
         "protocol":"chat_completions", "authentication":"owner_bearer_and_scoped_capability",
         "request":"same_chat_completions_body", "generates_tokens":false,
         "enforcement":"caller_must_check_fits", "media":"unsupported"});
+    if p.enforce_input_limits {
+        value["enforcement"] = json!("enforced_before_generation");
+    }
     if let Some(d) = demand {
         value["path"] = json!(format!(
             "/scoped/{}/{}/v1/chat/completions/preflight",
             d.id, d.access_key
         ));
+    }
+    value
+}
+
+fn runtime_features(p: &crate::config::Profile) -> Value {
+    let mut value = json!({"protocols":p.protocols,
+        "streaming":{"supported":p.streaming,"delivery":"buffered_sse"},
+        "tools":{"execution":"client_owned"}});
+    if p.backend == crate::config::Backend::Strata {
+        value["structured_output"] = json!({"method":"prompt_and_validate",
+            "constrained_decoding":false,"with_tools":false});
     }
     value
 }

@@ -72,12 +72,22 @@ Chat Completions on llama.cpp additionally accepts:
 }
 ```
 
-Only the boolean `enable_thinking` option is admitted; unknown template keys or
-malformed values fail closed. This extension is rejected on other backends and
-protocols. The request body is forwarded intact, preserving explicit structured
-output constraints and explicit thinking overrides. The profile supplies the
-thinking/temperature defaults when those fields are omitted. Do not set a global
-reasoning budget of zero, which would override an explicit thinking request.
+Tiny's Qwen template uses boolean `enable_thinking`; its false default and
+existing request behavior are unchanged. The generic llama.cpp interface also
+admits optional nested `reasoning_effort` (`none`/`low`/`medium`/`high`) for models
+whose templates use that variable. At least one admitted option must be supplied;
+unknown keys, explicit nulls and wrong types fail closed. Strata admits the
+boolean option only; other backends/protocols remain unqualified for these kwargs.
+Bodies are forwarded intact, preserving explicit schema/thinking controls.
+
+Do not assume another model uses Tiny's boolean. In particular, Nex `dual-worker`
+requires nested `chat_template_kwargs.reasoning_effort:"none"` alongside false,
+with top-level `reasoning_effort` omitted, because its actual template/parser
+handles that variable differently. See [dual-services.md](dual-services.md).
+This generic extension changes no Tiny model/profile/default or mandatory-input
+flag: Tiny retains caller-check input preflight. Its profile supplies the existing
+thinking/temperature defaults when omitted. Do not set a global reasoning budget
+of zero, which would override an explicit thinking request.
 
 ## Verification and review boundary
 

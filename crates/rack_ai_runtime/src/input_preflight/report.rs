@@ -23,6 +23,8 @@ pub(crate) struct Report {
     max_input_tokens: u32,
     max_output_tokens: u32,
     context_tokens: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    context_reserve_tokens: u32,
     requested_output_tokens: u32,
     total_reserved_tokens: u64,
     pub fits: bool,
@@ -38,7 +40,9 @@ impl Report {
             Reason::InputLimitExceeded
         } else if requested > profile.max_output_tokens {
             Reason::OutputLimitExceeded
-        } else if total > u64::from(profile.context_tokens) {
+        } else if total + u64::from(profile.context_reserve_tokens)
+            > u64::from(profile.context_tokens)
+        {
             Reason::ContextLimitExceeded
         } else {
             Reason::Fits
@@ -56,10 +60,15 @@ impl Report {
             max_input_tokens: profile.max_input_tokens,
             max_output_tokens: profile.max_output_tokens,
             context_tokens: profile.context_tokens,
+            context_reserve_tokens: profile.context_reserve_tokens,
             requested_output_tokens: requested,
             total_reserved_tokens: total,
             fits,
             reason,
         }
     }
+}
+
+fn is_zero(value: &u32) -> bool {
+    *value == 0
 }

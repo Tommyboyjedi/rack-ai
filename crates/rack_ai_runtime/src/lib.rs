@@ -80,3 +80,8 @@ mod interaction_cleanup;
 mod interaction_tests;
 
 mod input_preflight;
+
+mod integrity;
+mod launch_config;
+mod launch_identity;
+mod strata_ready;

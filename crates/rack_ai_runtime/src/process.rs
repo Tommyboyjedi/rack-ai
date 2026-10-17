@@ -46,7 +46,7 @@ pub fn verify(process: &Process, profile: &Profile) -> Result<(), String> {
     if !env.split(|b| *b == 0).any(|e| e == expected.as_bytes()) {
         return Err("activation_mismatch".into());
     }
-    Ok(())
+    crate::launch_identity::verify(process, profile)
 }
 pub fn gone(process: &Process) -> Result<bool, String> {
     let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").map_err(|e| e.to_string())?;

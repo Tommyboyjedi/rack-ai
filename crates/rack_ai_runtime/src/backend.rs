@@ -19,6 +19,9 @@ impl BackendAccess<'_> {
             }
             .ready(d);
         }
+        if d.profile.backend == Backend::Strata {
+            return crate::strata_ready::ready(self.config, d);
+        }
         let process = d.process.as_ref().ok_or("activation_process_missing")?;
         process::endpoint_owned(process, &d.profile)?;
 
@@ -42,6 +45,9 @@ impl BackendAccess<'_> {
         if ids != vec![d.profile.model.as_str()] {
             return Err("model_identity_mismatch".into());
         }
+        if d.profile.launch.is_some() {
+            crate::launch_identity::devices(self.config, d)?;
+        }
         process::endpoint_owned(process, &d.profile)
     }
 }
@@ -59,7 +65,6 @@ pub fn infer(
     if d.profile.backend == Backend::Chatterbox {
         return crate::speech_backend::synthesize((d, invocation), &config.authority_root);
     }
-    let client = client(request.timeout_seconds)?;
     let body = request
         .payload
         .as_ref()
@@ -69,6 +74,19 @@ pub fn infer(
         "model":d.profile.model,"messages":[{"role":"user","content":request.prompt}],
         "max_tokens":request.max_tokens,"stream":false}))
         });
+    let timeout = if d.profile.enforce_input_limits {
+        crate::input_preflight::admit_running(
+            service,
+            crate::input_preflight::RunningInput {
+                demand: d,
+                invocation,
+                body: &body,
+            },
+        )?
+    } else {
+        Duration::from_secs(request.timeout_seconds)
+    };
+    let client = client_duration(timeout)?;
     let path = request
         .payload
         .as_ref()
@@ -135,9 +153,12 @@ fn http_error(invocation: &Invocation, status: reqwest::StatusCode) -> String {
     }
 }
 fn client(seconds: u64) -> Result<Client, String> {
+    client_duration(Duration::from_secs(seconds))
+}
+fn client_duration(timeout: Duration) -> Result<Client, String> {
     Client::builder()
         .connect_timeout(Duration::from_secs(2))
-        .timeout(Duration::from_secs(seconds))
+        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
         .build()

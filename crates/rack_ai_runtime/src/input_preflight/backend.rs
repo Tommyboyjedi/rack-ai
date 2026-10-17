@@ -15,8 +15,9 @@ struct Counter {
     max_bytes: u64,
 }
 impl Counter {
-    fn new(service: &Service, demand: &Demand) -> Result<Self, String> {
-        let duration = Duration::from_secs(TIMEOUT_SECONDS);
+    fn new(service: &Service, input: &Counting<'_>) -> Result<Self, String> {
+        let demand = input.demand;
+        let duration = input.timeout.min(Duration::from_secs(TIMEOUT_SECONDS));
         Ok(Self {
             client: Client::builder()
                 .connect_timeout(Duration::from_secs(CONNECT_SECONDS))
@@ -61,7 +62,41 @@ impl Counter {
 
 pub(super) fn count(service: &Service, input: (&Demand, &Payload)) -> Result<u32, String> {
     let (demand, payload) = input;
-    let counter = Counter::new(service, demand)?;
+    count_bounded(
+        service,
+        Counting {
+            demand,
+            payload,
+            timeout: Duration::from_secs(TIMEOUT_SECONDS),
+        },
+    )
+}
+
+pub(super) struct Counting<'a> {
+    pub demand: &'a Demand,
+    pub payload: &'a Payload,
+    pub timeout: Duration,
+}
+
+pub(super) fn count_bounded(service: &Service, input: Counting<'_>) -> Result<u32, String> {
+    let demand = input.demand;
+    let payload = input.payload;
+    let counter = Counter::new(service, &input)?;
+    if demand.profile.backend == crate::config::Backend::Strata {
+        let result = counter.post(("/rackai/input-tokens", &payload.body))?;
+        let tokens = result
+            .get("input_tokens")
+            .and_then(Value::as_u64)
+            .filter(|n| *n > 0 && *n <= u64::from(u32::MAX))
+            .ok_or("input_preflight_invalid_tokens")?;
+        if result.get("context_reserve_tokens").and_then(Value::as_u64)
+            != Some(u64::from(demand.profile.context_reserve_tokens))
+        {
+            return Err("input_preflight_invalid_context_reserve".into());
+        }
+        return Ok(tokens as u32);
+    }
+
     let rendered = counter.post(("/apply-template", &payload.body))?;
     let prompt = rendered
         .get("prompt")
