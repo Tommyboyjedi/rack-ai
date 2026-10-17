@@ -91,14 +91,7 @@ impl ProfileValidation<'_> {
     fn validate(&self, p: &Profile) -> Result<(), String> {
         let c = self.config;
         crate::speech::profile(p)?;
-        if p.input_token_preflight
-            && (p.backend != Backend::LlamaCpp
-                || !p
-                    .protocols
-                    .contains(&crate::protocol::Protocol::ChatCompletions))
-        {
-            return Err("input preflight requires llama_cpp chat_completions".into());
-        }
+        crate::launch_config::validate(p)?;
         if p.backend == Backend::Chatterbox
             && !c.fixture_mode
             && c.devices
@@ -195,7 +188,7 @@ impl ProfileValidation<'_> {
         {
             return Err("comfyui requires pinned media configuration".into());
         }
-        if p.backend == Backend::LlamaCpp
+        if matches!(p.backend, Backend::LlamaCpp | Backend::Strata)
             && (p.artifact.is_none() || p.artifact_sha256.as_ref().is_none_or(|h| h.len() != 64))
         {
             return Err("llama_cpp requires a pinned artifact".into());

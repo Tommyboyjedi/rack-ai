@@ -239,6 +239,7 @@ impl Completion<'_> {
 pub(crate) fn failure_state(error: &str) -> InvocationState {
     match error {
         "backend_response_oversized" => InvocationState::Failed,
+        error if error.starts_with("input_admission_") => InvocationState::Failed,
         "backend_transport_uncertain"
         | "backend_read_uncertain"
         | "speech_transport_uncertain"

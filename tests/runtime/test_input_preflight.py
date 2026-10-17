@@ -348,7 +348,7 @@ class InputPreflightConfiguration(unittest.TestCase):
                     result = subprocess.run([str(ROOT / "target/debug/rack_ai_runtime"), "validate", str(path)],
                                             capture_output=True, text=True, timeout=5)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn("input preflight requires llama_cpp chat_completions", result.stderr)
+                    self.assertIn("input preflight requires qualified text chat backend", result.stderr)
             self.assertEqual(list(Path(directory).iterdir()), [path])
 
 

@@ -1,0 +1,222 @@
+{
+  "tag": "dual-worker",
+  "version": "nex-n2.5-mini-q5km-llama-5cb679dce989-128k-v1",
+  "model": "nex-n2.5-mini",
+  "backend": "llama_cpp",
+  "driver": "systemd",
+  "qualified": false,
+  "evidence": [],
+  "capabilities": [
+    "reasoning",
+    "coding"
+  ],
+  "context_tokens": 131072,
+  "max_input_tokens": 65536,
+  "max_output_tokens": 65536,
+  "protocols": [
+    "chat_completions"
+  ],
+  "streaming": true,
+  "input_token_preflight": true,
+  "resources": [
+    "gpu-4080-super",
+    "gpu-4060ti"
+  ],
+  "device_mib": {
+    "gpu-4080-super": 15800,
+    "gpu-4060ti": 15800
+  },
+  "host_mib": 32768,
+  "cpu_percent": 1600,
+  "endpoint": "http://127.0.0.1:8096",
+  "executable": "/srv/rack-ai/runtimes/llama-cpp/llama-server",
+  "executable_sha256": "5cb679dce989d69935aca461984b1423f65e7d6ee80f5066a00c87f94b961e06",
+  "args": [
+    "--model",
+    "/srv/models/nex-n2.5-mini/Nex-N2.5-mini-Q5_K_M.gguf",
+    "--alias",
+    "nex-n2.5-mini",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8096",
+    "--ctx-size",
+    "131072",
+    "--parallel",
+    "1",
+    "--device",
+    "CUDA0,CUDA1",
+    "--split-mode",
+    "layer",
+    "--tensor-split",
+    "1,1",
+    "--gpu-layers",
+    "all",
+    "--fit",
+    "off",
+    "--flash-attn",
+    "on",
+    "--cache-type-k",
+    "f16",
+    "--cache-type-v",
+    "f16",
+    "--batch-size",
+    "512",
+    "--ubatch-size",
+    "128",
+    "--threads",
+    "16",
+    "--threads-batch",
+    "16",
+    "--spec-type",
+    "none",
+    "--jinja",
+    "--metrics",
+    "--temp",
+    "0.7",
+    "--top-p",
+    "0.95",
+    "--top-k",
+    "40",
+    "--min-p",
+    "0",
+    "--reasoning-effort",
+    "high"
+  ],
+  "artifact": "/srv/models/nex-n2.5-mini/Nex-N2.5-mini-Q5_K_M.gguf",
+  "artifact_sha256": "f60514ff680b9561318129f22dddd9da59878bda211c178662f3d50938f0c9d4",
+  "artifact_verify_seconds": 900,
+  "startup_seconds": 600,
+  "drain_seconds": 3600,
+  "stop_seconds": 60,
+  "inference_seconds": 3600,
+  "launch": {
+    "working_directory": "/srv/rack-ai",
+    "environment": {},
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "file_pins": [
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libcublas.so.12",
+        "sha256": "031ce6c2cbfbb9468f040527cab5c599069ce5609e73e28f87503881063eac21"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libcublasLt.so.12",
+        "sha256": "10b5e6631cf8115c661eb895ed1533826308b58f7956466f53d236a40c9b622c"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libcudart.so.12",
+        "sha256": "c3a75b33af334a3486d197dbd1584a2985183ba4688d237a2be5f2f679329920"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libggml-base.so.0",
+        "sha256": "85f87747f0f50ed67b97da3382ee6b2bb0f83b8c428a6002db8a12069aea7681"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libggml-cpu.so.0",
+        "sha256": "aa68a4dab3f191596922238bca1cb9a6ef739529c8951779776c8f12d847a435"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libggml-cuda.so.0",
+        "sha256": "3d4e7923ff3e48c36898f7bfee9fcf97df7b5a68d1261cfdd59723a85ccbbf60"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libggml.so.0",
+        "sha256": "b6f6e1248e284bdb234ae254032536cd9f29f141cdd43286d42d14867f78df97"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libllama-common.so.0",
+        "sha256": "3611c19597d17f2f795be33953c0365f58213d319ce2f96a4ec9c4c293e719ce"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libllama-server-impl.so",
+        "sha256": "eeb0842ec7f5d252bdb05682797fee84de038dfa742bdfac58d33ad19373ceb8"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libllama.so.0",
+        "sha256": "ebede3349ac5c011e8bc86f33d658221de71d2db71afc5c63d801a3caeabbee6"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libmtmd.so.0",
+        "sha256": "f4cf945f38560c7e3118b40f90dfcb4fb3427e40a50aa6ee343d2d433abf9b95"
+      },
+      {
+        "path": "/srv/rack-ai/runtimes/llama-cpp/libnccl.so.2",
+        "sha256": "42ba6acaf7c1211480668f252c71801c8f54c72424f59f8a4d5462f394796ad6"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+        "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "sha256": "85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+        "sha256": "5385f0436ac2e284ba8c5fb1488874057c29c04be72dea32add832694f381e28"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcuda.so.595.99.02",
+        "sha256": "192d4eedb1b39f0568f2b5423d35227d13b32b9025599e1968a9081982da207d"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+        "sha256": "59d725ca30596a9863f4fa2552a7125f834842abc86b40890231c129358965d2"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "sha256": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
+        "sha256": "645478cbe100d1465b9d45f7047bca3965358f4d399937e544f55ac7a924d5a3"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "sha256": "1c488db6f4fe8cecb72456bc018de000b7a9b539c2994864b0416b5e8371b3d8"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+        "sha256": "1327fc40710691dbd94e88b6cf4efce27fefe8fbb93f7d1164a75b4dccaea696"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/librt.so.1",
+        "sha256": "9f3cc59207bcaaac74aaf7aca961f4816f0f4d945e4bd1c3cb98ec516becf161"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+        "sha256": "63b47f444efa588e291e9b650a5ba2ab02f856356f2d50f13a2e477db9119e09"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+        "sha256": "5bb0d21308f123b6ad46c6f35b42cedfcb8d6d439a53aa3dae04d880aaffdde3"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+        "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+        "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80"
+      }
+    ]
+  },
+  "enforce_input_limits": true
+}

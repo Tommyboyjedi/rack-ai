@@ -105,7 +105,7 @@ Work contains no priority and cannot select a service outside its reservation. `
 
 `inspect_work_execution` takes `work_id` and returns a sanitized, generic execution projection for the authenticated owner. It reports authoritative work identity, current/terminal outcome, known attempt evidence, cleanup/recovery closure, bounded activity/timing/count metadata, and opaque artifact IDs for diagnostic text. It does not expose server filesystem paths, private packet paths, workspace roots, scoped access secrets, or JCode-specific control details. `get_work_artifact` takes one of those opaque artifact IDs and returns a bounded read-only diagnostic payload after the same owner check. Artifacts remain ordinary retained evidence, not authority to execute again after expiry. See [work-execution-public-contract.md](work-execution-public-contract.md) for the evidence inventory and measurement semantics.
 
-The existing invocation record stores accepted/started/completed/cancelled/expired/uncertain state, result, cancellation intent and late evidence. Work inspection also reports waiting/Held from current reservation state. Cancellation before dispatch prevents execution. Cancellation after dispatch records intent and retains late evidence. Receiver restart marks unresolved started work uncertain, never automatically replaying it. Ordinary inference protocol/time limits remain unchanged. Service discovery publishes `context_tokens`, `max_input_tokens` and `max_output_tokens`; public Ready reservation members expose the same profile-frozen limits beside their model and profile version. RackAI enforces explicit output bounds against `max_output_tokens`. Scoped chat/completions and responses calls that omit an output bound receive the reserved profile's `max_output_tokens` before backend dispatch. RackAI does not infer tokenizer-specific prompt length from serialized HTTP bytes; clients and model runtimes remain responsible for true input-token enforcement against the published `max_input_tokens` contract.
+The existing invocation record stores accepted/started/completed/cancelled/expired/uncertain state, result, cancellation intent and late evidence. Work inspection also reports waiting/Held from current reservation state. Cancellation before dispatch prevents execution. Cancellation after dispatch records intent and retains late evidence. Receiver restart marks unresolved started work uncertain, never automatically replaying it. Ordinary inference protocol/time limits remain unchanged. Service discovery publishes `context_tokens`, `max_input_tokens` and `max_output_tokens`; public Ready reservation members expose the same profile-frozen limits beside their model and profile version. RackAI enforces explicit output bounds against `max_output_tokens`. Scoped chat/completions and responses calls that omit an output bound receive the reserved profile's `max_output_tokens` before backend dispatch. RackAI does not infer tokenizer-specific prompt length from serialized HTTP bytes; profiles that opt into `enforce_input_limits` count actual formatted input before generation; other profiles retain their existing caller/backend input-token enforcement contract.
 
 ## Bounded workspace payload
 
@@ -257,6 +257,17 @@ when false, preserving existing frozen profile hashes. Discovery and reservation
 members advertise `input_preflight` only for opted-in profiles, including
 `schema: "rack-ai/input-preflight/v1"`, `generates_tokens: false` and
 `enforcement: "caller_must_check_fits"`. Ordinary qualification still applies.
+An administrator may additionally set `enforce_input_limits:true` for a profile
+with qualified input preflight. That flag defaults false and is omitted when
+false, preserving existing profile hashes/behavior. Such profiles instead publish
+`enforcement:"enforced_before_generation"`; both new dual services use this mode.
+A preflight call remains optional, but server admission repeats exact counting
+of the actual inference body immediately before generation. A counting failure
+or non-fit becomes a durable Failed invocation with an `input_admission_*` error,
+without generation or silent truncation. Scoped HTTP errors retain their normal
+invocation failure envelope; inspect/reconcile the invocation for retained details.
+Existing idempotent replay returns the original result/failure without another
+count or model invocation. Counting and generation share the invocation deadline.
 
 Use the advertised member path, or append `/chat/completions/preflight` to its
 `gateway_path`, on the same receiver origin:
@@ -307,8 +318,13 @@ root ID. Compare it with that member's `id`, along with `generation`,
 `total_reserved_tokens` is input plus requested output; its name denotes the
 fit arithmetic, not a new resource or token reservation. `fits` requires input
 at most `max_input_tokens`, output at most `max_output_tokens`, and the combined
-count at most `context_tokens`. A lower requested output does not raise the
-published input ceiling. Non-fitting HTTP 200 results use `input_limit_exceeded`,
+count plus any `context_reserve_tokens` at most `context_tokens`. The reserve
+is published with discovery/member metadata and the receipt when nonzero; omitted
+means zero. Strata reserves 8 tokens under its installed backend policy, while
+`total_reserved_tokens` remains input plus output. Thus both individual 65536
+ceilings cannot simultaneously consume all 131072 context tokens on that profile.
+A lower requested output does not raise the published input ceiling. Non-fitting
+HTTP 200 results use `input_limit_exceeded`,
 `output_limit_exceeded` or `context_limit_exceeded` in that precedence order.
 
 
@@ -316,19 +332,53 @@ Send the complete Chat Completions body, including messages, tool definitions,
 `response_format`, and admitted `chat_template_kwargs`. If no output bound is
 present, preflight inserts the frozen profile's normal output maximum, matching
 the scoped inference gateway. Zero, malformed and ambiguous output bounds are
-rejected. Supported content is a nonempty messages array with string roles and
-string content. Media/content-part arrays, Responses and unsupported template
-options fail closed. Explicit schema and thinking controls remain unchanged.
+rejected. Supported content is a nonempty array of message objects with
+backend-supported string roles and string content. A valid assistant function-tool
+turn may instead omit content or set it null. Tool calls need unique nonempty IDs,
+`type:"function"`, nonempty function names and string arguments; tool results need
+a matching nonempty `tool_call_id` and string content. RackAI does not execute or
+interpret tool arguments. Media and all content-part arrays, including text-only
+arrays, fail closed in preflight and in opted-in mandatory counting. Responses
+and unsupported template options are unqualified for this counter. Explicit schema
+and thinking controls are forwarded intact.
 
 For qualified llama.cpp profiles, the service applies the actual server template
 to the complete admitted body, then tokenizes that prompt with both
 `add_special=true` and `parse_special=true`. Missing/malformed template or token
 results never become a fit result. Required BOS/EOS and applicable role/tool
 framing are included. Do not count JSON transport keys or assume the schema's
-serialized bytes are prompt tokens. The tested Qwen template adds zero prompt
+serialized bytes are prompt tokens. Tiny-uncd's tested Qwen template adds zero prompt
 tokens for its JSON Schema constraint; other models/templates must be qualified
 for their actual rendering behavior. Clock/environment-dependent templates are
 unsupported unless their rendering/count consistency is separately established.
+
+For qualified Strata profiles, counting reuses the installed OpenAI request
+parser, format preparation, tokenizer and forced-tool prefix logic without
+engine generation. Schema instructions therefore contribute prompt tokens.
+The adapter verifies its context-reserve policy agrees with the frozen profile.
+Strata's structured output uses one prompt-and-validate generation, without
+constrained decoding, and rejects `response_format` combined with tools. Read
+published runtime features instead of assuming all compatible backends behave alike.
+
+Admitted llama.cpp `chat_template_kwargs` contain optional boolean
+`enable_thinking` and optional string `reasoning_effort` from
+`none`/`low`/`medium`/`high`; at least one must be present. Explicit nulls, wrong
+types and unknown keys fail closed. Strata's admitted kwargs remain boolean-only.
+These values reach the backend unchanged, and their effect depends on its actual
+template/parser. For `dual-worker` Nex, disable thinking with the nested recipe
+below and OMIT top-level `reasoning_effort`:
+
+```json
+{"chat_template_kwargs":{"enable_thinking":false,"reasoning_effort":"none"}}
+```
+
+That embedded template branches on the effort variable, while the installed
+llama.cpp parser erases that variable for top-level `reasoning_effort:"none"`.
+Boolean false alone therefore does not establish Nex thinking suppression.
+`tiny-uncd` retains its existing boolean false template/default; `dual-brain`
+Strata also honours boolean false or top-level effort none. High reasoning remains
+available when explicitly requested. No profile default is changed by this option
+extension. Qualify count/response behavior for the model's actual recipe.
 
 This capability is opt-in for a frozen qualified profile, not a claim that any
 upstream llama.cpp checkout matches every installed binary. Qualification must
@@ -340,7 +390,7 @@ qualification. The boolean flag does not grant callers paths, GPUs or runtimes.
 
 Preflight shares the existing bounded gateway waiter pool. A permit remains held
 until the blocking operation finishes, including after a client disconnect. The
-two backend reads share a 10-second overall HTTP budget, with a 2-second connect
+backend HTTP exchanges share a 10-second overall budget, with a 2-second connect
 bound; each response uses the configured response-byte maximum. Incoming HTTP
 bodies retain the 1 MiB limit. Redirects and proxies are disabled. The existing
 endpoint barrier prevents port reuse during the read, and ownership, process,
@@ -350,8 +400,9 @@ preemption can invalidate the operation; failure never returns guessed counts.
 Preflight performs no generation, creates no work/invocation ledger record and
 does not renew inactivity or ownership. It does not reserve future input space
 or extend a reservation. No authority lock is held over backend HTTP. It does
-not replace normal inference admission or introduce mandatory input enforcement
-into existing inference paths. Callers must reject `fits=false`, preserve the
+not replace reservation/ownership admission. Mandatory counting is enabled only
+by a profile's explicit `enforce_input_limits` flag; it is unchanged for existing
+profiles without that flag. Callers must reject `fits=false`, preserve the
 complete measured payload, check the returned member/profile/generation binding,
 and submit only while that same member remains Ready. Recount changed payloads
 or replacement activations. A positive response describes the checked instant;

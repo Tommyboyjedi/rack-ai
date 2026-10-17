@@ -1,0 +1,54 @@
+{
+  "exe": "/home/tomp/strata-test/engine/strata",
+  "args": [
+    "--pack",
+    "/home/tomp/strata-test-data/packs/unsloth-ud-iq4_xs",
+    "--native",
+    "/srv/models/qwen3.8-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+    "--expert-profile",
+    "/home/tomp/strata-test/data/expert-profile.bin",
+    "--expert-cache",
+    "auto",
+    "--prefill",
+    "auto",
+    "--spec",
+    "4",
+    "--spec-min-p",
+    "0.5",
+    "--mtp",
+    "/home/tomp/strata-test-data/mtp/rt",
+    "--max-context",
+    "131072",
+    "--kv",
+    "int8",
+    "--kv-resident",
+    "32768",
+    "--resident-budget-gib",
+    "40",
+    "--layer-split",
+    "auto"
+  ],
+  "cwd": "/home/tomp/strata-test",
+  "tokenizer": "/home/tomp/strata-test-data/packs/unsloth-ud-iq4_xs/tokenizer",
+  "model_name": "qwen3.8-flash-next-unsloth-ud-iq4_xs",
+  "log": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/engine.log",
+  "lib_dirs": [
+    "/usr/bin",
+    "/usr/lib64"
+  ],
+  "port": 8098,
+  "env": {
+    "STRATA_HC_Q8": "1",
+    "STRATA_ROUTE_TAIL_SKIP": "0"
+  },
+  "gpu": [],
+  "gpus_asked": true,
+  "layer_split": "auto",
+  "host": "127.0.0.1",
+  "open_browser": false,
+  "parallel": 1,
+  "reasoning_effort": "high",
+  "aliases": [
+    "dual-brain"
+  ]
+}

@@ -1,4 +1,7 @@
+mod messages;
+mod sampling;
 mod template;
+pub(crate) use messages::text_message;
 
 use base64::Engine;
 use rack_ai_application::GenericCapability;
@@ -28,6 +31,7 @@ impl Payload {
         }
         let body = self.body.as_object().ok_or("invalid_protocol_body")?;
         template::validate(self, &d.profile.backend)?;
+        sampling::validate(self, &d.profile.backend)?;
         let allowed = match self.protocol {
             Protocol::ChatCompletions => &[
                 "model",
@@ -37,6 +41,8 @@ impl Payload {
                 "max_completion_tokens",
                 "temperature",
                 "top_p",
+                "top_k",
+                "min_p",
                 "tools",
                 "tool_choice",
                 "response_format",
@@ -199,13 +205,14 @@ fn validate_content(
         .filter_map(Value::as_array)
     {
         for message in messages {
+            let tool_calls = messages::validate(message)?;
             if let Some(parts) = message.get("content").and_then(Value::as_array) {
                 for part in parts {
                     validate_content_part(part, &mut policy)?;
                 }
             } else if message
                 .get("content")
-                .is_some_and(|content| !content.is_string())
+                .is_some_and(|content| !content.is_string() && !(tool_calls && content.is_null()))
             {
                 return Err("invalid_protocol_content".into());
             }

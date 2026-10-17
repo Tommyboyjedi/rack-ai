@@ -1,7 +1,9 @@
 //! Opt-in, non-generating input accounting for an owned frozen LLM profile.
 mod access;
+mod admission;
 mod backend;
 mod report;
+pub(crate) use admission::{RunningInput, admit_running};
 
 use crate::{
     protocol::{Payload, Protocol},

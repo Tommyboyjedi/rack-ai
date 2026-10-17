@@ -47,9 +47,9 @@ fn eligible(state: &crate::types::Document, demand: &Demand) -> Result<(), Strin
     if !crate::reservation::ready(state, demand) {
         return Err("reservation_not_dispatchable".into());
     }
-    if !demand.profile.qualified
+    if (!demand.profile.qualified && !demand.request.qualification)
         || !demand.profile.input_token_preflight
-        || demand.profile.backend != Backend::LlamaCpp
+        || !matches!(demand.profile.backend, Backend::LlamaCpp | Backend::Strata)
         || !demand
             .profile
             .protocols
@@ -72,15 +72,9 @@ pub(super) fn text_only(payload: &Payload) -> Result<(), String> {
         .filter(|messages| !messages.is_empty())
         .ok_or("input_preflight_unsupported_content")?;
     if payload.protocol != Protocol::ChatCompletions
-        || messages.iter().any(|message| {
-            !message.is_object()
-                || !message
-                    .get("role")
-                    .is_some_and(serde_json::Value::is_string)
-                || !message
-                    .get("content")
-                    .is_some_and(serde_json::Value::is_string)
-        })
+        || messages
+            .iter()
+            .any(|message| !crate::protocol::text_message(message))
     {
         return Err("input_preflight_unsupported_content".into());
     }

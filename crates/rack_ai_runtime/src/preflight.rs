@@ -48,6 +48,7 @@ impl Preflight<'_> {
                 return Err("artifact_hash_mismatch".into());
             }
         }
+        crate::integrity::verify(&d.profile)?;
         if d.profile.driver == Driver::Fixture {
             return Ok(());
         }

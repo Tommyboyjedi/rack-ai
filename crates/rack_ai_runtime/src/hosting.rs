@@ -31,14 +31,20 @@ impl Hosting<'_> {
             return Err("executable_hash_mismatch".into());
         }
         if p.driver == Driver::Fixture {
-            let mut child = Command::new(&p.executable)
+            let mut command = Command::new(&p.executable);
+            command
                 .args(&p.args)
                 .env("RACK_RUNTIME_ACTIVATION", activation)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .map_err(|e| e.to_string())?;
+                .stderr(Stdio::null());
+            if let Some(launch) = &p.launch {
+                command.envs(&launch.environment);
+                if let Some(directory) = &launch.working_directory {
+                    command.current_dir(directory);
+                }
+            }
+            let mut child = command.spawn().map_err(|e| e.to_string())?;
             let observed = process::capture(child.id(), activation);
             std::thread::spawn(move || {
                 let _ = child.wait();
@@ -68,6 +74,14 @@ impl Hosting<'_> {
             "--".into(),
             p.executable.to_string_lossy().into_owned(),
         ];
+        let position = args
+            .iter()
+            .position(|a| a == "--")
+            .ok_or("missing_exec_boundary")?;
+        args.splice(
+            position..position,
+            crate::launch_config::systemd_arguments(p),
+        );
         args.extend(p.args.clone());
         run(
             "systemd-run",

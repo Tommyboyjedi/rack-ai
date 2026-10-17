@@ -7,6 +7,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 pub enum Backend {
     Vllm,
     LlamaCpp,
+    Strata,
     Comfyui,
     Chatterbox,
 }
@@ -31,6 +32,10 @@ pub struct Profile {
     pub capabilities: Vec<GenericCapability>,
     pub context_tokens: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
+    pub context_reserve_tokens: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch: Option<crate::launch_config::Launch>,
+    #[serde(default, skip_serializing_if = "is_zero")]
     pub max_input_tokens: u32,
     #[serde(default = "crate::protocol::default_protocols")]
     pub protocols: Vec<crate::protocol::Protocol>,
@@ -38,6 +43,8 @@ pub struct Profile {
     pub streaming: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_token_preflight: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub enforce_input_limits: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub max_images_per_request: u32,
     #[serde(default, skip_serializing_if = "is_zero_u64")]
