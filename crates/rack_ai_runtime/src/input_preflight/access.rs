@@ -1,6 +1,6 @@
 use crate::{
     config::Backend,
-    protocol::{Payload, Protocol},
+    protocol::Protocol,
     service::{Service, owned},
     types::Demand,
 };
@@ -60,23 +60,6 @@ fn eligible(state: &crate::types::Document, demand: &Demand) -> Result<(), Strin
     let encoded = serde_json::to_vec(&demand.profile).map_err(|_| "input_preflight_unqualified")?;
     if crate::types::digest(&encoded) != demand.profile_hash {
         return Err("stale_generation_or_profile".into());
-    }
-    Ok(())
-}
-
-pub(super) fn text_only(payload: &Payload) -> Result<(), String> {
-    let messages = payload
-        .body
-        .get("messages")
-        .and_then(serde_json::Value::as_array)
-        .filter(|messages| !messages.is_empty())
-        .ok_or("input_preflight_unsupported_content")?;
-    if payload.protocol != Protocol::ChatCompletions
-        || messages
-            .iter()
-            .any(|message| !crate::protocol::text_message(message))
-    {
-        return Err("input_preflight_unsupported_content".into());
     }
     Ok(())
 }

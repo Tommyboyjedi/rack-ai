@@ -1,6 +1,6 @@
 {
   "tag": "dual-worker",
-  "version": "nex-n2.5-mini-q5km-llama-5cb679dce989-128k-v1",
+  "version": "nex-n2.5-mini-q5km-llama-5cb679dce989-128k-vision-v3",
   "model": "nex-n2.5-mini",
   "backend": "llama_cpp",
   "driver": "systemd",
@@ -8,7 +8,8 @@
   "evidence": [],
   "capabilities": [
     "reasoning",
-    "coding"
+    "coding",
+    "visual"
   ],
   "context_tokens": 131072,
   "max_input_tokens": 65536,
@@ -81,7 +82,14 @@
     "--min-p",
     "0",
     "--reasoning-effort",
-    "high"
+    "high",
+    "--mmproj",
+    "/srv/models/nex-n2.5-mini/mmproj-Nex-N2.5-mini-F16.gguf",
+    "--no-mmproj-offload",
+    "--image-max-tokens",
+    "1024",
+    "--video-ffmpeg-dir",
+    "/dev/null"
   ],
   "artifact": "/srv/models/nex-n2.5-mini/Nex-N2.5-mini-Q5_K_M.gguf",
   "artifact_sha256": "f60514ff680b9561318129f22dddd9da59878bda211c178662f3d50938f0c9d4",
@@ -215,8 +223,22 @@
       {
         "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
         "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80"
+      },
+      {
+        "path": "/srv/models/nex-n2.5-mini/mmproj-Nex-N2.5-mini-F16.gguf",
+        "sha256": "c128ba00f092ecc75a15fbc31174588faac26cbfbc3d0bff4b828f73f69604e4"
       }
     ]
   },
-  "enforce_input_limits": true
+  "enforce_input_limits": true,
+  "input_token_counter": "native_multimodal",
+  "max_images_per_request": 2,
+  "max_image_bytes": 262144,
+  "max_image_pixels": 4194304,
+  "image_mime_types": [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/bmp"
+  ]
 }

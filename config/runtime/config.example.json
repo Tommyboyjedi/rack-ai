@@ -480,7 +480,7 @@
     },
     {
       "tag": "dual-brain",
-      "version": "qwen3.8-flash-next-ud-iq4-xs-strata-477ac13c-131k-v1",
+      "version": "qwen3.8-flash-next-ud-iq4-xs-strata-477ac13c-131k-vision-v2",
       "model": "qwen3.8-flash-next-unsloth-ud-iq4_xs",
       "backend": "strata",
       "driver": "systemd",
@@ -488,7 +488,8 @@
       "evidence": [],
       "capabilities": [
         "reasoning",
-        "coding"
+        "coding",
+        "visual"
       ],
       "context_tokens": 131072,
       "max_input_tokens": 65536,
@@ -513,13 +514,13 @@
       "executable": "/usr/bin/python3.14",
       "executable_sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41",
       "args": [
-        "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata_server.py",
+        "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_server.py",
         "--runtime-root",
         "/home/tomp/strata-test",
         "--engine",
         "strata",
         "--config",
-        "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata-dual-brain.json",
+        "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata-dual-brain.json",
         "--port",
         "8098",
         "--host",
@@ -915,24 +916,24 @@
             "sha256": "d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833"
           },
           {
-            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata-dual-brain.json",
-            "sha256": "666483d784e53550a094caf6902e8fd5b189213be249501b062fa8b95390bed6"
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata-dual-brain.json",
+            "sha256": "3aae42ca64cf2b5eb7d5b3988ddd99c078c830e4279393eab883b08376b77db8"
           },
           {
-            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata_count.py",
-            "sha256": "c211735940106d23cd337dc8c6e2f010eb9224cabbd637192163908e32e2bef7"
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_count.py",
+            "sha256": "ae8f637bf21b726fb6268021b22f6b7f24eab2c7409298c5ce724a9f724c797d"
           },
           {
-            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata_engine.py",
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_engine.py",
             "sha256": "7a7fdc45b6c339c521239b65c2378603219bb0e824727df385d7b6479b3d3839"
           },
           {
-            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata_http.py",
-            "sha256": "7219e88aa8fc9cbac50c2965c8743d232c0d4e6bf07b9aa422b4e9e90c97baa3"
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_http.py",
+            "sha256": "ddac4ce422b461de801e4c4407af6c91a186d916d7f9a4e163644048ed65e3b5"
           },
           {
-            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/strata_server.py",
-            "sha256": "6ace0802bd2b1802c9b4f3bc413e270ee1a202f98df3cd9aa0b78091780a8302"
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_server.py",
+            "sha256": "a354d2be8d9a6b16df1597dd16ecab3dc8e472e6e5c3495ac46c2ddbb225d564"
           },
           {
             "path": "/usr/lib/python3.14/__future__.py",
@@ -1937,6 +1938,246 @@
           {
             "path": "/usr/lib/x86_64-linux-gnu/libnvidia-ml.so.595.99.02",
             "sha256": "770e9de75c14b07cce9718b214700b10e6d6866f7383101d6fe530352543b1de"
+          },
+          {
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_guard.py",
+            "sha256": "df1fc9da7a711f68007dee295daa03aa63e6e55436defe6cf0123218d6db64d5"
+          },
+          {
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_images.py",
+            "sha256": "07eade0c612cb54b5c1a647349f989e8ca7389dce9c52638899cec309d30d2c2"
+          },
+          {
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_status.py",
+            "sha256": "f81ca5b4c29016bdd86659ad7b8d5f41d405815a91ce3e8c54589209cb9e0b79"
+          },
+          {
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_vision.py",
+            "sha256": "b600bad4d8c144db267a43b1f23543eb85a5e20a49e22f1f847057bc062eec0b"
+          },
+          {
+            "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata_vision_count.py",
+            "sha256": "4d46f0786c35c45ff3a64f4e4a914c080d55b301f463a6483aca2abd54c8edae"
+          },
+          {
+            "path": "/home/tomp/strata-test-data/vision/rackai-strata-vision-count-v1",
+            "sha256": "dbce25b04d39535d75036b3ae1dc35db83f6fbc974b7dd46d398638a5b60ca74"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/BmpImagePlugin.py",
+            "sha256": "e0067eb268d1257de5a1d746652938a39107a06eb5e3fe415d31ee07b7a83b0f"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ExifTags.py",
+            "sha256": "61c257add6fffd463aa788e37f998b3920c57fe931db10faf9bd921eef36bdf3"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/GifImagePlugin.py",
+            "sha256": "fe956c85ac3a65ba9f01daec1acc3fc58b485dabcf25c90fe9b686039acae361"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/GimpGradientFile.py",
+            "sha256": "cd675b313f95b2c5f1d138340ce9b2b13a14818f9fc825c9bd89854a927578d8"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/GimpPaletteFile.py",
+            "sha256": "8481d0f4b279ae2d21cb57bfbd961e0fe9faed459d8440e529ce2f0f181a51d8"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/Image.py",
+            "sha256": "04af3f2db7ffdd61e829fa7aa8f5481d394a0a4129a8fd8aa5b13908928fcd6d"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageChops.py",
+            "sha256": "1848e5ca67280ed03938e788c505485fde810feb3a01785bed39922d89f6b548"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageColor.py",
+            "sha256": "20603d0b6ba67840ff1334b60af8fa2ac53456eb42f51b2d58860f7bcb83b159"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageFile.py",
+            "sha256": "983c4f35e0c51046d4c636998ec77000cd2da208870a03b205e104cd0b2df629"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageMath.py",
+            "sha256": "a820d28d35a6f94c7157b9b07204895288a8716f8bb156ad1244090b0415eab2"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageMode.py",
+            "sha256": "69a6551c088211a9ce0362b58cddc3956dcd3ca6bc0e6e672174d712bcf2166b"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageOps.py",
+            "sha256": "938f56b053a035ed06278d90d7cfb275807ab8ccf5e27db52c23595ccda97fff"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImagePalette.py",
+            "sha256": "667e20ff1710d4a0e57f494a72f3cd72320f7ae7d0c7e92d3b91dc777c8a771f"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/ImageSequence.py",
+            "sha256": "32986092befdb1c9980609a2f5982e8437d5c07be92d25f9b995470d996b9f42"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/JpegImagePlugin.py",
+            "sha256": "27ebe8f59a7a12e40277f8f84ce4637c300145e181fb5bd05ad894b89c391bb1"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/JpegPresets.py",
+            "sha256": "967a961e8e032c81c8ba571d1e9d0d27b0967b11edf13df0e759082a52df9080"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/PaletteFile.py",
+            "sha256": "b2e0dd00be953258d7c38a049f5be14ede03438bdba481c6777038a313a013ab"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/PngImagePlugin.py",
+            "sha256": "5911ebb3c8e58edf4fccace85ade20c3a062cc41dc55340bfb7b40f0bf1861c5"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/PpmImagePlugin.py",
+            "sha256": "564cfa67fba33d48550fdba3715c155a20314f568a2b0dba488f60a6317d6d58"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/TiffImagePlugin.py",
+            "sha256": "440b2a3a80b280d18cda3fc70d9fd206e2fa44e9897c9550f70b51395047b273"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/TiffTags.py",
+            "sha256": "766dea350424b9a2caab3513be794689403c2b7222cd038006f69cff08edb45d"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/WebPImagePlugin.py",
+            "sha256": "634360a326abfcd29ec5e05f6b84c3be6e5a783e7c4dd6ad46bd0eba182dae23"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/__init__.py",
+            "sha256": "7361b6ad3878589affe5956e4a4da24d71398b0891fd3a8c15e9362217b4ca01"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_binary.py",
+            "sha256": "a6e0e837223ccab3b0e91c77223c951d3b3fb9d69ac2ce52430ced719baf3975"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_deprecate.py",
+            "sha256": "2a1c8b566418555c30d2b3916d4db84dededf1f3adf46d8b78ce9f24659b974a"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_imaging.cpython-314-x86_64-linux-gnu.so",
+            "sha256": "fdf8144377b394125d936c9a5acea2985797977304d8ac974ccb75256f03475c"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_imagingmath.cpython-314-x86_64-linux-gnu.so",
+            "sha256": "eb27d24bd91fa968b2fcd962e92e29d772e1798417acd5e236b7d391c954bf34"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_util.py",
+            "sha256": "7f185676b2c04727363ec3203779bdfd4d5d637a1429b57b9a4a0771782879e0"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_version.py",
+            "sha256": "fe7d75d4019326aca24ae57d4ab190cd62ba1225b175051119cd61cd87e42b1d"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/PIL/_webp.cpython-314-x86_64-linux-gnu.so",
+            "sha256": "e82c41f2cd5f2f0389dca4d0159d8bd9a736970e8f6aaf37c4b7bcad74443328"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libXau-154567c4.so.6.0.0",
+            "sha256": "05484d24bf78cb8ed03169f1cb067204d829cb7af21de8820400d29d115e4320"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libjpeg-31e2ca52.so.62.4.0",
+            "sha256": "6d7c754529b30aff22efaaf88ba02061714591702c03f297f00ccb32ee6d9d9a"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/liblzma-2be87c3e.so.5.8.3",
+            "sha256": "535737fa00b49f62d14d6d9bce76482440df700b33d2666d636894f751dd25f1"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libopenjp2-b07f72ad.so.2.5.4",
+            "sha256": "185cb358047fd8b351c1d05b84a7e906c59d68d7f41222805f7042895ae266d8"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libsharpyuv-0066295b.so.0.1.2",
+            "sha256": "c2c5e89368b3bf9276a3cfea7e52ceb624db1c0c986c127169616219d5325807"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libtiff-fc87e79d.so.6.2.0",
+            "sha256": "522bafb6812978fc53db6c32e5c57786186b551fc5fd6a7c61b857ca01261d16"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libwebp-51b0b3f7.so.7.2.0",
+            "sha256": "7df9ad3680dd09d756511334791c8c896207863816eb2910840e5fc4ae10028a"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libwebpdemux-9fe2abcc.so.2.0.17",
+            "sha256": "a7ccaaf4388d8ec212ca85be17907e8e021b7da113f7f48c47722c1ebe602f8e"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libwebpmux-8fb1c9f6.so.3.1.2",
+            "sha256": "48ebf91c4d208901a48f851fb4c851d380fededd2a272104e3ca24c17499deba"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libxcb-ad31f5a3.so.1.1.0",
+            "sha256": "633fe8df9f1bfc0ef60de6a3495a599ec56e56216491b90b79604cfecfb88000"
+          },
+          {
+            "path": "/home/tomp/strata-test/.venv/lib/python3.14/site-packages/pillow.libs/libzstd-44be1190.so.1.5.7",
+            "sha256": "9501ab40e92a57491cadd2d02df46b596f24e74e6c0476b8500793f822fa0072"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2",
+            "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libbz2.so.1.0.4",
+            "sha256": "7138aeb748f73c150b1d34d67de69139a441910cd7b269076ba3c8b986dea9a7"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libexpat.so.1.11.2",
+            "sha256": "2e5f66e2784c2746775567ff9916f6e7503182a8f1f2deb8ca729dfc1463849f"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libffi.so.8.2.0",
+            "sha256": "1a0dc86f787f73e025a6e521056360afcbe70f2a82cd808132fefc2b4ee95daa"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libgomp.so.1.0.0",
+            "sha256": "645478cbe100d1465b9d45f7047bca3965358f4d399937e544f55ac7a924d5a3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/liblzma.so.5.8.3",
+            "sha256": "64550dc7a4dc9159d32c00d9e78ce86e0951d02b7b24827df97f090dae101a19"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
+            "sha256": "5bb0d21308f123b6ad46c6f35b42cedfcb8d6d439a53aa3dae04d880aaffdde3"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libuuid.so.1.3.0",
+            "sha256": "aef01d22b409ace7db97357b8b47332cd3e10c262ffa3c4014f3eeb44b968620"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
+            "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+          },
+          {
+            "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
+            "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80"
+          },
+          {
+            "path": "/home/tomp/strata-test-data/vision/mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+            "sha256": "b1a82259702816a5330d7bd7607cd9676b11780e79ff7348c21103ff3ce49bd0"
+          },
+          {
+            "path": "/home/tomp/strata-test-data/vision/build-manifest.json",
+            "sha256": "9ea257934c9cb3dc1259c4982f2dfa630a3f655901ae32da534c68693ae826ad"
+          },
+          {
+            "path": "/home/tomp/strata-test-data/vision/dependency-inventory.json",
+            "sha256": "502fcce707f5cb202e163af9486dd41b5aca51d0343fc678b4618c5bdec45565"
           }
         ]
       },
@@ -1947,11 +2188,15 @@
       "drain_seconds": 3600,
       "stop_seconds": 60,
       "inference_seconds": 3600,
-      "enforce_input_limits": true
+      "enforce_input_limits": true,
+      "input_token_counter": "native_multimodal",
+      "max_images_per_request": 2,
+      "max_image_bytes": 262144,
+      "max_image_pixels": 4194304
     },
     {
       "tag": "dual-worker",
-      "version": "nex-n2.5-mini-q5km-llama-5cb679dce989-128k-v1",
+      "version": "nex-n2.5-mini-q5km-llama-5cb679dce989-128k-vision-v3",
       "model": "nex-n2.5-mini",
       "backend": "llama_cpp",
       "driver": "systemd",
@@ -1959,7 +2204,8 @@
       "evidence": [],
       "capabilities": [
         "reasoning",
-        "coding"
+        "coding",
+        "visual"
       ],
       "context_tokens": 131072,
       "max_input_tokens": 65536,
@@ -2032,7 +2278,14 @@
         "--min-p",
         "0",
         "--reasoning-effort",
-        "high"
+        "high",
+        "--mmproj",
+        "/srv/models/nex-n2.5-mini/mmproj-Nex-N2.5-mini-F16.gguf",
+        "--no-mmproj-offload",
+        "--image-max-tokens",
+        "1024",
+        "--video-ffmpeg-dir",
+        "/dev/null"
       ],
       "artifact": "/srv/models/nex-n2.5-mini/Nex-N2.5-mini-Q5_K_M.gguf",
       "artifact_sha256": "f60514ff680b9561318129f22dddd9da59878bda211c178662f3d50938f0c9d4",
@@ -2166,10 +2419,24 @@
           {
             "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",
             "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80"
+          },
+          {
+            "path": "/srv/models/nex-n2.5-mini/mmproj-Nex-N2.5-mini-F16.gguf",
+            "sha256": "c128ba00f092ecc75a15fbc31174588faac26cbfbc3d0bff4b828f73f69604e4"
           }
         ]
       },
-      "enforce_input_limits": true
+      "enforce_input_limits": true,
+      "input_token_counter": "native_multimodal",
+      "max_images_per_request": 2,
+      "max_image_bytes": 262144,
+      "max_image_pixels": 4194304,
+      "image_mime_types": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/bmp"
+      ]
     }
   ],
   "limits": {

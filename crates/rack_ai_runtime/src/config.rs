@@ -18,6 +18,27 @@ pub enum Driver {
     Docker,
     Fixture,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum InputTokenCounter {
+    NativeMultimodal,
+}
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ImageMimeType {
+    #[serde(rename = "image/png")]
+    Png,
+    #[serde(rename = "image/jpeg")]
+    Jpeg,
+    #[serde(rename = "image/webp")]
+    Webp,
+    #[serde(rename = "image/gif")]
+    Gif,
+    #[serde(rename = "image/bmp")]
+    Bmp,
+}
+impl ImageMimeType {
+    pub const ALL: &'static [Self] = &[Self::Png, Self::Jpeg, Self::Webp, Self::Gif, Self::Bmp];
+}
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -43,6 +64,8 @@ pub struct Profile {
     pub streaming: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub input_token_preflight: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_token_counter: Option<InputTokenCounter>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enforce_input_limits: bool,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -51,6 +74,8 @@ pub struct Profile {
     pub max_image_bytes: u64,
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub max_image_pixels: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_mime_types: Option<Vec<ImageMimeType>>,
     pub max_output_tokens: u32,
     pub resources: Vec<String>,
     pub device_mib: BTreeMap<String, u64>,
@@ -155,6 +180,16 @@ fn is_zero_u64(value: &u64) -> bool {
 }
 
 impl Profile {
+    pub fn effective_image_mime_types(&self) -> &[ImageMimeType] {
+        self.image_mime_types
+            .as_deref()
+            .unwrap_or(ImageMimeType::ALL)
+    }
+
+    pub fn native_multimodal_counter(&self) -> bool {
+        self.input_token_counter == Some(InputTokenCounter::NativeMultimodal)
+    }
+
     pub fn effective_max_input_tokens(&self) -> u32 {
         if self.max_input_tokens == 0 {
             self.context_tokens.saturating_sub(self.max_output_tokens)

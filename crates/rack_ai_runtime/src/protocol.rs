@@ -163,14 +163,7 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
     }
 }
 
-#[derive(Clone, Copy, PartialEq)]
-enum ImageFormat {
-    Png,
-    Jpeg,
-    Webp,
-    Gif,
-    Bmp,
-}
+use crate::config::ImageMimeType as ImageFormat;
 
 struct ImagePolicy<'a> {
     protocol: Protocol,
@@ -271,6 +264,9 @@ fn validate_image_url(url: &str, policy: &mut ImagePolicy<'_>) -> Result<(), Str
     let Some(declared) = declared_image_format(mime_type) else {
         return Err("unsupported_image_type".into());
     };
+    if !d.profile.effective_image_mime_types().contains(&declared) {
+        return Err("unsupported_image_type".into());
+    }
     if base64_upper_bound(encoded) > d.profile.max_image_bytes {
         return Err("image_bytes_exceeded".into());
     }
@@ -284,6 +280,9 @@ fn validate_image_url(url: &str, policy: &mut ImagePolicy<'_>) -> Result<(), Str
         return Err("image_bytes_exceeded".into());
     }
     let actual = detected_image_format(&bytes).ok_or("invalid_image_payload")?;
+    if !d.profile.effective_image_mime_types().contains(&actual) {
+        return Err("unsupported_image_type".into());
+    }
     if actual != declared {
         return Err("image_format_mismatch".into());
     }

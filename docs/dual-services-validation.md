@@ -1,5 +1,7 @@
 # GPUrack dual-service validation
 
+This is the original text-only qualification. See [vision qualification](dual-services-vision-validation.md) for the later image-enabled profiles.
+
 Validated on GPUrack on 2026-10-17. Both private profiles are qualified and discoverable. Source profiles remain unqualified installation candidates, following RackAI conventions. No consumer application or existing service profile changed.
 
 Both services atomically own `gpu-4080-super` and `gpu-4060ti`, ordered by their existing physical UUID identities. The RTX2060 was not allocated. Context/input/output ceilings are **131072/65536/65536**; Strata additionally reserves 8 context tokens. Both have one parallel slot and retain high-reasoning defaults. Use the model-specific thinking-off recipes in [dual-services.md](dual-services.md).

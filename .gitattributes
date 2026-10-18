@@ -1,0 +1,2 @@
+# Unified-diff context lines retain their required leading space.
+runtime_adapters/strata_vision_count.patch whitespace=-blank-at-eol

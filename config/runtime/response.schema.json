@@ -809,6 +809,16 @@
               "type": "null"
             }
           ]
+        },
+        "context_reserve_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "input_preflight": {
+          "$ref": "#/$defs/inputPreflightDescription"
+        },
+        "runtime_features": {
+          "$ref": "#/$defs/runtimeFeatures"
         }
       },
       "required": [
@@ -2615,6 +2625,157 @@
         "diagnostic_complete",
         "timing"
       ]
+    },
+    "inputPreflightDescription": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "rack-ai/input-preflight/v1"
+        },
+        "protocol": {
+          "const": "chat_completions"
+        },
+        "authentication": {
+          "const": "owner_bearer_and_scoped_capability"
+        },
+        "request": {
+          "const": "same_chat_completions_body"
+        },
+        "generates_tokens": {
+          "const": false
+        },
+        "enforcement": {
+          "enum": [
+            "caller_must_check_fits",
+            "enforced_before_generation"
+          ]
+        },
+        "media": {
+          "enum": [
+            "unsupported",
+            "images"
+          ]
+        },
+        "counting": {
+          "const": "exact_native_context_positions"
+        },
+        "image_roles": {
+          "const": [
+            "user"
+          ]
+        },
+        "image_detail": {
+          "const": [
+            "auto"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^/scoped/[^/]+/[^/]+/v1/chat/completions/preflight$"
+        }
+      },
+      "required": [
+        "schema",
+        "protocol",
+        "authentication",
+        "request",
+        "generates_tokens",
+        "enforcement",
+        "media"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "media": {
+                "const": "images"
+              }
+            },
+            "required": [
+              "media"
+            ]
+          },
+          "then": {
+            "required": [
+              "counting",
+              "image_roles",
+              "image_detail"
+            ]
+          }
+        }
+      ]
+    },
+    "runtimeFeatures": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "protocols": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "chat_completions",
+              "responses",
+              "speech"
+            ]
+          }
+        },
+        "streaming": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "supported": {
+              "type": "boolean"
+            },
+            "delivery": {
+              "const": "buffered_sse"
+            }
+          },
+          "required": [
+            "supported",
+            "delivery"
+          ]
+        },
+        "tools": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "execution": {
+              "const": "client_owned"
+            }
+          },
+          "required": [
+            "execution"
+          ]
+        },
+        "structured_output": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "method": {
+              "const": "prompt_and_validate"
+            },
+            "constrained_decoding": {
+              "const": false
+            },
+            "with_tools": {
+              "const": false
+            }
+          },
+          "required": [
+            "method",
+            "constrained_decoding",
+            "with_tools"
+          ]
+        }
+      },
+      "required": [
+        "protocols",
+        "streaming",
+        "tools"
+      ]
     }
   },
   "type": "object",
@@ -2827,6 +2988,16 @@
                       "accepted_mime_types",
                       "accepted_url_schemes"
                     ]
+                  },
+                  "context_reserve_tokens": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "input_preflight": {
+                    "$ref": "#/$defs/inputPreflightDescription"
+                  },
+                  "runtime_features": {
+                    "$ref": "#/$defs/runtimeFeatures"
                   }
                 },
                 "required": [

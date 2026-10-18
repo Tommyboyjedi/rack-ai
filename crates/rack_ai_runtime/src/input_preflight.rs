@@ -2,6 +2,8 @@
 mod access;
 mod admission;
 mod backend;
+mod configuration;
+mod content;
 mod report;
 pub(crate) use admission::{RunningInput, admit_running};
 
@@ -16,6 +18,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+pub(crate) use configuration::validate as validate_profile;
 pub(crate) use report::Report;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -69,7 +72,7 @@ pub(crate) fn payload(demand: &Demand, mut body: Value) -> Result<Payload, Strin
     if payload.validate(demand)? == 0 {
         return Err("inference_limits".into());
     }
-    access::text_only(&payload)?;
+    content::validate(&payload, demand)?;
     Ok(payload)
 }
 
@@ -80,7 +83,7 @@ pub(crate) fn check(service: &Service, input: (&Demand, &Payload)) -> Result<Rep
     if requested == 0 {
         return Err("inference_limits".into());
     }
-    access::text_only(payload)?;
+    content::validate(payload, demand)?;
     let _guard = rack_ai_infrastructure::endpoint_fence::managed_read_guard(
         &service.config.authority_root,
         &demand.profile.endpoint,

@@ -92,6 +92,7 @@ impl ProfileValidation<'_> {
         let c = self.config;
         crate::speech::profile(p)?;
         crate::launch_config::validate(p)?;
+        crate::input_preflight::validate_profile(p)?;
         if p.backend == Backend::Chatterbox
             && !c.fixture_mode
             && c.devices
@@ -147,7 +148,10 @@ impl ProfileValidation<'_> {
         {
             return Err(format!("invalid runtime profile: {}", p.tag));
         }
-        if (p.max_images_per_request > 0 || p.max_image_bytes > 0 || p.max_image_pixels > 0)
+        if (p.max_images_per_request > 0
+            || p.max_image_bytes > 0
+            || p.max_image_pixels > 0
+            || p.image_mime_types.is_some())
             && (!p
                 .capabilities
                 .contains(&rack_ai_application::GenericCapability::Visual)
@@ -157,6 +161,11 @@ impl ProfileValidation<'_> {
                 || p.max_image_bytes > 768 * 1024
                 || p.max_image_pixels == 0
                 || p.max_image_pixels > 16 * 1024 * 1024
+                || p.image_mime_types.as_ref().is_some_and(|formats| {
+                    formats.is_empty()
+                        || formats.len() > crate::config::ImageMimeType::ALL.len()
+                        || !unique(formats.iter(), formats.len())
+                })
                 || image_request_bytes(p) > crate::api::MAX_HTTP_BODY_BYTES)
         {
             return Err(format!("invalid runtime profile: {}", p.tag));
@@ -194,5 +203,61 @@ impl ProfileValidation<'_> {
             return Err("llama_cpp requires a pinned artifact".into());
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod image_mime_tests {
+    use super::*;
+
+    fn config() -> Config {
+        let mut config: Config =
+            serde_json::from_str(include_str!("../../../config/runtime/config.example.json"))
+                .unwrap();
+        config.profiles.retain(|profile| profile.tag == "tiny-uncd");
+        config
+    }
+
+    #[test]
+    fn omitted_and_null_image_mimes_preserve_legacy_profile_bytes_and_hash() {
+        let profile = config().profiles.remove(0);
+        let original = serde_json::to_vec(&profile).unwrap();
+        let mut wire = serde_json::to_value(&profile).unwrap();
+        assert!(wire.get("image_mime_types").is_none());
+        assert_eq!(profile.effective_image_mime_types(), ImageMimeType::ALL);
+        wire["image_mime_types"] = serde_json::Value::Null;
+        let roundtrip: Profile = serde_json::from_value(wire).unwrap();
+        let encoded = serde_json::to_vec(&roundtrip).unwrap();
+        assert_eq!(encoded, original);
+        assert_eq!(digest(&encoded), digest(&original));
+    }
+
+    #[test]
+    fn image_mime_allowlist_requires_enabled_images_and_unique_supported_formats() {
+        let mut config = config();
+        assert!(validate(&config).is_ok());
+        config.profiles[0].image_mime_types = Some(vec![ImageMimeType::Png]);
+        assert!(validate(&config).is_err());
+        let profile = &mut config.profiles[0];
+        profile
+            .capabilities
+            .push(rack_ai_application::GenericCapability::Visual);
+        profile.max_images_per_request = 2;
+        profile.max_image_bytes = 262144;
+        profile.max_image_pixels = 4194304;
+        assert!(validate(&config).is_ok());
+        for formats in [vec![], vec![ImageMimeType::Png, ImageMimeType::Png]] {
+            config.profiles[0].image_mime_types = Some(formats);
+            assert!(validate(&config).is_err());
+        }
+        config.profiles[0].image_mime_types = Some(vec![ImageMimeType::Jpeg, ImageMimeType::Png]);
+        assert!(validate(&config).is_ok());
+        let mut wire = serde_json::to_value(&config.profiles[0]).unwrap();
+        assert_eq!(
+            wire["image_mime_types"],
+            serde_json::json!(["image/jpeg", "image/png"])
+        );
+        wire["image_mime_types"] = serde_json::json!(["image/avif"]);
+        assert!(serde_json::from_value::<Profile>(wire).is_err());
     }
 }

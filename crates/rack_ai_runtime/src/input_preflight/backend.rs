@@ -97,6 +97,10 @@ pub(super) fn count_bounded(service: &Service, input: Counting<'_>) -> Result<u3
         return Ok(tokens as u32);
     }
 
+    if demand.profile.native_multimodal_counter() {
+        return native_tokens(&counter.post(("/v1/chat/completions/input_tokens", &payload.body))?);
+    }
+
     let rendered = counter.post(("/apply-template", &payload.body))?;
     let prompt = rendered
         .get("prompt")
@@ -111,6 +115,18 @@ pub(super) fn count_bounded(service: &Service, input: Counting<'_>) -> Result<u3
         }),
     ))?;
     token_count(&tokenized)
+}
+
+fn native_tokens(value: &Value) -> Result<u32, String> {
+    if value.get("object").and_then(Value::as_str) != Some("response.input_tokens") {
+        return Err("input_preflight_invalid_tokens".into());
+    }
+    value
+        .get("input_tokens")
+        .and_then(Value::as_u64)
+        .and_then(|tokens| u32::try_from(tokens).ok())
+        .filter(|tokens| *tokens > 0)
+        .ok_or_else(|| "input_preflight_invalid_tokens".into())
 }
 
 fn token_count(value: &Value) -> Result<u32, String> {
@@ -131,6 +147,24 @@ fn token_count(value: &Value) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_count_requires_correct_object_and_positive_integer_count() {
+        assert_eq!(
+            native_tokens(&json!({"object":"response.input_tokens","input_tokens":123})).unwrap(),
+            123
+        );
+        for value in [
+            json!({}),
+            json!({"input_tokens":123}),
+            json!({"object":"wrong","input_tokens":123}),
+            json!({"object":"response.input_tokens","input_tokens":0}),
+            json!({"object":"response.input_tokens","input_tokens":true}),
+            json!({"object":"response.input_tokens","input_tokens":1.5}),
+            json!({"object":"response.input_tokens","input_tokens":4294967296u64}),
+        ] {
+            assert!(native_tokens(&value).is_err());
+        }
+    }
     #[test]
     fn counts_integer_tokens_without_measuring_utf8_bytes() {
         assert_eq!(token_count(&json!({"tokens":[1,2,3]})).unwrap(), 3);

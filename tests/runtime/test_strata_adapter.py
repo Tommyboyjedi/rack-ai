@@ -33,6 +33,7 @@ def counter_fixture():
         prepare_format=lambda form, messages: ([*messages, {"role": "system", "content": "schema"}], form),
         stop_strings=lambda request: None, check_request_sampling=lambda request: None,
         bias_api=SimpleNamespace(validate_request=lambda *args: None), CTX_SLACK=8,
+        images_of=lambda messages: [],
     )
     return ChatCounter(service, runtime), observed
 
@@ -84,6 +85,7 @@ def test_adapter_does_not_expose_mutable_upstream_controls(tmp_path):
         do_GET = lambda self: None
         do_POST = lambda self: None
         _json = lambda self, code, body: setattr(self, "response", (code, body))
+        _body = lambda self: b"{}"
     runtime = SimpleNamespace(make_handler=lambda service: Handler, EngineDied=RuntimeError)
     engine = running_engine()
     service = SimpleNamespace(engine=engine, shared={"temperature": 99}, shared_path="mutable")

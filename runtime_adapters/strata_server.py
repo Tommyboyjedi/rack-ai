@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 
 from strata_http import AdapterSurface
+from strata_vision import VisionConfiguration
 
 
 def configure(arguments):
@@ -26,16 +27,19 @@ def configure(arguments):
         raise ValueError("Strata must inherit the granted GPU UUID ordering")
     if config.get("parallel") != 1 or config.get("fit_max_tokens", False):
         raise ValueError("one parallel slot and rejecting context overflow are required")
-    prohibited = ("mcp_servers", "vision", "images", "before_load", "lazy_load", "idle_unload_s")
+    prohibited = ("mcp_servers", "images", "before_load", "lazy_load", "idle_unload_s")
     if any(config.get(key) for key in prohibited):
         raise ValueError("independent workers and lifecycle controls are not supported")
     if "--layer-split" not in config.get("args", []):
         raise ValueError("the prepared two-device layer split is required")
+    VisionConfiguration.validate(config)
     sys.path[:0] = [str(root), str(root / "tools")]
     runtime = importlib.import_module("serve.server")
     structured = importlib.import_module("serve.structured")
     if runtime.CTX_SLACK != 8 or structured.jsonschema_modules() is None:
         raise ValueError("qualified context accounting and JSON Schema validation are required")
+    if config.get("vision"):
+        VisionConfiguration.install(runtime)
     runtime.body_limit = lambda: 1024 * 1024
     AdapterSurface(runtime, config_path).install()
     sys.argv = [sys.argv[0], "--config", str(config_path), *remaining]

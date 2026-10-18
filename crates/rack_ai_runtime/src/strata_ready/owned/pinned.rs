@@ -4,11 +4,24 @@ use serde_json::Value;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 #[derive(Deserialize)]
-pub(super) struct EngineConfig {
+pub(crate) struct EngineConfig {
     pub exe: PathBuf,
     pub args: Vec<String>,
     pub cwd: PathBuf,
     pub env: BTreeMap<String, String>,
+    #[serde(default)]
+    pub vision: Option<VisionConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct VisionConfig {
+    pub exe: PathBuf,
+    pub mmproj: PathBuf,
+    pub model: PathBuf,
+    pub gpu: bool,
+    pub threads: u32,
+    pub max_tokens: u32,
 }
 
 impl EngineConfig {
@@ -41,6 +54,13 @@ impl EngineConfig {
         let config: Self = serde_json::from_slice(&bytes).map_err(|_| "strata_config_invalid")?;
         if !launch.file_pins.iter().any(|pin| pin.path == config.exe) {
             return Err("strata_engine_pin_missing".into());
+        }
+        if let Some(vision) = &config.vision {
+            for path in [&vision.exe, &vision.mmproj, &vision.model] {
+                if !path.is_absolute() || !launch.file_pins.iter().any(|pin| &pin.path == path) {
+                    return Err("strata_vision_pin_missing".into());
+                }
+            }
         }
         Ok(config)
     }
