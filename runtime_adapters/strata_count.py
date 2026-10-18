@@ -1,6 +1,9 @@
 """Count the installed Strata Chat Completions prompt without engine work."""
 from dataclasses import dataclass
 
+from strata_images import InputMessages
+from strata_vision_count import ImageTokenCounter
+
 
 @dataclass(frozen=True)
 class ChatCounter:
@@ -10,7 +13,7 @@ class ChatCounter:
     def count(self, request):
         if not isinstance(request, dict):
             raise ValueError("send a JSON object")
-        self._text_only(request)
+        InputMessages.validate(request)
         runtime, service = self.runtime, self.service
         request = service.with_shared(request, "openai")
         messages, tools, kwargs = runtime.openai_to_messages(request)
@@ -27,22 +30,5 @@ class ChatCounter:
         ids = service.encode_prompt(messages, tools, kwargs, store=False)
         if force and kwargs.get("enable_thinking", True) is False:
             ids = ids + service.tok.encode(force, parse_special=True)
-        return {"input_tokens": len(ids), "context_reserve_tokens": runtime.CTX_SLACK}
-
-    def _text_only(self, request):
-        if request.get("strata_mcp") or request.get("strata_prefix") is not None:
-            raise ValueError("only stateless text Chat Completions are supported")
-        messages = request.get("messages")
-        if not isinstance(messages, list) or not messages:
-            raise ValueError("messages must be a nonempty array")
-        for message in messages:
-            if not isinstance(message, dict):
-                raise ValueError("messages must contain objects")
-            content = message.get("content")
-            if content is None or isinstance(content, str):
-                continue
-            if not isinstance(content, list) or any(
-                not isinstance(part, dict) or part.get("type") != "text"
-                or not isinstance(part.get("text"), str) for part in content
-            ):
-                raise ValueError("only text message content is supported")
+        count = ImageTokenCounter(service, runtime).expanded_count(ids, messages)
+        return {"input_tokens": count, "context_reserve_tokens": runtime.CTX_SLACK}

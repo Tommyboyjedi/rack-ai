@@ -337,14 +337,41 @@ backend-supported string roles and string content. A valid assistant function-to
 turn may instead omit content or set it null. Tool calls need unique nonempty IDs,
 `type:"function"`, nonempty function names and string arguments; tool results need
 a matching nonempty `tool_call_id` and string content. RackAI does not execute or
-interpret tool arguments. Media and all content-part arrays, including text-only
-arrays, fail closed in preflight and in opted-in mandatory counting. Responses
-and unsupported template options are unqualified for this counter. Explicit schema
+interpret tool arguments. Profiles without an explicit native counter retain
+text-only counting: media and all content-part arrays fail closed. A profile may
+opt into `input_token_counter:"native_multimodal"`; this typed selector defaults
+to absent and is omitted from serialization, preserving older profile hashes and
+counter behavior. The selector requires qualified Chat Completions preflight;
+profiles that enforce image input limits must select the native counter.
+
+Native profiles admit standard text content parts and user-role `image_url` parts
+only after the normal protocol has validated the frozen image count, decoded-byte,
+format and pixel limits. Image URLs must be inline `data:` URLs; remote URLs and
+file paths are rejected. Use an `image_url` object with `url` and optional
+`detail:"auto"`; `low`/`high` and other detail controls are unqualified.
+An optional typed profile `image_mime_types` allowlist restricts qualified formats
+from PNG, JPEG, WebP, GIF and BMP. An explicit list must be nonempty, unique and
+paired with enabled image limits; an omitted list retains all five legacy formats
+and is omitted from serialization, preserving existing profile hashes. RackAI checks
+both declared MIME and detected file format against this list before counting or
+inference. Discovery and Ready members publish the same `image_input` limits and
+`accepted_mime_types`; callers must use that service's advertised subset. Their
+`input_preflight` descriptor advertises `media:"images"`, `image_roles:["user"]`,
+`image_detail:["auto"]` and `counting:"exact_native_context_positions"` only when
+image counting is explicitly qualified. The existing 1 MiB total HTTP request
+limit remains independent of token and per-image limits.
+
+Native `input_tokens` includes all formatted text, tool/schema framing and image
+context positions after the actual model processor's resizing and patch expansion,
+including images retained in message history. Counting is non-generating but may
+perform bounded image decoding and processor work. It uses the same full body
+that generation receives, and required admission repeats it before generation.
+Responses and unsupported template options remain unqualified. Explicit schema
 and thinking controls are forwarded intact.
 
-For qualified llama.cpp profiles, the service applies the actual server template
-to the complete admitted body, then tokenizes that prompt with both
-`add_special=true` and `parse_special=true`. Missing/malformed template or token
+For qualified llama.cpp profiles without the native selector, the service applies
+the actual server template to the complete admitted text body, then tokenizes
+that prompt with both `add_special=true` and `parse_special=true`. Missing/malformed template or token
 results never become a fit result. Required BOS/EOS and applicable role/tool
 framing are included. Do not count JSON transport keys or assume the schema's
 serialized bytes are prompt tokens. Tiny-uncd's tested Qwen template adds zero prompt
@@ -352,9 +379,19 @@ tokens for its JSON Schema constraint; other models/templates must be qualified
 for their actual rendering behavior. Clock/environment-dependent templates are
 unsupported unless their rendering/count consistency is separately established.
 
+For native llama.cpp counting, RackAI posts the whole admitted body to the owned
+server's `/v1/chat/completions/input_tokens` endpoint. The installed server uses
+the actual OpenAI parser and native multimodal placeholder tokenization, including
+projected image positions, without vision encoding or token generation. A response
+must have `object:"response.input_tokens"` and a positive integer `input_tokens`;
+unavailable, malformed or incomplete counts never become admission success.
+The text-only template/tokenizer path is not an image-token estimate or fallback.
+
 For qualified Strata profiles, counting reuses the installed OpenAI request
 parser, format preparation, tokenizer and forced-tool prefix logic without
-engine generation. Schema instructions therefore contribute prompt tokens.
+engine generation. Its native image mode expands the template's actual image
+placeholders using the owned CPU vision helper's non-encoding `COUNT` protocol
+and the same native processor as image inference. Schema instructions therefore contribute prompt tokens.
 The adapter verifies its context-reserve policy agrees with the frozen profile.
 Strata's structured output uses one prompt-and-validate generation, without
 constrained decoding, and rejects `response_format` combined with tools. Read

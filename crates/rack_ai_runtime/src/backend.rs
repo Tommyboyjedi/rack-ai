@@ -48,6 +48,9 @@ impl BackendAccess<'_> {
         if d.profile.launch.is_some() {
             crate::launch_identity::devices(self.config, d)?;
         }
+        if d.profile.backend == Backend::LlamaCpp && d.profile.native_multimodal_counter() {
+            crate::llama_vision_ready::ready(d)?;
+        }
         process::endpoint_owned(process, &d.profile)
     }
 }

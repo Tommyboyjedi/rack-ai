@@ -85,3 +85,5 @@ mod integrity;
 mod launch_config;
 mod launch_identity;
 mod strata_ready;
+
+mod llama_vision_ready;

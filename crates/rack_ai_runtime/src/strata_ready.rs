@@ -1,5 +1,6 @@
 //! Verify the prepared Strata server, its actual engine and loaded context.
 mod owned;
+mod vision;
 use crate::{
     config::{Config, Driver},
     process,
@@ -40,6 +41,18 @@ pub fn ready(config: &Config, demand: &Demand) -> Result<(), String> {
         crate::launch_identity::devices(config, demand)?;
         Some(owned::verify(demand, &status)?)
     };
+    let encoder = if demand.profile.driver == Driver::Fixture {
+        if demand.profile.max_images_per_request > 0
+            && (status["vision"]["enabled"] != true
+                || status["vision"]["loaded"] != true
+                || status["vision"]["protocol"] != "rackai-count-v1")
+        {
+            return Err("strata_vision_readiness_mismatch".into());
+        }
+        None
+    } else {
+        vision::verify(demand, &status)?
+    };
     let health = read(&client, (&demand.profile.endpoint, "/health"))?;
     if health["status"] != "ok"
         || health["service"] != "strata"
@@ -50,7 +63,7 @@ pub fn ready(config: &Config, demand: &Demand) -> Result<(), String> {
         return Err("strata_loaded_model_context_mismatch".into());
     }
     process::endpoint_owned(parent, &demand.profile)?;
-    if let Some(child) = child {
+    for child in child.into_iter().chain(encoder) {
         let current = process::capture(child.pid, &child.activation)?;
         if current.boot != child.boot || current.start != child.start {
             return Err("strata_engine_generation_changed".into());

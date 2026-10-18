@@ -17,6 +17,7 @@ private deployment qualification follows managed functional validation.
 | Context / input / output ceilings | 131072 / 65536 / 65536 tokens | 131072 / 65536 / 65536 tokens |
 | Additional context reserve | 8 tokens, matching installed Strata admission | 0 |
 | Parallel slots | 1 | 1 |
+| Vision encoder placement / maximum image tokens | CPU / 1024 | CPU / 1024 |
 | Per-GPU memory allowance | 15800 MiB on each card | 15800 MiB on each card |
 | Host-memory allowance | 55000 MiB | 32768 MiB |
 | CPU quota / affinity | 3200% / existing runtime placement | 1600% / CPUs 0-15 |
@@ -61,14 +62,44 @@ Asset changes require a new qualified profile/version. See profile JSON for
 exact paths/hashes. Original models, experimental runtimes and consumer code
 remain intact.
 
+## Image input
+
+Each request accepts at most **2 images**, **262144 decoded bytes per image** and
+**4194304 pixels per image**, within the existing 1 MiB HTTP body bound. Supply
+OpenAI-style `image_url` parts with a base64 `data:` URL; remote HTTP/file URLs
+are rejected. Read current accepted MIME types and limits from discovery and the
+reserved member's `image_input` metadata. Do not send image paths or expect the
+service to fetch a URL.
+
+```json
+{"role":"user","content":[
+  {"type":"text","text":"Describe the clothing and location visible here."},
+  {"type":"image_url","image_url":{"url":"data:image/png;base64,<encoded image>"}}
+]}
+```
+
+Image interpretation is part of the model's normal Chat Completions output.
+Explicit JSON Schema, thinking and output-token controls remain available.
+Images and their template delimiters consume input/context capacity. Both new
+profiles select `input_token_counter:"native_multimodal"`; counting uses the
+same model-native image preprocessing and expanded template as generation.
+RackAI enforces the resulting count before generation, without trimming images
+or conversation history. A counting failure rejects the invocation.
+
+The Nex projector runs on the CPU; Strata's CPU vision helper inherits the owned
+systemd cgroup and has GPU access disabled. Both preserve the granted GPU UUID
+pair, existing context limits and finite host-memory allowances. Projectors,
+helper binaries, adapter/config files and dependencies are pinned before startup.
+Activation performs no download or build. The original text serving installation
+is retained for rollback.
+
 ## Chat, tools, structured output and reasoning
 
-Both publish text reasoning/coding and Chat Completions. They advertise no image,
-audio, Responses or autonomous tools. Supported request content is a string per
-message, with null/omitted content allowed only for a valid assistant function-tool
-turn. Even text-only content-part arrays are rejected by the mandatory counter;
-use string content. Use the member's returned `model` in Chat
-Completions; the logical service tag is a separate identity. System/user/assistant/
+Both publish reasoning, coding and visual interpretation through Chat Completions.
+They accept bounded inline image content parts alongside text, using the same
+owned scoped gateway and reservation lifecycle. Use the member's returned `model`
+in Chat Completions; the logical service tag is a separate identity.
+System/user/assistant/
 tool messages, tool definitions/choices, IDs, argument strings, results and
 reasoning history pass through the scoped gateway. Assistant function-tool turns
 may omit `content` or set it null. Tool results carry `role:"tool"`, matching
@@ -272,39 +303,41 @@ unqualified.
 
 The receiver is user `rack-ai-runtime.service`, configured at
 `/srv/rack-ai/deployments/idle-runtime/config.json`, with immutable release binaries
-and additive drop-in `76-dual-services.conf`. Private nginx ingress is separate.
+and additive drop-in `77-dual-vision.conf`. Private nginx ingress is separate.
 The deployment manifest is
-`/srv/rack-ai/evidence/dual-services-20261017T213615Z/deployment.json`.
-Its candidate binary is
-`/srv/rack-ai/deployments/idle-runtime/releases/dual-services-e116db02e136e1a2/rack_ai_runtime`
-(SHA-256 `e116db02e136e1a290ec808b29b3b8a66e59798be1938da769a6ac4b440a6a60c`).
+`/srv/rack-ai/evidence/dual-vision-20261018T015349Z/deployment.json`.
+Its serving binary is recorded with its exact SHA256 in that manifest.
+The final vision release is
+`/srv/rack-ai/deployments/idle-runtime/releases/dual-vision-07545249935b9c96/rack_ai_runtime`.
 Live qualification and final publication identities belong in the adjacent evidence
 report; the source document alone is not proof of a completed deployment.
 
-For rollback, coordinate a quiet acquisition window, release/drain trial owners
-through normal controls and verify all receiver-managed claims/processes are absent.
-There is no hot per-profile disable operation; do not restart a busy receiver or
-stop unrelated workloads to obtain the window. Then run on gpurack:
+For a vision-configuration rollback, coordinate a quiet acquisition window,
+release/drain trial owners through normal controls, and prove all receiver-managed
+claims/processes absent. Restore the pre-vision administrator config while keeping
+the new parser-capable binary and its drop-in:
 
 ```bash
 set -euo pipefail
-evidence=/srv/rack-ai/evidence/dual-services-20261017T213615Z
+evidence=/srv/rack-ai/evidence/dual-vision-20261018T015349Z
 live=/srv/rack-ai/deployments/idle-runtime
-previous=$live/releases/input-preflight-52e34ade59a2d65e/rack_ai_runtime
-dropin=/home/tomp/.config/systemd/user/rack-ai-runtime.service.d/76-dual-services.conf
+current=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["release"])' "$evidence/deployment.json")
 install -m 0600 "$evidence/config.before.json" "$live/config.rollback.json"
-"$previous" validate "$live/config.rollback.json"
-test ! -e "$evidence/76-dual-services.conf.disabled"
-mv -- "$dropin" "$evidence/76-dual-services.conf.disabled"
+"$current" validate "$live/config.rollback.json"
 mv -- "$live/config.rollback.json" "$live/config.json"
-systemctl --user daemon-reload
 systemctl --user restart rack-ai-runtime.service
 systemctl --user is-active rack-ai-runtime.service
 ```
 
-This restores the preceding config and the 75-input-preflight drop-in's binary, retaining
-authority state, credentials, models and adapter files. Verify authenticated discovery
-and preserved existing profiles afterward. Restore no historical authority snapshot.
+This restores the earlier text profiles and credentials, retaining current
+parser compatibility, authority history, model files and old adapter paths.
+Do not disable the new drop-in to run an older binary: older strict profile
+parsers cannot read durable records containing `input_token_counter` or
+`image_mime_types`, even after
+those reservations are released. A code rollback needs a forward rollback build
+that retains support for both persisted fields. Never restore an old authority
+snapshot or rewrite frozen reservation evidence. Verify ordinary authenticated
+discovery and the restored profiles after the configuration rollback.
 
 To disable/remove one service, first coordinate its acquiring clients to pause,
 drain/cancel/release owned work and inspect verified terminal closure. Prepare a

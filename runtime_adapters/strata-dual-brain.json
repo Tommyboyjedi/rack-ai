@@ -26,12 +26,13 @@
     "--resident-budget-gib",
     "40",
     "--layer-split",
-    "auto"
+    "auto",
+    "--vision"
   ],
   "cwd": "/home/tomp/strata-test",
   "tokenizer": "/home/tomp/strata-test-data/packs/unsloth-ud-iq4_xs/tokenizer",
   "model_name": "qwen3.8-flash-next-unsloth-ud-iq4_xs",
-  "log": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain/engine.log",
+  "log": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/engine.log",
   "lib_dirs": [
     "/usr/bin",
     "/usr/lib64"
@@ -50,5 +51,13 @@
   "reasoning_effort": "high",
   "aliases": [
     "dual-brain"
-  ]
+  ],
+  "vision": {
+    "exe": "/home/tomp/strata-test-data/vision/rackai-strata-vision-count-v1",
+    "mmproj": "/home/tomp/strata-test-data/vision/mmproj-Qwen3.8-Flash-Next-BF16.gguf",
+    "model": "/srv/models/qwen3.8-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
+    "gpu": false,
+    "threads": 16,
+    "max_tokens": 1024
+  }
 }

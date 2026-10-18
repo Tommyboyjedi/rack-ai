@@ -1,6 +1,7 @@
 """Two-card service proofs against private CPU fixtures, never real model evidence."""
 from contextlib import contextmanager
 import copy
+import base64
 import hashlib
 import json
 import os
@@ -165,7 +166,10 @@ class DualProfileRegistration(unittest.TestCase):
                     profile["max_output_tokens"]), (131072, 65536, 65536))
                 self.assertEqual(profile["protocols"], ["chat_completions"])
                 self.assertTrue(profile["enforce_input_limits"])
-                self.assertNotIn("visual", profile["capabilities"])
+                self.assertIn("visual", profile["capabilities"])
+                self.assertEqual(profile["input_token_counter"], "native_multimodal")
+                self.assertEqual((profile["max_images_per_request"], profile["max_image_bytes"],
+                    profile["max_image_pixels"]), (2, 262144, 4194304))
                 self.assertGreater(profile["inference_seconds"], 120)
                 self.assertNotIn("CUDA_VISIBLE_DEVICES", profile["launch"].get("environment", {}))
                 self.assertNotIn("taskset", profile["executable"])
@@ -198,7 +202,8 @@ class DualProfileRegistration(unittest.TestCase):
                           for event in records(rack)):
                 self.assertLess(time.monotonic(), deadline)
                 time.sleep(.01)
-            for controls in ({"loaded": False}, {"model": "dual-brain"}, {"context": 4096}):
+            for controls in ({"loaded": False}, {"model": "dual-brain"}, {"context": 4096},
+                             {"vision_loaded": False}, {"vision_protocol": "wrong"}):
                 rack.controls("dual-brain", **controls)
                 time.sleep(.2)
                 observed = rack.call("cb", "inspect_reservation", reservation_id=owner["id"])
@@ -279,7 +284,7 @@ class DualThinkingControls(unittest.TestCase):
             self.assertEqual(status, 200, answer)
             self.assertEqual(body, original)
             calls = [json.loads(line) for line in Path(str(rack.events) + ".requests").read_text().splitlines()]
-            rendered = [call["body"] for call in calls if call["path"] == "/apply-template"]
+            rendered = [call["body"] for call in calls if call["path"] == "/v1/chat/completions/input_tokens"]
             generated = [call["body"] for call in calls if call["path"] == "/v1/chat/completions"]
             self.assertEqual(rendered, [original, original])
             self.assertEqual(generated, [original])
@@ -336,7 +341,7 @@ class DualCounterAdmission(unittest.TestCase):
                 self.assertFalse(report["fits"])
                 self.assertEqual(report["reason"], "output_limit_exceeded")
                 forwarded = [json.loads(line) for line in Path(str(rack.events) + ".requests").read_text().splitlines()]
-                expected_path = "/rackai/input-tokens" if tag == "dual-brain" else "/apply-template"
+                expected_path = "/rackai/input-tokens" if tag == "dual-brain" else "/v1/chat/completions/input_tokens"
                 original = next(value["body"] for value in reversed(forwarded) if value["path"] == expected_path)
                 self.assertEqual(original, body)
                 self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 409)
@@ -542,6 +547,226 @@ class DualLaunchProvenance(unittest.TestCase):
             self.assertIn("hash_mismatch", json.dumps(current))
             self.assertFalse(any(event["kind"] == "start" and event.get("tag") == "dual-worker"
                                  for event in records(rack)))
+
+
+# Lossless 1x1 red image generated once with Pillow; tests need no image codec.
+WEBP_FIXTURE = base64.b64decode("UklGRhwAAABXRUJQVlA4TA8AAAAvAAAAAAcQ/Y/+ByKi/wEA")
+WORKER_MIMES = ["image/png", "image/jpeg", "image/gif", "image/bmp"]
+LEGACY_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"]
+PNG_FIXTURE = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=")
+
+
+def image_body(member):
+    url = "data:image/png;base64," + base64.b64encode(PNG_FIXTURE).decode()
+    body = payload(member, messages=[dict(role="system", content="Describe only the supplied synthetic image."),
+        dict(role="user", content=[dict(type="text", text="What is visible?"),
+            dict(type="image_url", image_url=dict(url=url, detail="auto"))])],
+        response_format={"type": "json_object"}, chat_template_kwargs={"enable_thinking": False})
+    if member["model"] == "nex-n2.5-mini":
+        body["chat_template_kwargs"]["reasoning_effort"] = "none"
+        del body["reasoning_effort"]
+    return body
+
+
+def counted_requests(rack):
+    path = Path(str(rack.events) + ".requests")
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+class DualNativeImageAccounting(unittest.TestCase):
+    def test_full_image_body_is_counted_and_forwarded_with_truthful_capability_and_binding(self):
+        with fixture() as (_, rack):
+            published = {entry["tag"]: entry for entry in rack.call("cb", "discover")["tags"]}
+            for tag in TAGS:
+                self.assertIn("visual", published[tag]["capabilities"])
+                self.assertEqual(published[tag]["image_input"]["max_images_per_request"], 2)
+                self.assertEqual(published[tag]["input_preflight"]["media"], "images")
+                self.assertEqual(published[tag]["input_preflight"]["image_roles"], ["user"])
+                owner = wait_reservation(rack, reserve(rack, tag))
+                member = owner["services"][tag]
+                body = image_body(member)
+                original = copy.deepcopy(body)
+                rack.controls(tag, token_count=6000)
+                first = len(counted_requests(rack))
+                status, report = request(rack, (member, "/chat/completions/preflight", body))
+                self.assertEqual(status, 200, report)
+                self.assertTrue(report["fits"])
+                self.assertEqual(report["input_tokens"], 6000)
+                self.assertEqual(report["profile_hash"], member["profile_hash"])
+                self.assertFalse(any(event["kind"] == "dispatch" and event.get("tag") == tag for event in records(rack)))
+                self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 200)
+                calls = counted_requests(rack)[first:]
+                native = "/rackai/input-tokens" if tag == "dual-brain" else "/v1/chat/completions/input_tokens"
+                self.assertEqual([call["path"] for call in calls], [native, native, "/v1/chat/completions"])
+                self.assertTrue(all(call["body"] == original for call in calls))
+                self.assertEqual(body, original)
+                release(rack, owner)
+                before = len(counted_requests(rack))
+                self.assertEqual(request(rack, (member, "/chat/completions/preflight", body))[0], 409)
+                self.assertEqual(len(counted_requests(rack)), before)
+
+    def test_images_preserve_input_output_and_total_context_ceilings_before_generation(self):
+        with fixture() as (_, rack):
+            for tag in TAGS:
+                owner = wait_reservation(rack, reserve(rack, tag))
+                member = owner["services"][tag]
+                cases = [(65537, 32, "input_limit_exceeded"), (10, 65537, "output_limit_exceeded")]
+                if tag == "dual-brain":
+                    cases.append((65529, 65536, "context_limit_exceeded"))
+                for tokens, output, reason in cases:
+                    body = image_body(member)
+                    body["max_tokens"] = output
+                    rack.controls(tag, token_count=tokens)
+                    status, report = request(rack, (member, "/chat/completions/preflight", body))
+                    self.assertEqual(status, 200, report)
+                    self.assertEqual((report["fits"], report["reason"]), (False, reason))
+                    self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 409)
+                self.assertFalse(any(event["kind"] == "dispatch" and event.get("tag") == tag for event in records(rack)))
+                release(rack, owner)
+
+
+class DualNativeImageFailures(unittest.TestCase):
+    def test_native_counter_failure_or_missing_count_never_generates(self):
+        with fixture() as (_, rack):
+            for tag in TAGS:
+                owner = wait_reservation(rack, reserve(rack, tag))
+                member = owner["services"][tag]
+                body = image_body(member)
+                for controls in ({"counter_http_error": True}, {"count_reply": {}},
+                                 {"token_count": True}, {"token_count": 0}):
+                    rack.controls(tag, **controls)
+                    status, rejected = request(rack, (member, "/chat/completions/preflight", body))
+                    self.assertEqual(status, 502, rejected)
+                    status, failed = request(rack, (member, "/chat/completions", body))
+                    self.assertEqual(status, 409, failed)
+                    self.assertTrue(failed["error"].startswith("invocation_Failed:"), failed)
+                self.assertFalse(any(event["kind"] == "dispatch" and event.get("tag") == tag for event in records(rack)))
+                rack.controls(tag)
+                self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 200)
+                release(rack, owner)
+
+    def test_unqualified_image_controls_and_invalid_payloads_fail_before_counting(self):
+        with fixture() as (_, rack):
+            for tag in TAGS:
+                owner = wait_reservation(rack, reserve(rack, tag))
+                member = owner["services"][tag]
+                base = image_body(member)
+                cases = []
+                detail = copy.deepcopy(base)
+                detail["messages"][-1]["content"][-1]["image_url"]["detail"] = "high"
+                cases.append(detail)
+                wrong_role = copy.deepcopy(base)
+                wrong_role["messages"][-1]["role"] = "assistant"
+                cases.append(wrong_role)
+                shorthand = copy.deepcopy(base)
+                shorthand["messages"][-1]["content"][-1]["image_url"] = shorthand["messages"][-1]["content"][-1]["image_url"]["url"]
+                cases.append(shorthand)
+                remote = copy.deepcopy(base)
+                remote["messages"][-1]["content"][-1]["image_url"]["url"] = "https://example.test/image.png"
+                cases.append(remote)
+                malformed = copy.deepcopy(base)
+                malformed["messages"][-1]["content"][-1]["image_url"]["url"] = "data:image/png;base64,%%%"
+                cases.append(malformed)
+                excessive = copy.deepcopy(base)
+                excessive["messages"][-1]["content"] *= 3
+                cases.append(excessive)
+                oversized = copy.deepcopy(base)
+                oversized["messages"][-1]["content"][-1]["image_url"]["url"] = "data:image/png;base64," + base64.b64encode(PNG_FIXTURE + b"x" * 262144).decode()
+                cases.append(oversized)
+                before = len(counted_requests(rack))
+                for body in cases:
+                    status, rejected = request(rack, (member, "/chat/completions/preflight", body))
+                    self.assertEqual(status, 400, rejected)
+                self.assertEqual(len(counted_requests(rack)), before)
+                self.assertFalse(any(event["kind"] == "dispatch" and event.get("tag") == tag for event in records(rack)))
+                release(rack, owner)
+
+
+
+class DualImageMimePolicy(unittest.TestCase):
+    def test_qualified_subset_is_published_and_webp_rejected_before_native_count(self):
+        with fixture({"dual-worker": {"image_mime_types": WORKER_MIMES}}) as (_, rack):
+            published = {entry["tag"]: entry for entry in rack.call("cb", "discover")["tags"]}
+            self.assertEqual(published["dual-worker"]["image_input"]["accepted_mime_types"], WORKER_MIMES)
+            self.assertEqual(published["dual-brain"]["image_input"]["accepted_mime_types"], LEGACY_MIMES)
+            owner = wait_reservation(rack, reserve(rack, "dual-worker"))
+            member = owner["services"]["dual-worker"]
+            self.assertEqual(member["image_input"]["accepted_mime_types"], WORKER_MIMES)
+            before = len(counted_requests(rack))
+            for declared in ("image/webp", "image/png"):
+                body = image_body(member)
+                part = body["messages"][-1]["content"][-1]
+                part["image_url"]["url"] = "data:" + declared + ";base64," + base64.b64encode(WEBP_FIXTURE).decode()
+                original = copy.deepcopy(body)
+                for suffix, expected_status in (("/chat/completions/preflight", 400), ("/chat/completions", 409)):
+                    status, rejected = request(rack, (member, suffix, body))
+                    self.assertEqual(status, expected_status, rejected)
+                    self.assertEqual(rejected["error"], "unsupported_image_type")
+                self.assertEqual(body, original)
+            self.assertEqual(len(counted_requests(rack)), before)
+            self.assertFalse(any(event["kind"] == "dispatch" for event in records(rack)))
+            body = image_body(member)
+            self.assertEqual(request(rack, (member, "/chat/completions/preflight", body))[0], 200)
+            self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 200)
+            calls = counted_requests(rack)[before:]
+            self.assertEqual([call["path"] for call in calls], ["/v1/chat/completions/input_tokens",
+                "/v1/chat/completions/input_tokens", "/v1/chat/completions"])
+            self.assertTrue(all(call["body"] == body for call in calls))
+            release(rack, owner)
+
+    def test_omitted_allowlist_retains_all_legacy_formats_and_webp_forwarding(self):
+        with fixture({"dual-worker": {"image_mime_types": None}}) as (_, rack):
+            published = next(entry for entry in rack.call("cb", "discover")["tags"] if entry["tag"] == "dual-worker")
+            self.assertEqual(published["image_input"]["accepted_mime_types"], LEGACY_MIMES)
+            owner = wait_reservation(rack, reserve(rack, "dual-worker"))
+            member = owner["services"]["dual-worker"]
+            self.assertEqual(member["image_input"]["accepted_mime_types"], LEGACY_MIMES)
+            body = image_body(member)
+            body["messages"][-1]["content"][-1]["image_url"]["url"] = "data:image/webp;base64," + base64.b64encode(WEBP_FIXTURE).decode()
+            self.assertEqual(request(rack, (member, "/chat/completions/preflight", body))[0], 200)
+            self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 200)
+            self.assertTrue(all(call["body"] == body for call in counted_requests(rack)))
+            release(rack, owner)
+
+
+class DualNativeMetadataContract(unittest.TestCase):
+    def test_schema_accepts_native_discovery_preparing_ready_and_held_reservations(self):
+        import jsonschema
+        schema = json.loads((ROOT / "config/runtime/response.schema.json").read_text())
+        def validate(result):
+            jsonschema.validate(dict(schema=VERSION, result=result), schema)
+        with fixture() as (_, rack):
+            validate(rack.call("cb", "discover"))
+            for tag in TAGS:
+                owner = reserve(rack, tag)
+                validate(owner)
+                ready = wait_reservation(rack, owner)
+                validate(ready)
+                generation = ready["services"][tag]["generation"]
+                time.sleep(.15)
+                held = rack.call("cb", "inspect_reservation", reservation_id=owner["id"])
+                validate(held)
+                self.assertEqual(held["state"], "ready")
+                self.assertEqual(held["services"][tag]["generation"], generation)
+                validate(release(rack, owner))
+
+    def test_schema_rejects_unknown_metadata_and_unqualified_media_promises(self):
+        import jsonschema
+        schema = json.loads((ROOT / "config/runtime/response.schema.json").read_text())
+        with fixture() as (_, rack):
+            discovery = rack.call("cb", "discover")
+            for changes in ({"unexpected": True}, {"media": "video"},
+                            {"counting": "estimated"}, {"image_roles": ["assistant"]}):
+                candidate = copy.deepcopy(discovery)
+                profile = next(entry for entry in candidate["tags"] if entry["tag"] == "dual-worker")
+                profile["input_preflight"].update(changes)
+                with self.assertRaises(jsonschema.ValidationError):
+                    jsonschema.validate(dict(schema=VERSION, result=candidate), schema)
+            candidate = copy.deepcopy(discovery)
+            profile = next(entry for entry in candidate["tags"] if entry["tag"] == "dual-worker")
+            profile["runtime_features"]["unexpected_scheduler"] = True
+            with self.assertRaises(jsonschema.ValidationError):
+                jsonschema.validate(dict(schema=VERSION, result=candidate), schema)
 
 
 if __name__ == "__main__":

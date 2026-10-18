@@ -1,5 +1,5 @@
 //! Enforce frozen input limits before a durably accepted invocation generates.
-use super::{Report, access, backend, payload};
+use super::{Report, backend, content, payload};
 use crate::{
     service::Service,
     types::{Demand, Invocation},
@@ -23,7 +23,7 @@ fn admit(service: &Service, input: RunningInput<'_>) -> Result<Duration, String>
     // Dispatch froze ownership/generation and marked this call Running.
     // A priority drain may close new access while this accepted call completes.
     let payload = payload(demand, input.body.clone())?;
-    access::text_only(&payload)?;
+    content::validate(&payload, demand)?;
     let requested = payload.validate(demand)?;
     let _guard = rack_ai_infrastructure::endpoint_fence::managed_read_guard(
         &service.config.authority_root,

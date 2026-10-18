@@ -1,0 +1,44 @@
+--- a/strata_vision.cpp
++++ b/strata_vision.cpp
+@@ -180,7 +180,7 @@
+         mtmd_input_chunks_free(chunks);
+         if (bm) mtmd_bitmap_free(bm);
+     }
+-    std::printf("READY %d\n", n_embd);
++    std::printf("READY %d RACKAI_COUNT_V1\n", n_embd);
+     std::fflush(stdout);
+ 
+     std::string line;
+@@ -188,6 +188,8 @@
+         while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) line.pop_back();
+         if (line == "QUIT") break;
+         std::string img, out;
++        const bool count_only = line.rfind("COUNT ", 0) == 0;
++        if (count_only) line = "ENC " + line.substr(6) + " unused";
+         if (!parse_enc(line, img, out)) { std::printf("ERR expected: ENC <image> <output>\n"); std::fflush(stdout); continue; }
+         const auto t0 = std::chrono::steady_clock::now();
+         mtmd_helper_bitmap_wrapper bw = mtmd_helper_bitmap_init_from_file(ctx, img.c_str(), false,
+@@ -205,7 +207,7 @@
+             if (mtmd_input_chunk_get_type(ch) == MTMD_INPUT_CHUNK_TYPE_IMAGE) ichunk = ch;
+         }
+         if (err.empty() && !ichunk) err = "no image chunk";
+-        if (err.empty() && mtmd_encode_chunk(ctx, ichunk) != 0) err = "the vision encoder failed";
++        if (err.empty() && !count_only && mtmd_encode_chunk(ctx, ichunk) != 0) err = "the vision encoder failed";
+         if (err.empty()) {
+             const mtmd_image_tokens* it = mtmd_input_chunk_get_tokens_image(ichunk);
+             const int n = (int) mtmd_input_chunk_get_n_tokens(ichunk);
+@@ -213,6 +215,14 @@
+             const mtmd_decoder_pos last = mtmd_image_tokens_get_decoder_pos(it, 0, (size_t) n - 1);
+             const int nx = (int) last.x + 1, ny = (int) last.y + 1;
+             if (nx * ny != n) err = "the image grid is not rectangular (" + std::to_string(n) + " tokens)";
++            if (count_only && err.empty()) {
++                std::printf("COUNT %d %d %d\n", n, nx, ny);
++                std::fflush(stdout);
++                mtmd_input_chunks_free(chunks);
++                mtmd_bitmap_free(bw.bitmap);
++                if (bw.video_ctx) mtmd_helper_video_free(bw.video_ctx);
++                continue;
++            }
+             const float* embd = mtmd_get_output_embd(ctx);
+             FILE* f = err.empty() ? std::fopen(out.c_str(), "wb") : nullptr;
+             if (err.empty() && !f) err = "cannot write " + out;

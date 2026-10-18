@@ -57,6 +57,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.reply(dict(schema="rack-ai/strata-runtime/v1", service="strata",
                 model=observed_model, max_context=context,
                 structured_output=dict(method="prompt_and_validate", constrained_decoding=False),
+                vision=dict(enabled=True, loaded=settings.get("vision_loaded", True), pid=engine.pid, directory=str(root), protocol=settings.get("vision_protocol", "rackai-count-v1")),
                 loaded=settings.get("loaded", True), engine_pid=engine.pid,
                 config_sha256=os.environ.get("RACK_DUAL_CONFIG_SHA256", "")))
         elif self.path == "/health":
@@ -64,6 +65,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                             loaded=settings.get("loaded", True)))
         elif self.path == "/props":
             self.reply(dict(default_generation_settings=dict(n_ctx=context),
+                            modalities=dict(vision=True), is_sleeping=False,
                             total_slots=1, chat_template="synthetic-template"))
         else:
             self.reply(dict(data=[dict(id=observed_model)]))
@@ -72,9 +74,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         with open(events + ".requests", "a") as output:
             output.write(json.dumps(dict(path=self.path, body=body, tag=tag)) + "\n")
-        if self.path == "/rackai/input-tokens":
+        if self.path in ("/rackai/input-tokens", "/v1/chat/completions/input_tokens"):
             time.sleep(control().get("counter_delay", 0))
-            self.reply(dict(input_tokens=control().get("token_count", 10), context_reserve_tokens=8))
+            settings = control()
+            if settings.get("counter_http_error"):
+                self.send_response(503)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            result = dict(input_tokens=settings.get("token_count", 10))
+            if self.path == "/rackai/input-tokens":
+                result["context_reserve_tokens"] = 8
+            else:
+                result["object"] = "response.input_tokens"
+            self.reply(settings.get("count_reply", result))
             return
         if self.path == "/apply-template":
             self.reply(dict(prompt="synthetic:" + json.dumps(body, sort_keys=True)))

@@ -1,11 +1,12 @@
 """Restrict the prepared server to the qualified RackAI adapter surface."""
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
 
 from strata_count import ChatCounter
-from strata_engine import EngineGuard
+from strata_guard import ActivationGuard
+from strata_images import InputMessages
+from strata_status import RuntimeStatus
 
 MAX_BODY_BYTES = 1024 * 1024
 GET_PATHS = frozenset(("/health", "/v1/models", "/props", "/slots", "/metrics", "/v1/status"))
@@ -20,10 +21,12 @@ class AdapterSurface:
         original = self.runtime.make_handler
 
         def factory(service):
-            guard = EngineGuard(service.engine, self.runtime)
+            guard = ActivationGuard(service, self.runtime)
+            service.rackai_guard = guard
             service.shared, service.shared_path = {}, None
             handler = original(service)
             original_get, original_post = handler.do_GET, handler.do_POST
+            original_body = handler._body
             counter = ChatCounter(service, self.runtime)
 
             def get(instance):
@@ -31,8 +34,8 @@ class AdapterSurface:
                 if path == "/rackai/status":
                     if instance._authorized():
                         try:
-                            guard.check(service.engine)
-                            instance._json(200, self.status(service))
+                            guard.check()
+                            instance._json(200, RuntimeStatus(service, self.config_path).describe())
                         except self.runtime.EngineDied as error:
                             instance._json(503, {"error": {"message": str(error)}})
                 elif path in GET_PATHS:
@@ -44,7 +47,7 @@ class AdapterSurface:
                 path = instance.path.split("?")[0].rstrip("/")
                 try:
                     if path in ("/v1/chat/completions", "/rackai/input-tokens"):
-                        guard.check(service.engine)
+                        guard.check()
                     if path == "/v1/chat/completions":
                         original_post(instance)
                     elif path == "/rackai/input-tokens":
@@ -54,7 +57,13 @@ class AdapterSurface:
                 except self.runtime.EngineDied as error:
                     instance._json(503, {"error": {"message": str(error)}})
 
-            handler.do_GET, handler.do_POST = get, post
+            def body(instance):
+                value = original_body(instance)
+                if instance.path.split("?")[0].rstrip("/") == "/v1/chat/completions":
+                    InputMessages.validate(json.loads(value))
+                return value
+
+            handler.do_GET, handler.do_POST, handler._body = get, post, body
             return handler
 
         self.runtime.make_handler = factory
@@ -68,19 +77,11 @@ class AdapterSurface:
                 instance._json(413, {"error": {"message": "request body too large"}})
                 return
             result = counter.count(json.loads(body))
+            guard = getattr(counter.service, "rackai_guard", None)
+            if guard is not None:
+                guard.check()
             instance._json(200, result)
         except self.runtime.BadBody as error:
             instance._json(error.status, {"error": {"message": str(error)}})
         except (ValueError, TypeError) as error:
             instance._json(400, {"error": {"message": str(error)}})
-
-    def status(self, service):
-        engine = service.engine
-        process = getattr(engine, "proc", None)
-        return {
-            "schema": "rack-ai/strata-runtime/v1", "service": "strata",
-            "model": service.model, "max_context": engine.max_context,
-            "loaded": service.loaded(), "engine_pid": process.pid if process else None,
-            "config_sha256": hashlib.sha256(self.config_path.read_bytes()).hexdigest(),
-            "structured_output": {"method": "prompt_and_validate", "constrained_decoding": False},
-        }

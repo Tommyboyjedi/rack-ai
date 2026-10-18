@@ -314,7 +314,7 @@ fn image_input_limits(p: &crate::config::Profile) -> Option<Value> {
         "max_images_per_request": p.max_images_per_request,
         "max_image_bytes": p.max_image_bytes,
         "max_image_pixels": p.max_image_pixels,
-        "accepted_mime_types": ["image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"],
+        "accepted_mime_types": p.effective_image_mime_types(),
         "accepted_url_schemes": ["data"]
     }))
 }
@@ -424,6 +424,14 @@ fn preflight_description(p: &crate::config::Profile, demand: Option<&Demand>) ->
         "enforcement":"caller_must_check_fits", "media":"unsupported"});
     if p.enforce_input_limits {
         value["enforcement"] = json!("enforced_before_generation");
+    }
+    if p.native_multimodal_counter() {
+        value["counting"] = json!("exact_native_context_positions");
+        if p.max_images_per_request > 0 {
+            value["media"] = json!("images");
+            value["image_roles"] = json!(["user"]);
+            value["image_detail"] = json!(["auto"]);
+        }
     }
     if let Some(d) = demand {
         value["path"] = json!(format!(

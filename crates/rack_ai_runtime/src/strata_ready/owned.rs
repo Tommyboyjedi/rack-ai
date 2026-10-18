@@ -4,7 +4,7 @@ use crate::{
 };
 use serde_json::Value;
 use std::{fs, path::PathBuf};
-mod pinned;
+pub(super) mod pinned;
 use pinned::EngineConfig;
 
 pub fn verify(demand: &Demand, status: &Value) -> Result<Process, String> {
