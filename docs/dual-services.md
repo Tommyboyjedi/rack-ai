@@ -58,6 +58,16 @@ Profiles pin model/executable hashes and launch controls. Strata also pins all
 three shards, prepared pack/tokenizer, MTP runtime, expert profile, engine/build,
 Python sources, adapter/config and required dependencies/libraries. Nex pins its
 model and bundled libraries. Verification runs at activation, not per inference.
+`dual-brain` selects `/usr/bin/gnusha256sum` through the administrator-only
+`launch.file_pin_verifier` setting. It must be an absolute UTF-8 path.
+The verifier receives `--` followed by every file pin in order, under the
+existing `artifact_verify_seconds` deadline and before victim shutdown.
+A missing, failing, timed-out or mismatching verifier denies activation; there
+is no fallback. Omitting the setting preserves the existing `sha256sum` lookup
+for other profiles. Artifact and executable verification remain unchanged.
+This selects GNU serial verification without changing pin coverage, RAM pinning,
+GPU placement or reservation policy.
+
 Asset changes require a new qualified profile/version. See profile JSON for
 exact paths/hashes. Original models, experimental runtimes and consumer code
 remain intact.

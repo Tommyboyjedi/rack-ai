@@ -30,5 +30,5 @@ jobs:
           python-version: "3.12"
       - run: python3 -m venv .ci-venv
       - run: .ci-venv/bin/python -m pip install pytest==9.1.1 jsonschema==4.26.0 Pillow==12.3.0
-      - run: .ci-venv/bin/python -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py tests/runtime/test_tiny_uncd.py tests/runtime/test_input_preflight.py tests/runtime/test_dual_services.py tests/runtime/test_strata_adapter.py tests/runtime/test_strata_vision.py -q
+      - run: .ci-venv/bin/python -m pytest tests/runtime/test_contract.py tests/runtime/test_reserved_work.py tests/runtime/test_work_execution_public.py tests/runtime/test_tiny_uncd.py tests/runtime/test_input_preflight.py tests/runtime/test_dual_services.py tests/runtime/test_file_pin_verifier.py tests/runtime/test_strata_adapter.py tests/runtime/test_strata_vision.py -q
       - run: git diff --check
