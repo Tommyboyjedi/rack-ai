@@ -2179,7 +2179,8 @@
             "path": "/home/tomp/strata-test-data/vision/dependency-inventory.json",
             "sha256": "502fcce707f5cb202e163af9486dd41b5aca51d0343fc678b4618c5bdec45565"
           }
-        ]
+        ],
+        "file_pin_verifier": "/usr/bin/gnusha256sum"
       },
       "artifact": "/srv/models/qwen3.8-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00001-of-00003.gguf",
       "artifact_sha256": "5ce89370720f8bf90890f439361282104c1aa1482d4013bb9a50923e758e71a4",
