@@ -1,0 +1,227 @@
+{
+  "tag": "mini-brain",
+  "version": "qwen3.6-35b-a3b-ud-iq4-xs-llama-e2a552790009-32k-vision-mtp2-v1",
+  "model": "qwen3.6-35b-a3b",
+  "backend": "llama_cpp",
+  "driver": "systemd",
+  "qualified": false,
+  "evidence": [],
+  "capabilities": [
+    "reasoning",
+    "coding",
+    "visual"
+  ],
+  "context_tokens": 32768,
+  "max_input_tokens": 24576,
+  "max_output_tokens": 8192,
+  "protocols": [
+    "chat_completions"
+  ],
+  "streaming": true,
+  "input_token_preflight": true,
+  "resources": [
+    "gpu-4060ti",
+    "gpu-2060"
+  ],
+  "device_mib": {
+    "gpu-4060ti": 15800,
+    "gpu-2060": 5800
+  },
+  "host_mib": 24576,
+  "cpu_percent": 1600,
+  "endpoint": "http://127.0.0.1:8099",
+  "executable": "/home/tomp/llama-cpp-minicpm/build/bin/llama-server",
+  "executable_sha256": "e2a552790009a393249fabf71983f94b84ec7f5807a256ada56a7e92f0e08ee0",
+  "args": [
+    "--model",
+    "/srv/models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+    "--alias",
+    "qwen3.6-35b-a3b",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8099",
+    "--ctx-size",
+    "32768",
+    "--parallel",
+    "1",
+    "--device",
+    "CUDA0,CUDA1",
+    "--split-mode",
+    "layer",
+    "--tensor-split",
+    "3,1",
+    "--gpu-layers",
+    "all",
+    "--fit",
+    "off",
+    "--flash-attn",
+    "on",
+    "--cache-type-k",
+    "q8_0",
+    "--cache-type-v",
+    "q8_0",
+    "--threads",
+    "16",
+    "--threads-batch",
+    "16",
+    "--reasoning",
+    "on",
+    "--jinja",
+    "--spec-type",
+    "draft-mtp",
+    "--spec-draft-n-max",
+    "2",
+    "--mmproj",
+    "/srv/models/qwen3.6-35b-a3b/mmproj-BF16.gguf",
+    "--metrics"
+  ],
+  "artifact": "/srv/models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+  "artifact_sha256": "df27a780435b7b45c2597536112ea3cb091f8544c3d0c3318d9f4258b31f7adf",
+  "artifact_verify_seconds": 900,
+  "startup_seconds": 600,
+  "drain_seconds": 3600,
+  "stop_seconds": 60,
+  "inference_seconds": 3600,
+  "launch": {
+    "working_directory": "/srv/rack-ai",
+    "environment": {
+      "LD_LIBRARY_PATH": "/home/tomp/llama-cpp-minicpm/build/bin"
+    },
+    "cpu_affinity": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "file_pins": [
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libllama-server-impl.so",
+        "sha256": "748d131e93c7de3e058c66c580ad65cfa2628dea7583d56a8d75b3dc2e75bdb6"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6",
+        "sha256": "5bb0d21308f123b6ad46c6f35b42cedfcb8d6d439a53aa3dae04d880aaffdde3"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgcc_s.so.1",
+        "sha256": "9d339ecb409578d6a5d587e6c537a8f9589b8a13fefba30d167433a4b5758bee"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "sha256": "85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libllama-common.so.0",
+        "sha256": "7430bbda01dfaf8b5dea67e56f8d18aef923a61fca8eaba425cb292f0bc9c3ba"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libmtmd.so.0",
+        "sha256": "30b129cc2bf06878fbd6b2dae982e4eed7aae002625fb5eebfe8a032ae3f8f3a"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libllama.so.0",
+        "sha256": "82093a3f88c28032d9a99f19f07e58f6ab6b79d6f72326710cba81c59867d8d6"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libggml.so.0",
+        "sha256": "5683192b912ec90232a3950df226a3767fbdde153e9e19ca9d5c89f0be4f65ae"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libggml-base.so.0",
+        "sha256": "c89d53bef8f9d76be3393846df59cc27d5a3ff51017b9429fded0e3d6634f594"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libssl.so.3",
+        "sha256": "63b47f444efa588e291e9b650a5ba2ab02f856356f2d50f13a2e477db9119e09"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcrypto.so.3",
+        "sha256": "5385f0436ac2e284ba8c5fb1488874057c29c04be72dea32add832694f381e28"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
+        "sha256": "1c488db6f4fe8cecb72456bc018de000b7a9b539c2994864b0416b5e8371b3d8"
+      },
+      {
+        "path": "/lib64/ld-linux-x86-64.so.2",
+        "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libggml-cpu.so.0",
+        "sha256": "85ff5764ae069d0c74ec8ef7e9a531f6b67e3e5960e994fef343f2bb2410d1d2"
+      },
+      {
+        "path": "/home/tomp/llama-cpp-minicpm/build/bin/libggml-cuda.so.0",
+        "sha256": "5b3ed491c9280832672c380d3d7272a20c9c73f04be98df7033a95f19dad3ed7"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libgomp.so.1",
+        "sha256": "645478cbe100d1465b9d45f7047bca3965358f4d399937e544f55ac7a924d5a3"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libz.so.1",
+        "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1",
+        "sha256": "060eeb79531d435306665fd78329d8a9dd579f95876c5960bb67937825362a80"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcudart.so.12",
+        "sha256": "8774224f5b11a73b15d074a3fcce7327322c5c4cfdfd924d6a826779eec968fe"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcublas.so.12",
+        "sha256": "4cc45526449a95d3985389785e985b7832460ea3db178bc9e9963be2111fbee8"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+        "sha256": "192d4eedb1b39f0568f2b5423d35227d13b32b9025599e1968a9081982da207d"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libdl.so.2",
+        "sha256": "59d725ca30596a9863f4fa2552a7125f834842abc86b40890231c129358965d2"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libpthread.so.0",
+        "sha256": "1327fc40710691dbd94e88b6cf4efce27fefe8fbb93f7d1164a75b4dccaea696"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/librt.so.1",
+        "sha256": "9f3cc59207bcaaac74aaf7aca961f4816f0f4d945e4bd1c3cb98ec516becf161"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libcublasLt.so.12",
+        "sha256": "44a813aa2da08830f9083f81d0eb73f1ae4052a4d9b0b0de480a8f6cd9eb3078"
+      },
+      {
+        "path": "/srv/models/qwen3.6-35b-a3b/mmproj-BF16.gguf",
+        "sha256": "da63cb47a76763c712393f8a017070188a304fa39f8aeea6edc629ed7b975cfa"
+      }
+    ]
+  },
+  "enforce_input_limits": true,
+  "input_token_counter": "native_multimodal",
+  "max_images_per_request": 2,
+  "max_image_bytes": 262144,
+  "max_image_pixels": 4194304,
+  "image_mime_types": [
+    "image/png",
+    "image/jpeg",
+    "image/gif",
+    "image/bmp"
+  ]
+}
