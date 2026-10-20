@@ -15,7 +15,7 @@ MusicVideoDirector and other consumer applications are unchanged.
 | Context / input / output ceilings | 32768 / 24576 / 8192 tokens |
 | Parallel requests | 1 |
 | Ordered resources | `gpu-4060ti`, `gpu-2060` |
-| GPU allowances | 15800 MiB / 5800 MiB |
+| GPU allowances | 15800 MiB / 5700 MiB |
 | Host allowance / CPU quota | 24576 MiB / 1600% |
 | CPU affinity | 0-15 |
 | Artifact verification / startup | 900 / 600 seconds |
