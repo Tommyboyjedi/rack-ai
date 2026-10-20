@@ -60,7 +60,7 @@ def fixture():
         environment = dict(os.environ, RACK_DUAL_HOST_FIXTURE=str(root),
                            PATH=str(binary) + ":" + os.environ["PATH"])
         rack = Rack(root / "rack", configure=configure, environment=environment)
-        rack.controls(TAG, context=32768)
+        rack.controls(TAG, context=131072)
         try:
             yield root, rack
         finally:
@@ -73,7 +73,7 @@ def reserve(rack, priority="medium"):
 
 
 def configure_count(rack, **changes):
-    rack.controls(TAG, context=32768, **changes)
+    rack.controls(TAG, context=131072, **changes)
 
 
 class MiniProfileContract(unittest.TestCase):
@@ -89,16 +89,17 @@ class MiniProfileContract(unittest.TestCase):
         self.assertLessEqual(profile["device_mib"]["gpu-2060"], 6144)
         self.assertLessEqual(profile["device_mib"]["gpu-4060ti"], 16384)
         self.assertEqual((profile["context_tokens"], profile["max_input_tokens"],
-                          profile["max_output_tokens"]), (32768, 24576, 8192))
+                          profile["max_output_tokens"]), (131072, 122880, 8192))
         self.assertEqual(profile["launch"]["cpu_affinity"], list(range(16)))
         self.assertEqual(profile["cpu_percent"], 1600)
         self.assertNotIn("CUDA_VISIBLE_DEVICES", profile["launch"].get("environment", {}))
         self.assertNotEqual(profile["executable"], "/srv/rack-ai/runtimes/llama-cpp/llama-server")
         args = profile["args"]
-        expected = {"--ctx-size": "32768", "--parallel": "1", "--device": "CUDA0,CUDA1",
+        expected = {"--ctx-size": "131072", "--parallel": "1", "--device": "CUDA0,CUDA1",
             "--split-mode": "layer", "--tensor-split": "3,1", "--gpu-layers": "all",
             "--fit": "off", "--flash-attn": "on", "--cache-type-k": "q8_0",
             "--cache-type-v": "q8_0", "--threads": "16", "--threads-batch": "16",
+            "--batch-size": "512", "--ubatch-size": "128",
             "--reasoning": "on", "--spec-type": "draft-mtp", "--spec-draft-n-max": "2",
             "--mmproj": "/srv/models/qwen3.6-35b-a3b/mmproj-BF16.gguf"}
         for flag, value in expected.items():
@@ -124,7 +125,7 @@ class MiniManagedLifecycle(unittest.TestCase):
         with fixture() as (root, rack):
             published = next(p for p in rack.call("cb", "discover")["tags"] if p["tag"] == TAG)
             self.assertEqual((published["context_tokens"], published["max_input_tokens"],
-                published["max_output_tokens"]), (32768, 24576, 8192))
+                published["max_output_tokens"]), (131072, 122880, 8192))
             self.assertEqual(published["image_input"]["max_images_per_request"], 2)
             self.assertEqual(published["input_preflight"]["media"], "images")
             owner = wait_reservation(rack, reserve(rack))
@@ -256,12 +257,13 @@ class MiniNativeImageContract(unittest.TestCase):
             member = owner["services"][TAG]
             body = image_body(member)
             body["max_tokens"] = 8192
-            configure_count(rack, token_count=24576)
-            status, counted = request(rack, (member, "/chat/completions/preflight", body))
-            self.assertEqual(status, 200, counted)
-            self.assertTrue(counted["fits"])
-            self.assertEqual(counted["total_reserved_tokens"], 32768)
-            for count, output, reason in ((24577, 8192, "input_limit_exceeded"),
+            for count in (40000, 122880):
+                configure_count(rack, token_count=count)
+                status, counted = request(rack, (member, "/chat/completions/preflight", body))
+                self.assertEqual(status, 200, counted)
+                self.assertTrue(counted["fits"])
+                self.assertEqual(counted["total_reserved_tokens"], count + 8192)
+            for count, output, reason in ((122881, 8192, "input_limit_exceeded"),
                                          (10, 8193, "output_limit_exceeded")):
                 with self.subTest(reason=reason):
                     configure_count(rack, token_count=count)

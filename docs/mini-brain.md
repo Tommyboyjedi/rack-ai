@@ -12,8 +12,9 @@ MusicVideoDirector and other consumer applications are unchanged.
 | Projector | `/srv/models/qwen3.6-35b-a3b/mmproj-BF16.gguf` |
 | Runtime | Pinned `/home/tomp/llama-cpp-minicpm/build/bin/llama-server` |
 | Model alias | `qwen3.6-35b-a3b` |
-| Context / input / output ceilings | 32768 / 24576 / 8192 tokens |
+| Context / input / output ceilings | 131072 / 122880 / 8192 tokens |
 | Parallel requests | 1 |
+| Prompt batch / micro-batch | 512 / 128 |
 | Ordered resources | `gpu-4060ti`, `gpu-2060` |
 | GPU allowances | 15800 MiB / 5700 MiB |
 | Host allowance / CPU quota | 24576 MiB / 1600% |
@@ -32,8 +33,13 @@ Systemd llama.cpp activations do not acquire Docker/vLLM warm residency.
 The launch retains the proven `--device CUDA0,CUDA1`, layer split `3,1`, all GPU
 layers, fit off, flash attention on, q8_0 K/V caches, 16 generation/batch threads,
 reasoning on, Jinja, `draft-mtp` with maximum draft depth 2, and metrics. Vision
-keeps the tested default projector placement. No 128K/256K qualification is
-claimed. The profile pins the model, projector, executable and loader dependencies.
+keeps the tested default projector placement. The 131072-token context uses
+`--batch-size 512 --ubatch-size 128`, matching the operator-tested 128K setup.
+The context is shared by all rendered input (including images and tool schemas)
+and output: native preflight enforces the 122880 / 8192 ceilings without trimming.
+Configured capacity and short-request throughput do not establish full-window
+retrieval quality or long-input performance. No 256K qualification is claimed.
+The profile pins the model, projector, executable and loader dependencies.
 `LD_LIBRARY_PATH` selects the original runtime directory; no shared runtime or
 original model files are replaced. Runtime/library changes require requalification.
 
