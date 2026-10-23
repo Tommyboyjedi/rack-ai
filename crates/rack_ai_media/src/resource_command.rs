@@ -26,6 +26,8 @@ pub struct Report {
 pub struct Resource {
     pub resource: String,
     pub services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preserved_service: Option<String>,
     pub status: ResourceStatus,
 }
 impl ResourceCommand {

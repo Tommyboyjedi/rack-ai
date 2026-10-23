@@ -42,7 +42,7 @@ async function resourceAction(apply){
  try{
   const report=await call(apply?'/resources/recover':'/resources',apply?{schema:'rack-ai/resource-recovery/v1',confirm:'recover_stuck_resources'}:undefined);
   resourceList.replaceChildren();
-  for(const item of report.resources){const row=document.createElement('li');row.textContent=item.resource+' ('+item.services.join(', ')+'): '+(recoveryLabels[item.status]||'Needs operator investigation');resourceList.append(row);}
+  for(const item of report.resources){const row=document.createElement('li');const label=item.status==='warm_preserved'&&item.preserved_service?'Warm model ('+item.preserved_service+') — preserved':(recoveryLabels[item.status]||'Needs operator investigation');row.textContent=item.resource+' ('+item.services.join(', ')+'): '+label;resourceList.append(row);}
   resourceMessage.textContent=apply?'Recovery checks completed. Cleanup requests may take a moment; refresh to check progress.':'Resource status updated.';
  }catch(e){resourceMessage.textContent=e.message;}finally{resourceBusy=false;recover.disabled=resourceRefresh.disabled=false;refresh();}
 }

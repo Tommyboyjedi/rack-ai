@@ -36,9 +36,15 @@ def test_helper_hash_mismatch_and_unconfigured_are_fail_closed(tmp_path):
   response=requests.get(r["api"]+"/api/media/v1/status",headers=operator(),timeout=3)
   assert response.json()["operator"] is True and response.json()["resource_recovery_supported"] is False
   assert requests.get(r["api"]+"/api/media/v1/resources",headers=operator(),timeout=3).status_code==503
-def test_browser_recovery_confirmation_and_results(tmp_path):
+def configure_warm(c):
+ configure(c)
+ p=Path(c["state_root"])/"resource-report.json";report=json.loads(p.read_text())
+ report["resources"][0].update(services=["local-coder","local-tts"],status="warm_preserved",preserved_service="local-tts")
+ p.write_text(json.dumps(report))
+@pytest.mark.parametrize("warm",[False,True])
+def test_browser_recovery_confirmation_and_results(tmp_path,warm):
  from playwright.sync_api import sync_playwright
- with receiver(tmp_path,configure) as r, sync_playwright() as p:
+ with receiver(tmp_path,configure_warm if warm else configure) as r, sync_playwright() as p:
   launch={"headless":True,"chromium_sandbox":True,"args":["--disable-gpu","--use-angle=swiftshader"]}
   executable=os.environ.get("RACK_AI_BROWSER_EXECUTABLE")
   if executable:launch["executable_path"]=executable
@@ -46,13 +52,14 @@ def test_browser_recovery_confirmation_and_results(tmp_path):
   try:
    page=browser.new_page(extra_http_headers=operator());page.goto(r["api"])
    page.locator("#resources").wait_for(state="visible")
-   page.locator("#resource-list").get_by_text("In use",exact=False).wait_for()
+   expected="Warm model (local-tts) — preserved" if warm else "In use — preserved"
+   page.locator("#resource-list").get_by_text(expected,exact=False).wait_for()
    page.once("dialog",lambda d:d.dismiss());page.get_by_role("button",name="Reset stuck resources").click()
    calls=tmp_path/"state/resource-report.calls";assert "recover" not in calls.read_text()
    page.once("dialog",lambda d:d.accept());page.get_by_role("button",name="Reset stuck resources").click()
    page.get_by_text("Recovery checks completed.",exact=False).wait_for()
    assert calls.read_text().splitlines().count("recover")==1
-   assert page.locator("#resource-list").inner_text().endswith("In use — preserved")
+   assert page.locator("#resource-list").inner_text().endswith(expected)
   finally:browser.close()
 
 def test_browser_cookie_origin_is_required_for_recovery(tmp_path):

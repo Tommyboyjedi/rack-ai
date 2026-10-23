@@ -76,7 +76,19 @@ fn active_owner_and_running_work_are_not_reset() {
         })
         .unwrap();
     let before = std::fs::read(f.service.config.authority_root.join("managed.json")).unwrap();
-    assert_eq!(f.status(&resource, true), InUsePreserved);
+    let report = resource_recovery::run(&f.service, true).unwrap();
+    let item = report
+        .resources
+        .iter()
+        .find(|r| r.resource == resource)
+        .unwrap();
+    assert_eq!(item.status, InUsePreserved);
+    assert!(
+        serde_json::to_value(item)
+            .unwrap()
+            .get("preserved_service")
+            .is_none()
+    );
     assert_eq!(
         std::fs::read(f.service.config.authority_root.join("managed.json")).unwrap(),
         before
@@ -200,7 +212,19 @@ fn healthy_warm_model_is_preserved_and_failed_eviction_uses_existing_cleanup() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(f.status(&resource, true), WarmPreserved);
+    for apply in [false, true] {
+        let report = resource_recovery::run(&f.service, apply).unwrap();
+        let item = report
+            .resources
+            .iter()
+            .find(|r| r.resource == resource)
+            .unwrap();
+        assert_eq!(item.status, WarmPreserved);
+        assert_eq!(
+            item.preserved_service.as_deref(),
+            Some(record.profile.tag.as_str())
+        );
+    }
     f.service
         .authority
         .update(|s| {

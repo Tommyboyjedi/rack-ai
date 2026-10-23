@@ -17,7 +17,8 @@ pub fn run(service: &Service, apply: bool) -> Result<Report, String> {
             continue;
         }
         let _operation = operation?;
-        let action = |s: &mut Document| {
+        let mut preserved_service = None;
+        let mut action = |s: &mut Document| {
             if let Some(owner) = s.claims.get(id) {
                 let Some(d) = s.data.demands.get(owner).cloned() else {
                     return Ok(BlockedUnprovenOwner);
@@ -67,6 +68,7 @@ pub fn run(service: &Service, apply: bool) -> Result<Report, String> {
                 .find(|w| w.resources.contains(id))
             {
                 if warm.state == WarmResidencyState::Resident {
+                    preserved_service = Some(warm.profile.tag.clone());
                     return Ok(WarmPreserved);
                 }
                 if apply {
@@ -106,7 +108,9 @@ pub fn run(service: &Service, apply: bool) -> Result<Report, String> {
         } else {
             service.authority.read(|s| action(&mut s.clone()))?
         };
-        resources.push(entry(service, id, status));
+        let mut resource = entry(service, id, status);
+        resource.preserved_service = preserved_service;
+        resources.push(resource);
     }
     Ok(Report {
         schema: SCHEMA.into(),
@@ -119,6 +123,7 @@ fn retryable(d: &Demand) -> bool {
 fn entry(service: &Service, id: &str, status: ResourceStatus) -> Resource {
     Resource {
         resource: id.into(),
+        preserved_service: None,
         services: service
             .config
             .profiles

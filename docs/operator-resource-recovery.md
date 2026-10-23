@@ -15,7 +15,7 @@ The repeated ComfyUI OOM incident left a failed InvocationID after physical clea
 
 ## Interfaces
 
-GET /api/media/v1/resources returns rack-ai/resource-recovery/v1 with resources, published service tags and generic status codes. It is read-only.
+GET /api/media/v1/resources returns rack-ai/resource-recovery/v1 with resources, published service tags and generic status codes. Warm-preserved resources also include the optional preserved_service tag from their actual warm-residency record; the launcher displays that service beside the warm status. It is read-only.
 
 POST /api/media/v1/resources/recover accepts exactly:
     {"schema":"rack-ai/resource-recovery/v1","confirm":"recover_stuck_resources"}
