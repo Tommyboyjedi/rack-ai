@@ -15,7 +15,12 @@ pub fn verify(profile: &Profile) -> Result<(), String> {
     let mut args = vec!["--"];
     args.extend(names);
     let result = run_bounded(CommandSpec {
-        program: "sha256sum",
+        program: launch
+            .file_pin_verifier
+            .as_ref()
+            .map(|p| p.to_str().ok_or("invalid_launch_verifier_path"))
+            .transpose()?
+            .unwrap_or("sha256sum"),
         args: &args,
         seconds: profile.artifact_verify_seconds,
     })

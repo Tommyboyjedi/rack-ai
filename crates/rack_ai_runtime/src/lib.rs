@@ -87,3 +87,9 @@ mod launch_identity;
 mod strata_ready;
 
 mod llama_vision_ready;
+
+pub mod resource_recovery;
+mod resource_unit_recovery;
+
+#[cfg(test)]
+mod resource_recovery_tests;

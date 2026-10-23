@@ -17,6 +17,8 @@ pub struct Launch {
     pub cpu_affinity: Vec<u32>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub file_pins: Vec<FilePin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_pin_verifier: Option<PathBuf>,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -61,6 +63,9 @@ fn validate_launch(l: &Launch) -> Result<(), String> {
     if unique.len() != l.cpu_affinity.len()
         || l.cpu_affinity.iter().any(|cpu| *cpu > 4095)
         || l.working_directory.as_ref().is_some_and(|p| !absolute(p))
+        || l.file_pin_verifier
+            .as_ref()
+            .is_some_and(|p| !absolute(p) || p.to_str().is_none())
         || l.environment.len() > 32
         || l.environment.iter().any(|(k, v)| !environment(k, v))
         || l.file_pins.len() > MAX_PINS
@@ -133,4 +138,21 @@ pub fn systemd_arguments(p: &Profile) -> Vec<String> {
             .map(|(k, v)| format!("--setenv={k}={v}")),
     );
     args
+}
+
+#[cfg(test)]
+mod operator_metadata_tests {
+    use super::*;
+    #[test]
+    fn deployed_verifier_metadata_stays_typed_and_requires_absolute_path() {
+        let mut launch = Launch {
+            file_pin_verifier: Some("/usr/bin/gnusha256sum".into()),
+            ..Launch::default()
+        };
+        assert!(validate_launch(&launch).is_ok());
+        let encoded = serde_json::to_string(&launch).unwrap();
+        assert!(encoded.contains("file_pin_verifier"));
+        launch.file_pin_verifier = Some("relative-verifier".into());
+        assert!(validate_launch(&launch).is_err());
+    }
 }

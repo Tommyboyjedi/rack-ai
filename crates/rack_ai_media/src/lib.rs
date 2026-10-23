@@ -67,3 +67,8 @@ pub mod shared_placement;
 mod job_activity;
 
 mod config_policy;
+
+pub mod resource_api;
+pub mod resource_command;
+
+pub mod orphan_recovery;
