@@ -10,6 +10,17 @@
 <button id="resource-refresh">Refresh resources</button><button id="resource-recover">Reset stuck resources</button>
 <p id="recovery-message" role="status"></p><ul id="resource-list"></ul>
 </section>
+<section id="energy" hidden aria-labelledby="energy-title">
+<h2 id="energy-title">Energy usage</h2>
+<p>GPU consumption is measured device telemetry. The whole-rack total is an <strong>uncalibrated estimate</strong>, not a socket measurement. CPU figures come from package energy counters.</p>
+<label for="energy-period">Stored history: </label><select id="energy-period"><option value="day">24 hours</option><option value="week">7 days</option><option value="month">30 days</option><option value="year">365 days</option></select><button id="energy-refresh">Refresh energy</button>
+<p id="energy-status" role="status">Loading energy history…</p>
+<div style="overflow-x:auto"><table style="width:100%;font-size:.85rem;text-align:left"><thead><tr><th>Series</th><th>Basis</th><th>Latest sample</th><th>Recorded energy</th><th>Coverage</th></tr></thead><tbody id="energy-rows"></tbody></table></div>
+<p id="energy-gpu-total"></p><p>History chart: average power in watts. Solid lines show component readings; the dashed line is the rack estimate. Missing intervals are gaps.</p>
+<svg id="energy-chart" viewBox="0 0 790 285" role="img" aria-label="Stored power history for GPUs, CPU and estimated rack total" style="width:100%;height:auto"></svg><ul id="energy-legend" style="font-size:.85rem"></ul>
+<p id="energy-assumptions"></p><p>Coverage is the recorded time in the selected range. Collection runs without reservations and history survives restarts. Resolution: minute data for 30 days, hourly data for 400 days, daily data for 5 years.</p>
+</section>
+<script src="/energy.js" defer></script>
 <script>
 const api='/api/media/v1';let session=null,busy=false,resourcesLoaded=false;
 const state=document.querySelector('#state'),error=document.querySelector('#error'),start=document.querySelector('#start'),finish=document.querySelector('#finish'),open=document.querySelector('#open');

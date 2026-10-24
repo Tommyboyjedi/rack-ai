@@ -38,6 +38,18 @@ async fn serve(config: Config) -> Result<(), String> {
             "/",
             get(|| async { axum::response::Html(include_str!("../web/launcher.html")) }),
         )
+        .route(
+            "/energy.js",
+            get(|| async {
+                (
+                    [(
+                        axum::http::header::CONTENT_TYPE,
+                        "text/javascript; charset=utf-8",
+                    )],
+                    include_str!("../web/energy.js"),
+                )
+            }),
+        )
         .route("/login", any(rack_ai_media::browser_login::handle))
         .route("/account", any(rack_ai_media::browser_account::account))
         .route("/logout", any(rack_ai_media::browser_account::logout))

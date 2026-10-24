@@ -68,6 +68,7 @@ mod job_activity;
 
 mod config_policy;
 
+pub mod energy_api;
 pub mod resource_api;
 pub mod resource_command;
 
