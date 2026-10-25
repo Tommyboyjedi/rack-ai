@@ -43,6 +43,12 @@ The profile pins the model, projector, executable and loader dependencies.
 `LD_LIBRARY_PATH` selects the original runtime directory; no shared runtime or
 original model files are replaced. Runtime/library changes require requalification.
 
+The 128K v2 profile refreshes only the Ubuntu `libz.so.1` pin for verified
+`zlib1g` package `1:1.3.dfsg+really1.3.1-1ubuntu3.2`. OS updates can invalidate
+these exact dependency pins. Verify the installed package and loader resolution,
+refresh only affected pins, and requalify the managed service; do not bypass
+launch integrity checks.
+
 Reasoning and tools use the existing OpenAI-compatible chat interface. Explicit
 request-level thinking and structured-output controls remain available. Reasoning
 shares the bounded completion budget; clients should choose an explicit output
