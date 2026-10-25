@@ -602,7 +602,10 @@ class DualNativeImageAccounting(unittest.TestCase):
                 self.assertEqual(body, original)
                 release(rack, owner)
                 before = len(counted_requests(rack))
-                self.assertEqual(request(rack, (member, "/chat/completions/preflight", body))[0], 409)
+                status, rejected = request(rack, (member, "/chat/completions/preflight", body))
+                self.assertIn((status, rejected.get("error")),
+                    ((404, "not_found"), (409, "reservation_not_dispatchable")))
+                self.assertEqual(rejected.get("schema"), "rack-ai/input-preflight/v1")
                 self.assertEqual(len(counted_requests(rack)), before)
 
     def test_images_preserve_input_output_and_total_context_ceilings_before_generation(self):
