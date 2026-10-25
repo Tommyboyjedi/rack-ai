@@ -2441,7 +2441,7 @@
     },
     {
       "tag": "mini-brain",
-      "version": "qwen3.6-35b-a3b-ud-iq4-xs-llama-e2a552790009-128k-vision-mtp2-v1",
+      "version": "qwen3.6-35b-a3b-ud-iq4-xs-llama-e2a552790009-128k-vision-mtp2-v2",
       "model": "qwen3.6-35b-a3b",
       "backend": "llama_cpp",
       "driver": "systemd",
@@ -2618,7 +2618,7 @@
           },
           {
             "path": "/usr/lib/x86_64-linux-gnu/libz.so.1",
-            "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+            "sha256": "27fa6c6cb94fb5b099ead61758a300dbc392d1dbf307fff6c16a9b8e57fdc9de"
           },
           {
             "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1",

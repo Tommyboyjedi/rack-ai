@@ -149,7 +149,12 @@ class MiniManagedLifecycle(unittest.TestCase):
             self.assertEqual(claims(rack), {})
             self.assertFalse(alive(started["pid"]))
             self.assertEqual(request(rack, (member, "/chat/completions", payload(member)))[0], 409)
-            self.assertEqual(request(rack, (member, "/chat/completions/preflight", payload(member)))[0], 409)
+            before = len(counted_requests(rack))
+            status, rejected = request(rack, (member, "/chat/completions/preflight", payload(member)))
+            self.assertIn((status, rejected.get("error")),
+                ((404, "not_found"), (409, "reservation_not_dispatchable")))
+            self.assertEqual(rejected.get("schema"), "rack-ai/input-preflight/v1")
+            self.assertEqual(len(counted_requests(rack)), before)
 
     def test_two_gpu_conflicts_and_priority_transfer_preserve_unrelated_4080(self):
         with fixture() as (_, rack):
