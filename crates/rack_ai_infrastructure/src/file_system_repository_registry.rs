@@ -316,8 +316,15 @@ fn canonical_git_toplevel_for_existing_path(path: &Path) -> Result<PathBuf, Stri
 #[cfg(test)]
 mod tests {
     use super::FileSystemRepositoryRegistry;
+    use crate::GitCommand;
+    use crate::GitCommandWorktree;
     use crate::RegistryPaths;
+    use rack_ai_application::CampaignCommitRequest;
+    use rack_ai_application::CreateChangeWorktreeRequest;
+    use rack_ai_application::GitWorktree;
     use rack_ai_application::RepositoryRegistry;
+    use rack_ai_application::ResolveGitShaRequest;
+    use rack_ai_domain::GitRef;
     use rack_ai_domain::RepositoryId;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -363,6 +370,90 @@ mod tests {
             )
             .unwrap();
         assert_eq!(found.root(), dynamic);
+    }
+
+    #[test]
+    fn authorizes_linked_dynamic_repository_and_creates_nested_change_worktree() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let trusted_root = root.join("approved-projects");
+        let canonical = init_git_repo(
+            &trusted_root.join("project").join("repository"),
+            "canonical",
+        );
+        let delivery = trusted_root
+            .join("project")
+            .join("delivery-management")
+            .join("worktrees")
+            .join("basket");
+        fs::create_dir_all(delivery.parent().unwrap()).unwrap();
+        let canonical_main =
+            GitCommand::run(&canonical, &["rev-parse", "refs/heads/main"]).unwrap();
+        GitCommand::run(
+            &canonical,
+            &[
+                "worktree",
+                "add",
+                "-b",
+                "athba/delivery-basket",
+                delivery.to_str().unwrap(),
+                "HEAD",
+            ],
+        )
+        .unwrap();
+        let delivery_head = GitCommand::run(&delivery, &["rev-parse", "HEAD"]).unwrap();
+        assert_eq!(delivery_head, canonical_main);
+        assert!(delivery.join(".git").is_file());
+
+        write_repositories_document(&live, &[], &[trusted_root]);
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let repository_id = RepositoryId::new("basket-project".to_string()).unwrap();
+        assert!(registry.find(&repository_id).is_err());
+        let resolved = registry
+            .resolve_target(&repository_id, Some(delivery.as_path()))
+            .unwrap();
+        assert_eq!(resolved.root(), delivery);
+        assert_eq!(
+            PathBuf::from(GitCommand::run(&delivery, &["rev-parse", "--show-toplevel"]).unwrap()),
+            delivery
+        );
+
+        let git = GitCommandWorktree;
+        let base = git
+            .resolve_sha(&ResolveGitShaRequest::new(
+                resolved.root().to_path_buf(),
+                GitRef::new("athba/delivery-basket".to_string()).unwrap(),
+            ))
+            .unwrap();
+        assert_eq!(base.value(), delivery_head);
+        let nested = root.join("rack-workspaces").join("basket");
+        git.create(
+            &CreateChangeWorktreeRequest::new(resolved.root().to_path_buf(), base.clone())
+                .with_branch_name("rack/change-basket".to_string())
+                .with_worktree_path(nested.clone()),
+        )
+        .unwrap();
+        fs::write(nested.join("src/lib.rs"), "candidate\n").unwrap();
+        let candidate = git
+            .commit_local(&CampaignCommitRequest::new(
+                nested,
+                "linked-dynamic",
+                "candidate",
+                vec!["src/lib.rs".to_string()],
+            ))
+            .unwrap();
+
+        let candidate_ref = format!("{}^{{commit}}", candidate.value());
+        GitCommand::run(&canonical, &["cat-file", "-e", candidate_ref.as_str()]).unwrap();
+        assert_ne!(candidate, base);
+        assert_eq!(
+            GitCommand::run(&canonical, &["rev-parse", "refs/heads/main"]).unwrap(),
+            canonical_main
+        );
+        assert_eq!(
+            GitCommand::run(&delivery, &["rev-parse", "HEAD"]).unwrap(),
+            delivery_head
+        );
     }
 
     #[test]
@@ -534,6 +625,22 @@ mod tests {
             )
             .unwrap_err();
         assert!(error.contains("does not match registered repository root"));
+    }
+
+    #[test]
+    fn resolves_static_repository_with_matching_requested_root() {
+        let root = temp_root();
+        let live = init_git_repo(&root.join("live-rack-ai"), "live");
+        let external = init_git_repo(&root.join("adaptos"), "external");
+        write_repositories_document(&live, std::slice::from_ref(&external), &[]);
+        let registry = FileSystemRepositoryRegistry::new(RegistryPaths::new(live));
+        let found = registry
+            .resolve_target(
+                &RepositoryId::new("repo-0".to_string()).unwrap(),
+                Some(external.as_path()),
+            )
+            .unwrap();
+        assert_eq!(found.root(), external);
     }
 
     #[test]
