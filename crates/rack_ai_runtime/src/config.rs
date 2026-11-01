@@ -10,6 +10,7 @@ pub enum Backend {
     Strata,
     Comfyui,
     Chatterbox,
+    Ninfer,
 }
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

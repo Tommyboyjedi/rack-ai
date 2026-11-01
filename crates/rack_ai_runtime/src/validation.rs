@@ -174,17 +174,25 @@ impl ProfileValidation<'_> {
             crate::network::private_binding(p)?;
         }
         if p.driver == Driver::Docker
-            && (p.backend != Backend::Vllm
-                || p.container_image
+            && !matches!(p.backend, Backend::Vllm | Backend::Ninfer)
+            || p.driver == Driver::Docker
+                && p.backend == Backend::Vllm
+                && p.container_image
                     .as_ref()
                     .is_none_or(|i| !i.starts_with("sha256:") || i.len() != 71)
-                || p.container_mounts.iter().any(|(source, target)| {
-                    !source.is_absolute()
-                        || !std::path::Path::new(target).is_absolute()
-                        || target == "/"
-                        || target.contains(',')
-                        || source.to_string_lossy().contains(',')
-                }))
+            || p.driver == Driver::Docker
+                && p.backend == Backend::Ninfer
+                && p.container_image.as_ref().is_none()
+            || p.driver == Driver::Docker
+                && p.container_mounts
+                    .iter()
+                    .any(|(source, target)| {
+                        !source.is_absolute()
+                            || !std::path::Path::new(target).is_absolute()
+                            || target == "/"
+                            || target.contains(',')
+                            || source.to_string_lossy().contains(',')
+                    })
         {
             return Err("invalid pinned container profile".into());
         }
