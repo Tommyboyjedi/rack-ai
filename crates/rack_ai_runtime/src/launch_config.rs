@@ -31,7 +31,7 @@ pub fn validate(p: &Profile) -> Result<(), String> {
         return Err("input enforcement requires input preflight".into());
     }
     if p.input_token_preflight
-        && (!matches!(p.backend, Backend::LlamaCpp | Backend::Strata)
+        && (!matches!(p.backend, Backend::LlamaCpp | Backend::Strata | Backend::Ninfer)
             || !p
                 .protocols
                 .contains(&crate::protocol::Protocol::ChatCompletions))
