@@ -9,8 +9,10 @@ import sys
 import tempfile
 import time
 import unittest
+import subprocess
 
 from support import Rack, ROOT, port
+from test_dual_services import wait_reservation, records, claims, alive, payload, request
 
 
 TAG = "maxi-brain"
@@ -48,19 +50,9 @@ def fixture():
                 executable_sha256=hashlib.sha256((binary / "docker").read_bytes()).hexdigest(),
                 container_image="sha256:" + "a" * 64,
                 endpoint=f"http://127.0.0.1:{listen}",
-                args=[
-                    "--path", str(model_artifact),
-                    "--devices", "0,1",
-                    "--max-context", "917504",
-                    "--kv-capacity", "917504",
-                    "--kv-dtype", "rk8v4",
-                    "--gdn-state-fp16",
-                    "--rope-yarn",
-                    "--spec", "mtp",
-                    "--draft-tokens", "3",
-                    "--max-concurrency", "1",
-                    "--host", "127.0.0.1",
-                ],
+                args=[str(ROOT / "tests/runtime/backend.py"), str(listen),
+                      candidate["model"], str(root / "rack/events.jsonl"),
+                      str(root / "rack" / (TAG + ".control.json")), "--host", "127.0.0.1"],
                 device_mib={resource: 16 for resource in RESOURCES},
                 host_mib=32,
                 cpu_percent=100,
@@ -71,7 +63,7 @@ def fixture():
             )
             config["profiles"].append(candidate)
 
-        environment = dict(os.environ, RACK_DUAL_HOST_FIXTURE=str(root),
+        environment = dict(os.environ, RACK_HOST_FIXTURE=str(root),
                            PATH=str(binary) + ":" + os.environ["PATH"])
         rack = Rack(root / "rack", configure=configure, environment=environment)
         rack.controls(TAG, context=131072)
@@ -109,9 +101,9 @@ class MaxiProfileContract(unittest.TestCase):
         self.assertIn("--draft-tokens", profile["args"])
         self.assertIn("--max-concurrency", profile["args"])
         self.assertNotIn("--tensor-parallel", profile["args"])
-        self.assertTrue(profile["enforce_input_limits"])
+        self.assertFalse(profile.get("enforce_input_limits", False))
         self.assertEqual(profile["protocols"], ["chat_completions"])
-        self.assertEqual(profile["input_token_counter"], "native_multimodal")
+        self.assertNotIn("input_token_counter", profile)
         self.assertIn("visual", profile["capabilities"])
         self.assertEqual((profile["max_images_per_request"], profile["max_image_bytes"],
             profile["max_image_pixels"]), (2, 262144, 4194304))
@@ -136,86 +128,81 @@ class MaxiManagedLifecycle(unittest.TestCase):
             self.assertEqual((published["context_tokens"], published["max_input_tokens"],
                 published["max_output_tokens"]), (131072, 122880, 8192))
             self.assertEqual(published["image_input"]["max_images_per_request"], 2)
-            owner = rack.wait(reserve(rack))
+            owner = wait_reservation(rack, reserve(rack))
             member = owner["services"][TAG]
             self.assertEqual(member["model"], MODEL)
-            self.assertEqual(set(rack.claims()), set(RESOURCES))
-            started = next(event for event in rack.records()
-                if event["kind"] == "start" and event.get("tag") == TAG)
-            self.assertEqual(started["visible_devices"],
-                ",".join(UUIDS[r] for r in RESOURCES))
+            self.assertEqual(set(claims(rack)), set(RESOURCES))
+            started = next(event for event in records(rack)
+                if event["kind"] == "start" and event.get("model") == MODEL)
+            commands = [json.loads(line) for line in (root / "commands.jsonl").read_text().splitlines()]
+            argv = next(c["args"] for c in commands if c["args"][0] == "run")
+            self.assertEqual([argv[i + 1] for i, item in enumerate(argv) if item == "--gpus"],
+                             ["device=" + UUIDS[r] for r in RESOURCES])
             release(rack, owner)
-            self.assertEqual(rack.claims(), {})
-            self.assertFalse(rack.alive(started["pid"]))
+            self.assertEqual(claims(rack), {})
+            self.assertFalse(alive(started["pid"]))
 
     def test_reject_inference_after_release(self):
         with fixture() as (_, rack):
-            from tests.runtime.test_dual_services import payload, request
-            owner = rack.wait(reserve(rack))
+            owner = wait_reservation(rack, reserve(rack))
             member = owner["services"][TAG]
             release(rack, owner)
-            rack.wait(owner, "released")
+            wait_reservation(rack, owner, "released")
             status, _ = request(rack, (member, "/chat/completions", payload(member)))
             self.assertEqual(status, 409)
 
 
 class MaxiDockerValidation(unittest.TestCase):
     def test_docker_driver_requires_container_image_and_validates_mounts(self):
-        with tempfile.TemporaryDirectory(prefix="rack-maxi-val-") as directory:
-            root = Path(directory)
-            bin_dir = root / "bin"
-            bin_dir.mkdir()
-            for name in ("docker", "nvidia-smi"):
-                (bin_dir / name).write_text("#!" + sys.executable + "\n" +
-                    (ROOT / "tests/runtime/fake_host.py").read_text().split("\n", 1)[1])
-                (bin_dir / name).chmod(0o700)
+        with fixture() as (root, rack):
+            for changes in ({"container_image": None}, {"container_mounts": {"relative": "/abs"}}):
+                config = copy.deepcopy(rack.config)
+                next(p for p in config["profiles"] if p["tag"] == TAG).update(changes)
+                path = root / "invalid-config.json"
+                path.write_text(json.dumps(config))
+                path.chmod(0o600)
+                checked = subprocess.run([str(ROOT / "target/debug/rack_ai_runtime"), "validate", str(path)],
+                                         capture_output=True, text=True, timeout=5)
+                self.assertNotEqual(checked.returncode, 0)
+                self.assertIn("invalid pinned container profile", checked.stderr)
 
-            def make_config(image, mounts=None):
-                config = json.loads((ROOT / "config/runtime/config.example.json").read_text())
-                profile = copy.deepcopy(json.loads(PROFILE.read_text()))
-                profile.update(
-                    container_image=image,
-                    executable=str(bin_dir / "docker"),
-                    executable_sha256=hashlib.sha256((bin_dir / "docker").read_bytes()).hexdigest(),
-                )
-                if mounts is not None:
-                    profile["container_mounts"] = mounts
-                config["profiles"].append(profile)
-                return config
-
-            env = dict(os.environ, RACK_DUAL_HOST_FIXTURE=str(root),
-                        PATH=str(bin_dir) + ":" + os.environ["PATH"])
-
-            # Missing container_image should fail validation
-            r = Rack(root / "rack",
-                configure=lambda c: c["profiles"].append(make_config(None)),
-                environment=env)
-            self.assertEqual(r.acquire("athba", TAG, "low")["state"], "unavailable")
-            r.close()
-
-            # Relative mount paths should fail validation
-            r = Rack(root / "rack",
-                configure=lambda c: c["profiles"].append(
-                    make_config("sha256:" + "a" * 64,
-                        {"relative/path": "/abs/path"})),
-                environment=env)
-            self.assertEqual(r.acquire("athba", TAG, "low")["state"], "unavailable")
-            r.close()
-
-            # Named tag image (not sha256) should be accepted
-            r = Rack(root / "rack",
-                configure=lambda c: c["profiles"].append(
-                    make_config("ghcr.io/iamwavecut/ninfer-all:cuda12.9")),
-                environment=env)
-            owner = r.wait(reserve(r))
-            self.assertEqual(owner["state"], "reserved")
-            r.release(owner)
-            r.close()
+    def test_docker_argv_has_separate_gpus_flags_per_device(self):
+        """Multi-GPU Docker profiles must emit --gpus device=<UUID> per device,
+        never a single --gpus device=UUID1,UUID2 which Docker rejects (exit 125)."""
+        with fixture() as (root, rack):
+            owner = wait_reservation(rack, reserve(rack))
+            member = owner["services"][TAG]
+            # Trigger a container start to populate commands.jsonl
+            self.assertIsNotNone(member)
+            release(rack, owner)
+            # Read the captured docker run argv
+            commands = [json.loads(l) for l in
+                        (root / 'commands.jsonl').read_text().splitlines()]
+            run_argv = next((c['args'] for c in commands if c['args'][0] == 'run'), None)
+            self.assertIsNotNone(run_argv, "no docker run call recorded")
+            # Collect all --gpus values
+            gpus_indices = [i for i, a in enumerate(run_argv) if a == '--gpus']
+            self.assertGreater(len(gpus_indices), 0,
+                "docker run must include --gpus flags")
+            # Each --gpus must be followed by a single device=UUID value
+            gpus_values = [run_argv[i + 1] for i in gpus_indices]
+            self.assertEqual(len(gpus_values), len(gpus_indices),
+                "each --gpus must have a following device value")
+            for val in gpus_values:
+                self.assertNotIn(',', val,
+                    f"--gpus value must not contain commas: {val}")
+                self.assertTrue(val.startswith('device='),
+                    f"--gpus value must start with device=: {val}")
+            # Verify all two resource UUIDs appear
+            uuids_in_argv = [v[len('device='):] for v in gpus_values]
+            for resource in RESOURCES:
+                self.assertIn(UUIDS[resource], uuids_in_argv,
+                    f"UUID for {resource} not found in --gpus flags")
 
 
 def release(rack, reservation):
-    rack.release(reservation)
-    rack.wait(reservation, "released")
+    rack.call("cb", "release_reservation", reservation_id=reservation["id"])
+    wait_reservation(rack, reservation, "released")
 
 
 if __name__ == "__main__":

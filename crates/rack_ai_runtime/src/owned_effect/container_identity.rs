@@ -23,6 +23,8 @@ pub(super) struct Status {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct Configuration {
+    #[serde(default)]
+    image: String,
     labels: BTreeMap<String, String>,
     env: Vec<String>,
 }
@@ -48,9 +50,17 @@ impl Container {
             .iter()
             .filter(|entry| entry.starts_with("RACK_RUNTIME_ACTIVATION="))
             .collect();
+        let expected_image = d.profile.container_image.as_deref();
+        let image_matches = expected_image.is_some_and(|expected| {
+            if expected.starts_with("sha256:") {
+                self.image == expected
+            } else {
+                self.config.image == expected
+            }
+        });
         if self.id != id
             || self.name != format!("/rack-runtime-{}", activation)
-            || d.profile.container_image.as_ref() != Some(&self.image)
+            || !image_matches
             || self
                 .config
                 .labels

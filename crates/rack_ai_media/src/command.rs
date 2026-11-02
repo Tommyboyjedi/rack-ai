@@ -3,6 +3,7 @@ use std::{
     process::{Command, Stdio},
 };
 const MAX_PROBE_BYTES: u64 = 256 * 1024;
+const MAX_ERROR_BYTES: u64 = 2048;
 pub fn run(program: &str, args: &[&str]) -> Result<String, String> {
     run_bounded(CommandSpec {
         program,
@@ -31,9 +32,11 @@ pub fn run_bounded(spec: CommandSpec<'_>) -> Result<String, String> {
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| e.to_string())?;
+
+    // Drain stdout bounded.
     let mut bytes = Vec::new();
     let read = child
         .stdout
@@ -46,10 +49,26 @@ pub fn run_bounded(spec: CommandSpec<'_>) -> Result<String, String> {
         let _ = child.wait();
         return Err("probe output oversized".into());
     }
+
+    // Drain stderr bounded — only retained on failure for diagnostics.
+    let mut stderr_bytes = Vec::new();
+    let _ = child
+        .stderr
+        .take()
+        .ok_or("command stderr missing")?
+        .take(MAX_ERROR_BYTES + 1)
+        .read_to_end(&mut stderr_bytes);
+
     let status = child.wait().map_err(|e| e.to_string())?;
     read.map_err(|e| e.to_string())?;
     if !status.success() {
-        return Err(format!("bounded {program} failed ({status})"));
+        let stderr_msg = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+        let stderr_msg = if stderr_msg.is_empty() {
+            format!("bounded {program} failed ({status})")
+        } else {
+            format!("bounded {program} failed ({status}): {stderr_msg}")
+        };
+        return Err(stderr_msg);
     }
     String::from_utf8(bytes).map_err(|e| e.to_string())
 }

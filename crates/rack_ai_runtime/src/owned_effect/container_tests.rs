@@ -59,3 +59,16 @@ fn saved_container_identity_cannot_switch_or_omit_required_evidence() {
     missing.as_object_mut().unwrap().remove("HostConfig");
     assert!(serde_json::from_value::<Container>(missing).is_err());
 }
+
+#[test]
+fn tagged_container_checks_launch_reference_and_generation() {
+    let mut d = crate::owned_effect::tests::demand();
+    d.profile.container_image = Some("ghcr.io/fixture/model:tag".into());
+    let mut value = observation(&d);
+    value["Config"]["Image"] = json!("ghcr.io/fixture/model:tag");
+    let c: Container = serde_json::from_value(value.clone()).unwrap();
+    assert!(c.verify(&d, &"a".repeat(64)).is_ok());
+    value["Config"]["Image"] = json!("ghcr.io/foreign/model:tag");
+    let c: Container = serde_json::from_value(value).unwrap();
+    assert!(c.verify(&d, &"a".repeat(64)).is_err());
+}

@@ -77,16 +77,16 @@ elif name=='systemctl':
     else: sys.exit(4)
 elif name=='docker':
     if args[0]=='run':
-        image=next(a for a in args if a.startswith('sha256:'))
+        image=next(a for a in args if a.startswith(('sha256:', 'ghcr.io/')))
         activation=next(a.split('=',2)[2] for a in args if a.startswith('--label=rack.activation='))
         s.update(image=image,id=(activation*2))
         launch([sys.executable,*args[args.index(image)+1:]],activation)
         print(s['id'])
     elif args[0]=='inspect':
         assert args[1]==s['id'] and not s.get('removed')
-        print(json.dumps([dict(Id=s['id'],Name='/rack-runtime-'+s['activation'],Image=s['image'],
+        print(json.dumps([dict(Id=s['id'],Name='/rack-runtime-'+s['activation'],Image=s['image'] if s['image'].startswith('sha256:') else 'sha256:'+'a'*64,
             State=dict(Pid=s['pid'] if alive() else 0,Running=alive(),Restarting=False,Paused=False),
-            Config=dict(Labels={'rack.activation':faults.get('container_activation',s['activation'])},Env=['RACK_RUNTIME_ACTIVATION='+s['activation']]),
+            Config=dict(Image=s['image'],Labels={'rack.activation':faults.get('container_activation',s['activation'])},Env=['RACK_RUNTIME_ACTIVATION='+s['activation']]),
             HostConfig=dict(RestartPolicy=dict(Name='no')))]))
     elif args[0]=='top':
         print('PID\n'+str(s['pid']))

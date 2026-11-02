@@ -17,7 +17,8 @@ class HostingTests(unittest.TestCase):
                 p=c['profiles'][0];p['driver']=driver
                 p['args'] += ['--host', '127.0.0.1']
                 if driver=='docker':
-                    p.update(container_image='sha256:'+'a'*64,executable=str(bin/'docker'),executable_sha256=hashlib.sha256((bin/'docker').read_bytes()).hexdigest())
+                    if fault=='tagged': p['backend']='ninfer'
+                    p.update(container_image='ghcr.io/fixture/model:tag' if fault=='tagged' else 'sha256:'+'a'*64,executable=str(bin/'docker'),executable_sha256=hashlib.sha256((bin/'docker').read_bytes()).hexdigest())
                 else:
                     artifact=root/'synthetic.gguf';artifact.write_bytes(b'fixture-only-gguf')
                     p.update(backend='llama_cpp',artifact=str(artifact),artifact_sha256=hashlib.sha256(artifact.read_bytes()).hexdigest())
@@ -61,9 +62,9 @@ class HostingTests(unittest.TestCase):
                 r.release(d);r.wait(d,'released')
                 calls=[json.loads(l) for l in (root/'commands.jsonl').read_text().splitlines()]
                 if driver=='docker':
-                    self.assertEqual(r.counts('stop')['local-primary'],0)
+                    self.assertEqual(r.counts('stop')['local-primary'],1 if fault=='tagged' else 0)
                     managed=json.loads((r.root/'authority'/'managed.json').read_text())
-                    self.assertEqual(len(managed['data'].get('warm_residencies',{})),1)
+                    self.assertEqual(len(managed['data'].get('warm_residencies',{})),0 if fault=='tagged' else 1)
                     start=next(c['args'] for c in calls if c['args'][0]=='run')
                     self.assertIn('--pull=never',start);self.assertIn('--memory=32m',start)
                 else:
@@ -80,6 +81,7 @@ class HostingTests(unittest.TestCase):
 
     def test_already_exited_owned_container_can_be_released(self):self.exercise('docker','exited')
 
+    def test_docker_tagged_image_uses_real_inspection_identity(self):self.exercise('docker','tagged')
     def test_docker_vllm_production_adapter(self):self.exercise('docker')
     def test_systemd_llama_cpp_production_adapter(self):self.exercise('systemd')
 

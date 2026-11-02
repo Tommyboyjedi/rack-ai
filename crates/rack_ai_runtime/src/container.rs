@@ -21,6 +21,8 @@ struct Status {
 #[derive(Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct ContainerConfig {
+    #[serde(default)]
+    image: String,
     labels: BTreeMap<String, String>,
 }
 pub struct ContainerHosting<'a> {
@@ -34,13 +36,6 @@ impl ContainerHosting<'_> {
             .container_image
             .as_ref()
             .ok_or("container_image_missing")?;
-        let devices = d
-            .profile
-            .resources
-            .iter()
-            .map(|r| self.config.devices[r].uuid.as_str())
-            .collect::<Vec<_>>()
-            .join(",");
         let mut args = vec![
             "run".into(),
             "--detach".into(),
@@ -49,8 +44,6 @@ impl ContainerHosting<'_> {
             format!("--name=rack-runtime-{}", activation),
             format!("--label=rack.activation={}", activation),
             "--network=host".into(),
-            "--gpus".into(),
-            format!("device={devices}"),
             "--pids-limit=256".into(),
             format!("--memory={}m", d.profile.host_mib),
             format!("--memory-swap={}m", d.profile.host_mib),
@@ -59,6 +52,14 @@ impl ContainerHosting<'_> {
             "--env=TRANSFORMERS_OFFLINE=1".into(),
             format!("--env=RACK_RUNTIME_ACTIVATION={}", activation),
         ];
+        for uuid in d
+            .profile
+            .resources
+            .iter()
+            .map(|r| self.config.devices[r].uuid.as_str())
+        {
+            args.extend(["--gpus".into(), format!("device={uuid}")]);
+        }
         for (source, target) in &d.profile.container_mounts {
             args.extend([
                 "--mount".into(),
@@ -78,7 +79,7 @@ impl ContainerHosting<'_> {
         .to_string();
         let observed = inspect(&id, &d.profile.executable)?;
         if !observed.state.running
-            || observed.image != *image
+            || !image_matches(&observed, image)
             || observed
                 .config
                 .labels
@@ -145,11 +146,42 @@ pub fn verify(p: &Process, profile: &crate::config::Profile) -> Result<(), Strin
     let id = p.container.as_ref().ok_or("container_identity_missing")?;
     let observed = inspect(id, &profile.executable)?;
     if observed.id != *id
-        || profile.container_image.as_ref() != Some(&observed.image)
+        || !profile
+            .container_image
+            .as_ref()
+            .is_some_and(|image| image_matches(&observed, image))
         || observed.config.labels.get("rack.activation") != Some(&p.activation)
         || (observed.state.running && observed.state.pid != p.pid)
     {
         return Err("container_generation_mismatch".into());
     }
     Ok(())
+}
+
+// Docker Image is a resolved SHA; Config.Image retains the exact launch reference.
+// Container ID, activation label and process identity remain independently checked.
+fn image_matches(container: &Container, expected: &str) -> bool {
+    if expected.starts_with("sha256:") {
+        container.image == expected
+    } else {
+        container.config.image == expected
+    }
+}
+
+#[cfg(test)]
+mod image_tests {
+    use super::*;
+    #[test]
+    fn docker_tag_and_pinned_id_have_distinct_inspection_fields() {
+        let c: Container = serde_json::from_value(serde_json::json!({
+            "Id": "a".repeat(64), "Image": "sha256:resolved",
+            "State": {"Pid": 10, "Running": true},
+            "Config": {"Image": "ghcr.io/fixture/model:tag", "Labels": {}}
+        }))
+        .unwrap();
+        assert!(image_matches(&c, "ghcr.io/fixture/model:tag"));
+        assert!(image_matches(&c, "sha256:resolved"));
+        assert!(!image_matches(&c, "ghcr.io/foreign/model:tag"));
+        assert!(!image_matches(&c, "sha256:foreign"));
+    }
 }
