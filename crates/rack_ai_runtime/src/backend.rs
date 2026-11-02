@@ -77,18 +77,14 @@ pub fn infer(
         "model":d.profile.model,"messages":[{"role":"user","content":request.prompt}],
         "max_tokens":request.max_tokens,"stream":false}))
         });
-    let timeout = if d.profile.enforce_input_limits {
-        crate::input_preflight::admit_running(
-            service,
-            crate::input_preflight::RunningInput {
-                demand: d,
-                invocation,
-                body: &body,
-            },
-        )?
-    } else {
-        Duration::from_secs(request.timeout_seconds)
-    };
+    let timeout = crate::input_admission::admit(
+        service,
+        crate::input_admission::AdmissionInput {
+            demand: d,
+            invocation,
+            body: &body,
+        },
+    )?;
     let client = client_duration(timeout)?;
     let path = request
         .payload

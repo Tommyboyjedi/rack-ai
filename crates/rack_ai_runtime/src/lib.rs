@@ -79,7 +79,9 @@ mod interaction_cleanup;
 #[cfg(test)]
 mod interaction_tests;
 
+mod input_admission;
 mod input_preflight;
+mod service_request;
 
 mod integrity;
 mod launch_config;
@@ -87,3 +89,4 @@ mod launch_identity;
 mod strata_ready;
 
 mod llama_vision_ready;
+mod service_error;

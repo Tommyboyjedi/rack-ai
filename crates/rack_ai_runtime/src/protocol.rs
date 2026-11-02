@@ -20,6 +20,8 @@ pub enum Protocol {
 pub struct Payload {
     pub protocol: Protocol,
     pub body: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_model: Option<String>,
 }
 impl Payload {
     pub fn validate(&self, d: &crate::types::Demand) -> Result<u32, String> {
@@ -137,11 +139,12 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
         if !model_seen {
             return Err("stream_model_unproven".into());
         }
+        let body = external_stream(bytes, p)?;
         Ok(
-            serde_json::json!({"rack_protocol_response":{"content_type":"text/event-stream","body":bytes}}),
+            serde_json::json!({"rack_protocol_response":{"content_type":"text/event-stream","body":body}}),
         )
     } else {
-        let value: Value = serde_json::from_str(&bytes).map_err(|_| "invalid_backend_json")?;
+        let mut value: Value = serde_json::from_str(&bytes).map_err(|_| "invalid_backend_json")?;
         let complete = match p.protocol {
             Protocol::ChatCompletions => value
                 .get("choices")
@@ -157,10 +160,45 @@ pub fn raw_result(bytes: String, p: &Payload) -> Result<Value, String> {
         if !complete || value.get("model") != p.body.get("model") {
             return Err("response_model_mismatch".into());
         }
+        if let Some(model) = &p.client_model {
+            value["model"] = Value::String(model.clone());
+        }
         Ok(
-            serde_json::json!({"rack_protocol_response":{"content_type":"application/json","body":bytes}}),
+            serde_json::json!({"rack_protocol_response":{"content_type":"application/json","body":serde_json::to_string(&value).map_err(|_| "invalid_backend_json")?}}),
         )
     }
+}
+fn external_stream(bytes: String, payload: &Payload) -> Result<String, String> {
+    let Some(model) = &payload.client_model else {
+        return Ok(bytes);
+    };
+    let mut output = String::with_capacity(bytes.len());
+    for line in bytes.split_inclusive('\n') {
+        let (content, ending) = line
+            .strip_suffix('\n')
+            .map_or((line, ""), |content| (content, "\n"));
+        let Some(data) = content.strip_prefix("data: ") else {
+            output.push_str(line);
+            continue;
+        };
+        if data == "[DONE]" {
+            output.push_str(line);
+            continue;
+        }
+        let mut event: Value = serde_json::from_str(data).map_err(|_| "invalid_stream_event")?;
+        let target = if event.get("response").is_some() {
+            &mut event["response"]
+        } else {
+            &mut event
+        };
+        if target.get("model").is_some() {
+            target["model"] = Value::String(model.clone());
+        }
+        output.push_str("data: ");
+        output.push_str(&serde_json::to_string(&event).map_err(|_| "invalid_stream_event")?);
+        output.push_str(ending);
+    }
+    Ok(output)
 }
 
 use crate::config::ImageMimeType as ImageFormat;
@@ -468,4 +506,47 @@ fn observed_limit(value: &Value, payload: &Payload) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod alias_response_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn payload(stream: bool) -> Payload {
+        Payload {
+            protocol: Protocol::ChatCompletions,
+            body: json!({"model":"backend-model","max_tokens":8,"stream":stream}),
+            client_model: Some("rackai-service".into()),
+        }
+    }
+
+    #[test]
+    fn verifies_backend_identity_before_returning_alias() {
+        let result = raw_result(
+            json!({"model":"backend-model","choices":[{"message":{"content":"ok"}}],"usage":{"completion_tokens":1}}).to_string(),
+            &payload(false),
+        ).unwrap();
+        let body: Value =
+            serde_json::from_str(result["rack_protocol_response"]["body"].as_str().unwrap())
+                .unwrap();
+        assert_eq!(body["model"], "rackai-service");
+        let wrong = raw_result(
+            json!({"model":"other","choices":[{}]}).to_string(),
+            &payload(false),
+        );
+        assert_eq!(wrong.unwrap_err(), "response_model_mismatch");
+    }
+
+    #[test]
+    fn rewrites_stream_model_and_preserves_terminal_event() {
+        let stream = concat!(
+            "data: {\"model\":\"backend-model\",\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let result = raw_result(stream.into(), &payload(true)).unwrap();
+        let body = result["rack_protocol_response"]["body"].as_str().unwrap();
+        assert!(body.contains("\"model\":\"rackai-service\""));
+        assert!(body.contains("data: [DONE]"));
+    }
 }

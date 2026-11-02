@@ -285,17 +285,23 @@ fn profile_summary(p: &crate::config::Profile) -> Value {
         "max_input_tokens": p.effective_max_input_tokens(),
         "max_output_tokens": p.max_output_tokens,
     });
+    if p.protocols
+        .contains(&crate::protocol::Protocol::ChatCompletions)
+        && p.backend != crate::config::Backend::Comfyui
+    {
+        value["inference_service"] = json!({
+            "contract": "rack-ai/inference-service/v1",
+            "model_alias": crate::service_request::MODEL_ALIAS,
+            "protocols": p.protocols,
+            "streaming": {"supported": p.streaming, "delivery": "buffered_sse"},
+            "tools": {"execution": "client_owned"}
+        });
+    }
     if p.launch.is_some() {
         value["runtime_features"] = runtime_features(p);
     }
     if p.context_reserve_tokens > 0 {
         value["context_reserve_tokens"] = json!(p.context_reserve_tokens);
-    }
-    if p.input_token_preflight {
-        value
-            .as_object_mut()
-            .expect("profile summary object")
-            .insert("input_preflight".into(), preflight_description(p, None));
     }
     if let Some(image_input) = image_input_limits(p) {
         value

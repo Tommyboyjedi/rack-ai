@@ -19,6 +19,7 @@
     "chat_completions"
   ],
   "streaming": true,
+  "reasoning_default": "disabled",
   "input_token_preflight": true,
   "resources": [
     "gpu-4080-super",
@@ -1417,7 +1418,7 @@
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/liblzma.so.5",
-        "sha256": "64550dc7a4dc9159d32c00d9e78ce86e0951d02b7b24827df97f090dae101a19"
+        "sha256": "515749273a91ca5e3b273b4025dc2c1f8827f90005baea0ab85ffb594e74f72f"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libm.so.6",
@@ -1449,7 +1450,7 @@
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libz.so.1",
-        "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+        "sha256": "27fa6c6cb94fb5b099ead61758a300dbc392d1dbf307fff6c16a9b8e57fdc9de"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1",
@@ -1669,7 +1670,7 @@
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/liblzma.so.5.8.3",
-        "sha256": "64550dc7a4dc9159d32c00d9e78ce86e0951d02b7b24827df97f090dae101a19"
+        "sha256": "515749273a91ca5e3b273b4025dc2c1f8827f90005baea0ab85ffb594e74f72f"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libstdc++.so.6.0.35",
@@ -1681,7 +1682,7 @@
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libz.so.1.3.1",
-        "sha256": "47b61967895b30e8c0c6818dd633ffeb87711cf637c688f981896f0dd84ce23b"
+        "sha256": "27fa6c6cb94fb5b099ead61758a300dbc392d1dbf307fff6c16a9b8e57fdc9de"
       },
       {
         "path": "/usr/lib/x86_64-linux-gnu/libzstd.so.1.5.7",

@@ -68,6 +68,7 @@ pub(crate) fn payload(demand: &Demand, mut body: Value) -> Result<Payload, Strin
     let payload = Payload {
         protocol: Protocol::ChatCompletions,
         body,
+        client_model: None,
     };
     if payload.validate(demand)? == 0 {
         return Err("inference_limits".into());

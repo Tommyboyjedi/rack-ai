@@ -1,9 +1,5 @@
 //! Capability URLs rotate with activation. Explicit keys identify logical calls within a reservation.
-use crate::{
-    protocol::{Payload, Protocol},
-    service::Service,
-    types::*,
-};
+use crate::{protocol::Protocol, service::Service, types::*};
 use axum::{
     Json,
     extract::{Path, State},
@@ -100,9 +96,11 @@ pub async fn handle(
                 | InvocationState::Uncertain
                 | InvocationState::Cancelled
                 | InvocationState::Expired
-        ) || std::time::Instant::now() >= deadline
-        {
-            return failure(format!("invocation_{:?}:{}", result.state, result.id));
+        ) {
+            return crate::service_error::invocation(&service, &result);
+        }
+        if std::time::Instant::now() >= deadline {
+            return crate::service_error::wait_expired(&service, &result);
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
@@ -146,10 +144,11 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
         };
         object.insert(key.into(), json!(d.profile.max_output_tokens));
     }
-    let payload = Payload {
+    let payload = crate::service_request::normalize(crate::service_request::NormalizeInput {
+        profile: &d.profile,
         protocol: call.protocol,
         body,
-    };
+    })?;
     let max_tokens = payload.validate(&d)?;
     let encoded = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
     // Headerless compatibility is conservative: equal bytes in one activation reconcile.
@@ -192,10 +191,5 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
     )
 }
 pub(crate) fn failure(error: String) -> axum::response::Response {
-    let status = if error.starts_with("capacity_") {
-        StatusCode::TOO_MANY_REQUESTS
-    } else {
-        StatusCode::CONFLICT
-    };
-    (status, Json(json!({"schema":VERSION,"error":error}))).into_response()
+    crate::service_error::generic(error)
 }
