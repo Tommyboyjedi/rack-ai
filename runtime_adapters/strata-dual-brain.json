@@ -31,7 +31,9 @@
     "2",
     "--adapt-async",
     "1",
-    "--vision"
+    "--vision",
+    "--layer-split",
+    "26"
   ],
   "cwd": "/home/tomp/strata-test",
   "tokenizer": "/home/tomp/strata-q3/packs/unsloth-ud-iq3_xxs/tokenizer",
@@ -46,10 +48,7 @@
     "STRATA_HC_Q8": "1",
     "STRATA_ROUTE_TAIL_SKIP": "0"
   },
-  "gpu": [
-    0,
-    2
-  ],
+  "gpu": [],
   "gpus_asked": true,
   "layer_split": "26",
   "host": "127.0.0.1",

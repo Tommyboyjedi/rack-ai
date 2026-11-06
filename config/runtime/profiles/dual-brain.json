@@ -695,7 +695,7 @@
       },
       {
         "path": "/srv/rack-ai/runtime_adapters/strata-dual-brain.json",
-        "sha256": "3d58fe7e22652964d61118a889dc6ebcbc81a8518fc231e2bb388d29ccfb2262"
+        "sha256": "5fa2cdc01f63463d4c0d9a210cc1ed7dbd04e881e7f5da12cc7cc143451bb9e0"
       },
       {
         "path": "/usr/lib/python3.14/__future__.py",
@@ -1743,7 +1743,7 @@
       },
       {
         "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata-dual-brain.json",
-        "sha256": "3d58fe7e22652964d61118a889dc6ebcbc81a8518fc231e2bb388d29ccfb2262"
+        "sha256": "5fa2cdc01f63463d4c0d9a210cc1ed7dbd04e881e7f5da12cc7cc143451bb9e0"
       }
     ],
     "file_pin_verifier": "/usr/bin/gnusha256sum"
