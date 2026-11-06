@@ -4,8 +4,10 @@
   "model": "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
   "backend": "strata",
   "driver": "systemd",
-  "qualified": false,
-  "evidence": [],
+  "qualified": true,
+  "evidence": [
+    "/srv/rack-ai/deployments/idle-runtime/evidence/dual-brain-q3-20261106T234000Z/production-validation.json"
+  ],
   "capabilities": [
     "reasoning",
     "coding",
@@ -693,7 +695,7 @@
       },
       {
         "path": "/srv/rack-ai/runtime_adapters/strata-dual-brain.json",
-        "sha256": "3aae42ca64cf2b5eb7d5b3988ddd99c078c830e4279393eab883b08376b77db8"
+        "sha256": "3d58fe7e22652964d61118a889dc6ebcbc81a8518fc231e2bb388d29ccfb2262"
       },
       {
         "path": "/usr/lib/python3.14/__future__.py",
