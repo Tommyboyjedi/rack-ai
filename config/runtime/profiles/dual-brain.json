@@ -642,14 +642,6 @@
         "sha256": "bda779ea9e9ad234f60315477d7cfd0bdde861cd8ddd9df8cdaf62f18c4cec14"
       },
       {
-        "path": "/srv/models/qwen3.8-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00002-of-00003.gguf",
-        "sha256": "577a38a2392b40ca2193cea502e1d92f60b8cd370675d308e0ec21885d9daaa7"
-      },
-      {
-        "path": "/srv/models/qwen3.8-flash-next/Qwen3.8-Flash-Next-UD-IQ4_XS-00003-of-00003.gguf",
-        "sha256": "d4634e6d84f0ebb0940be15c90d3790bf6464e3dea3a1cddc567dc0e83ad8833"
-      },
-      {
         "path": "/srv/models/qwen3.8-flash-next/UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00004.gguf",
         "sha256": "9d5644b371ffac921427c8021cc7242dab8e3ba37d7b48d1e79fe3770fbf9915"
       },
