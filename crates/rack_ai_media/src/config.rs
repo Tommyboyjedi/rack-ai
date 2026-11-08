@@ -44,7 +44,16 @@ pub struct Config {
 #[derive(Clone, Deserialize)]
 pub struct ProtectedWorker {
     pub container: String,
+    #[serde(default)]
+    pub placement: WorkerPlacement,
     pub uuid: String,
+}
+#[derive(Clone, Copy, Default, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerPlacement {
+    #[default]
+    Docker,
+    Host,
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]

@@ -32,26 +32,29 @@ impl PlacementProbe<'_> {
             {
                 return Err("missing/duplicate/overlapping protected GPU UUID".into());
             }
-            let raw = run(
-                "docker",
-                &[
-                    "inspect",
-                    &worker.container,
-                    "--format",
-                    "{{json .HostConfig.DeviceRequests}}",
-                ],
-            )?;
-            let devices: serde_json::Value =
-                serde_json::from_str(&raw).map_err(|_| "invalid protected placement")?;
-            let requests = devices
-                .as_array()
-                .ok_or("missing protected device requests")?;
-            if requests.len() != 1
-                || requests[0].get("DeviceIDs") != Some(&serde_json::json!([worker.uuid]))
-            {
-                return Err(
-                    "protected live inference binding differs from administrator mapping".into(),
-                );
+            if worker.placement == crate::config::WorkerPlacement::Docker {
+                let raw = run(
+                    "docker",
+                    &[
+                        "inspect",
+                        &worker.container,
+                        "--format",
+                        "{{json .HostConfig.DeviceRequests}}",
+                    ],
+                )?;
+                let devices: serde_json::Value =
+                    serde_json::from_str(&raw).map_err(|_| "invalid protected placement")?;
+                let requests = devices
+                    .as_array()
+                    .ok_or("missing protected device requests")?;
+                if requests.len() != 1
+                    || requests[0].get("DeviceIDs") != Some(&serde_json::json!([worker.uuid]))
+                {
+                    return Err(
+                        "protected live inference binding differs from administrator mapping"
+                            .into(),
+                    );
+                }
             }
         }
         if protected.len() != 2 {
