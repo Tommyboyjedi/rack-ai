@@ -66,6 +66,7 @@ fn dispatch(app: &WebState, input: ApiRequest) -> Result<(StatusCode, serde_json
     use axum::http::Method;
     let p = &input.principal;
     match (input.method.clone(), input.path.as_str()) {
+        (Method::POST, "recover") => crate::session_recovery::handle(app, &input),
         (Method::GET, "status") => {
             let s = app.store.read()?;
             let session = s
@@ -77,6 +78,7 @@ fn dispatch(app: &WebState, input: ApiRequest) -> Result<(StatusCode, serde_json
                 StatusCode::OK,
                 serde_json::json!({"schema":VERSION,"state":s.service.state,"mode":s.service.mode,
                 "heartbeat":s.service.heartbeat,"session_id":session,
+                "operator":p.operator,
                 "reservation_idle_seconds":app.config.reservation_idle_seconds,"message":status_message(&s, &p.id)}),
             ))
         }

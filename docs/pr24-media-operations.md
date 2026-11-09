@@ -92,3 +92,7 @@ Historical pre-migration files are retained as private archives for audit, not l
 ## Host-managed inference placement
 
 Protected workers may explicitly set placement to host when RackAI manages inference as host processes. Placement defaults to docker for existing configurations. Docker workers retain the bounded Docker DeviceRequests validation and fail closed when unavailable. Both protected physical GPU UUIDs must still exist, be distinct, and exclude the ComfyUI UUID. ComfyUI startup still acquires the canonical GPU lease, verifies the configured systemd/runtime/GPU binding, and rejects foreign media-GPU processes. Keep Docker-managed workers in docker placement mode. Legacy container labels remain for configuration compatibility.
+
+## Failed native-session recovery
+
+The operator launcher shows Recover session beside Finish session when the media receiver reports recovery_required. The confirmed POST /api/media/v1/recover requires the operator's own failed native session, an unchanged unit, an absent backend and empty media GPU, and a verified canonical manual lease without a managed runtime claim. Live, foreign, managed, or uncertain ownership blocks recovery. The controller records the previous service identity, clears a verified dead unit's failed marker, and uses the existing reconciliation and cleanup path to release the failed generation. Input/output cleanup applies. An unfinished session restarts through normal admission with a fresh lease; a pending Finish remains finished. Interrupted renders remain interrupted.

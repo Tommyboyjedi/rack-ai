@@ -67,3 +67,5 @@ pub mod shared_placement;
 mod job_activity;
 
 mod config_policy;
+
+pub mod session_recovery;
