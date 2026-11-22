@@ -17,13 +17,7 @@ pub fn ready(config: &Config, demand: &Demand) -> Result<(), String> {
         .as_ref()
         .ok_or("activation_process_missing")?;
     process::endpoint_owned(parent, &demand.profile)?;
-    let client = Client::builder()
-        .connect_timeout(Duration::from_secs(1))
-        .timeout(Duration::from_secs(2))
-        .redirect(reqwest::redirect::Policy::none())
-        .no_proxy()
-        .build()
-        .map_err(|_| "strata_readiness_client")?;
+    let client = status_client()?;
     let status = read(&client, (&demand.profile.endpoint, "/rackai/status"))?;
     if status["schema"] != "rack-ai/strata-runtime/v1"
         || status["service"] != "strata"
@@ -89,4 +83,56 @@ fn read(client: &Client, address: (&str, &str)) -> Result<Value, String> {
         return Err("strata_readiness_oversized".into());
     }
     serde_json::from_slice(&bytes).map_err(|_| "strata_readiness_invalid_json".into())
+}
+
+fn status_client() -> Result<Client, String> {
+    Client::builder()
+        .connect_timeout(Duration::from_secs(1))
+        .timeout(Duration::from_secs(2))
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .map_err(|_| "strata_readiness_client".into())
+}
+
+pub(crate) fn idle(config: &Config, demand: &Demand) -> Result<bool, String> {
+    let _guard = rack_ai_infrastructure::endpoint_fence::managed_read_guard(
+        &config.authority_root,
+        &demand.profile.endpoint,
+    )?;
+    ready(config, demand)?;
+    let client = status_client()?;
+    let slots = read(&client, (&demand.profile.endpoint, "/slots"))?;
+    let status = read(&client, (&demand.profile.endpoint, "/v1/status"))?;
+    let parent = demand
+        .process
+        .as_ref()
+        .ok_or("activation_process_missing")?;
+    process::endpoint_owned(parent, &demand.profile)?;
+    Ok(engine_idle(&slots, &status))
+}
+
+fn engine_idle(slots: &Value, status: &Value) -> bool {
+    status["loaded"] == true
+        && status["concurrency"]["serving"].as_u64() == Some(1)
+        && status["activity"]["in_flight"].as_u64() == Some(0)
+        && slots.as_array().is_some_and(
+            |slots| matches!(slots.as_slice(), [slot] if slot["is_processing"] == false),
+        )
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_an_explicit_idle_single_slot_is_proof() {
+        let idle = json!({"loaded":true, "concurrency":{"serving":1}, "activity":{"in_flight":0}});
+        assert!(engine_idle(&json!([{"is_processing":false}]), &idle));
+        for slots in [json!([]), json!([{}]), json!([{"is_processing":true}])] {
+            assert!(!engine_idle(&slots, &idle));
+        }
+        assert!(!engine_idle(&json!([{"is_processing":false}]), &json!({})));
+    }
 }

@@ -74,14 +74,40 @@ impl Dispatch<'_> {
         let Some((invocation, demand)) = started else {
             return Ok(());
         };
-        let invocation = crate::payload_store::hydrate_invocation(
+        let invocation = match crate::payload_store::hydrate_invocation(
             &self.service.config.authority_root,
-            invocation,
-        )?;
+            invocation.clone(),
+        ) {
+            Ok(hydrated) => hydrated,
+            Err(error) => {
+                return (Completion {
+                    service: self.service,
+                })
+                .save(
+                    (invocation, demand),
+                    Err(format!("input_admission_payload_unavailable:{error}")),
+                );
+            }
+        };
         let result = if crate::work_payload::is_workspace(&invocation) {
             crate::work_execution::execute(self.service, (&demand, &invocation))
         } else {
             crate::backend::infer(self.service, (&demand, &invocation))
+        };
+        let result = match result {
+            Err(ref error)
+                if demand.profile.backend == crate::config::Backend::Strata
+                    && !crate::work_payload::is_workspace(&invocation)
+                    && matches!(
+                        error.as_str(),
+                        "backend_transport_uncertain" | "backend_read_uncertain"
+                    )
+                    && crate::strata_ready::idle(&self.service.config, &demand)
+                        .unwrap_or(false) =>
+            {
+                Err(crate::stalled_inference::MISSING_RESULT.into())
+            }
+            other => other,
         };
         Completion {
             service: self.service,
@@ -238,7 +264,9 @@ impl Completion<'_> {
 
 pub(crate) fn failure_state(error: &str) -> InvocationState {
     match error {
-        "backend_response_oversized" => InvocationState::Failed,
+        "backend_response_oversized" | crate::stalled_inference::MISSING_RESULT => {
+            InvocationState::Failed
+        }
         error if error.starts_with("input_admission_") => InvocationState::Failed,
         "backend_transport_uncertain"
         | "backend_read_uncertain"
@@ -468,6 +496,74 @@ mod tests {
         let report = maintenance.join().unwrap().unwrap();
         crate::history_archive::clear_maintenance_publish_io_pause();
         assert!(report.archived_invocations >= 1);
+    }
+
+    #[test]
+    fn abandoned_dispatch_does_not_hold_the_next_queued_call() {
+        let fixture = Fixture::new();
+        let mut demand = fixture.acquire_ready();
+        let first = crate::inference::Submission {
+            service: &fixture.service,
+        }
+        .submit(&demand.owner, request(&demand, "lost-response"))
+        .unwrap();
+        let next = crate::inference::Submission {
+            service: &fixture.service,
+        }
+        .submit(&demand.owner, request(&demand, "next-chat"))
+        .unwrap();
+        demand.profile.backend = crate::config::Backend::Strata;
+        fixture
+            .service
+            .authority
+            .update(|state| {
+                state.data.demands.insert(demand.id.clone(), demand.clone());
+                let saved = state.data.invocations.get_mut(&first.id).unwrap();
+                saved.state = InvocationState::Running;
+                saved.started = Some(now());
+                saved.execution_deadline = Some(now() + 30);
+                saved.activation = Some(demand.generation.clone());
+                Ok(())
+            })
+            .unwrap();
+
+        let lock = crate::workers::record_lock(&fixture.service, &first.id)
+            .unwrap()
+            .unwrap();
+        crate::stalled_inference::reconcile_with(&fixture.service, |_, _| panic!("live worker"))
+            .unwrap();
+        drop(lock);
+        crate::stalled_inference::reconcile_with(&fixture.service, |_, _| Ok(false)).unwrap();
+        fixture
+            .service
+            .authority
+            .read(|state| {
+                assert!(!crate::workers::eligible(
+                    state,
+                    &state.data.invocations[&next.id]
+                ));
+                Ok(())
+            })
+            .unwrap();
+
+        crate::stalled_inference::reconcile_with(&fixture.service, |_, _| Ok(true)).unwrap();
+        fixture
+            .service
+            .authority
+            .read(|state| {
+                let finished = &state.data.invocations[&first.id];
+                assert_eq!(finished.state, InvocationState::Failed);
+                assert_eq!(
+                    finished.error.as_deref(),
+                    Some(crate::stalled_inference::MISSING_RESULT)
+                );
+                assert!(crate::workers::eligible(
+                    state,
+                    &state.data.invocations[&next.id]
+                ));
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

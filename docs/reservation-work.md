@@ -471,3 +471,20 @@ Malformed HTTP/JSON and oversized requests may use the receiver's normal
 extractor errors, including 413. None of these failures proves that the payload
 fits; do not replace a missing count with a byte estimate. Existing inference
 transport errors and durable reconciliation semantics remain unchanged.
+
+
+### Recovering an abandoned Strata inference slot
+
+A request that cannot be prepared after dispatch is recorded as failed before
+any model call. If a Strata dispatch worker has gone away without recording a
+result, RackAI keeps the slot fenced until it verifies the same owned activation
+and both Strata activity and slot status show no work. The request then fails
+with the diagnostic `invocation_outcome_unknown_backend_idle`, and the next
+queued request is eligible. RackAI never replays the lost invocation. If the
+worker is gone and the execution deadline elapses without verified drain, the
+reservation follows the existing uncertain-outcome recovery path.
+
+Scoped chat and responses callers may send `RackAI-Execution-Timeout-Seconds`
+to request a positive execution budget up to the deployed profile's limit.
+This cap does not change queue wait or extend the profile budget. Keep the
+same budget when retrying the same idempotency key.

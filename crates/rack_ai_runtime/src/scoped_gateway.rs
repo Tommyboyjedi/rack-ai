@@ -44,6 +44,17 @@ pub async fn handle(
         .get("idempotency-key")
         .and_then(|h| h.to_str().ok())
         .map(String::from);
+    let timeout = match headers.get("rackai-execution-timeout-seconds") {
+        None => None,
+        Some(header) => match header
+            .to_str()
+            .ok()
+            .and_then(|value| value.parse::<u64>().ok())
+        {
+            Some(value) if value > 0 => Some(value),
+            _ => return failure("invalid_execution_timeout".into()),
+        },
+    };
     let copy = service.clone();
     let submitted = tokio::task::spawn_blocking(move || {
         submit(
@@ -55,6 +66,7 @@ pub async fn handle(
                 body,
                 key,
                 namespace,
+                timeout,
             },
         )
     })
@@ -114,6 +126,7 @@ struct GatewayCall {
     body: Value,
     key: Option<String>,
     namespace: Option<String>,
+    timeout: Option<u64>,
 }
 fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
     let d = service.authority.read(|s| {
@@ -151,7 +164,14 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
         body,
     };
     let max_tokens = payload.validate(&d)?;
-    let encoded = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+    let timeout_seconds = call.timeout.unwrap_or(d.profile.inference_seconds);
+    if timeout_seconds > d.profile.inference_seconds {
+        return Err("invalid_execution_timeout".into());
+    }
+    let mut encoded = serde_json::to_vec(&payload).map_err(|e| e.to_string())?;
+    if let Some(timeout) = call.timeout {
+        encoded.extend_from_slice(&timeout.to_be_bytes());
+    }
     // Headerless compatibility is conservative: equal bytes in one activation reconcile.
     // Distinct deliberate identical calls require explicit IDs, stable across HTTP retries.
     let submission_id = call.key.unwrap_or_else(|| {
@@ -184,7 +204,7 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
             profile_hash: d.profile_hash,
             prompt: String::new(),
             max_tokens,
-            timeout_seconds: d.profile.inference_seconds,
+            timeout_seconds,
             wait_seconds: None,
             workspace_scope,
             payload: Some(payload),

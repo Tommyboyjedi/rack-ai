@@ -84,6 +84,7 @@ mod input_preflight;
 mod integrity;
 mod launch_config;
 mod launch_identity;
+mod stalled_inference;
 mod strata_ready;
 
 mod llama_vision_ready;

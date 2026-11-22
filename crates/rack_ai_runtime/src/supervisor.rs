@@ -102,6 +102,7 @@ impl Supervisor {
             service: &self.service,
         }
         .reconsider()?;
+        crate::stalled_inference::reconcile(&self.service)?;
         let (mut demands, invocations) = self.service.authority.read(|s| {
             let mut reservations = std::collections::BTreeSet::new();
             Ok((
