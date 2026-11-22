@@ -1,0 +1,17 @@
+[Unit]
+Description=RackAI Shared-Bridge V2 reservation manager
+After=network-online.target rack-ai-runtime.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/srv/rack-ai/deployments/shared-bridge/current
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/usr/bin/python3 -u -m shared_bridge.app --config /srv/rack-ai/deployments/shared-bridge/config.json
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+UMask=0077
+
+[Install]
+WantedBy=default.target

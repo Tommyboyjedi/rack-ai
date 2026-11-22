@@ -91,7 +91,9 @@ fn explicit_reasoning(
                 json!({"enable_thinking": false}),
             );
         }
-        Backend::Strata => return Err("reasoning_semantics_unrepresentable".into()),
+        Backend::Strata => {
+            body.insert("reasoning_effort".into(), json!(effort));
+        }
         _ => {
             body.insert("reasoning_effort".into(), Value::String(effort.into()));
         }
@@ -189,12 +191,18 @@ mod tests {
         );
         let ninfer = request(Backend::Ninfer, json!({"reasoning_effort":"high"}));
         assert_eq!(ninfer.body["reasoning_effort"], "high");
-        let result = normalize(NormalizeInput {
-            profile: &profile(Backend::Strata),
-            protocol: Protocol::ChatCompletions,
-            body: json!({"model":MODEL_ALIAS,"messages":[],"reasoning_effort":"high"}),
-        });
-        assert_eq!(result.unwrap_err(), "reasoning_semantics_unrepresentable");
+        for effort in ["none", "low", "medium", "high"] {
+            let strata = request(Backend::Strata, json!({"reasoning_effort": effort}));
+            if effort == "none" {
+                assert_eq!(
+                    strata.body["chat_template_kwargs"],
+                    json!({"enable_thinking": false})
+                );
+            } else {
+                assert_eq!(strata.body["reasoning_effort"], effort);
+                assert!(strata.body.get("chat_template_kwargs").is_none());
+            }
+        }
     }
 
     #[test]

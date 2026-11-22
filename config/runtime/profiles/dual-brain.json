@@ -1,6 +1,6 @@
 {
   "tag": "dual-brain",
-  "version": "qwen3.8-flash-next-ud-iq3-xxs-strata-0.1.57-131k-vision-q3",
+  "version": "qwen3.8-flash-next-ud-iq3-xxs-strata-0.1.57-131k-vision-q3-direct-io",
   "model": "qwen3.8-flash-next-unsloth-ud-iq3_xxs",
   "backend": "strata",
   "driver": "systemd",
@@ -687,7 +687,7 @@
       },
       {
         "path": "/srv/rack-ai/runtime_adapters/strata-dual-brain.json",
-        "sha256": "5fa2cdc01f63463d4c0d9a210cc1ed7dbd04e881e7f5da12cc7cc143451bb9e0"
+        "sha256": "7eaecdc9395991105bce5f901a57f2cba77a0e600cc48f07e5fd0dcc1cad014c"
       },
       {
         "path": "/usr/lib/python3.14/__future__.py",
@@ -1735,7 +1735,7 @@
       },
       {
         "path": "/srv/rack-ai/deployments/idle-runtime/adapters/dual-brain-vision/strata-dual-brain.json",
-        "sha256": "5fa2cdc01f63463d4c0d9a210cc1ed7dbd04e881e7f5da12cc7cc143451bb9e0"
+        "sha256": "7eaecdc9395991105bce5f901a57f2cba77a0e600cc48f07e5fd0dcc1cad014c"
       }
     ],
     "file_pin_verifier": "/usr/bin/gnusha256sum"

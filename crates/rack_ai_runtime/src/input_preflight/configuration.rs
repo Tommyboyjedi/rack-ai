@@ -13,6 +13,7 @@ pub(crate) fn validate(profile: &Profile) -> Result<(), String> {
     if profile.enforce_input_limits
         && profile.max_images_per_request > 0
         && !profile.native_multimodal_counter()
+        && profile.backend != crate::config::Backend::Ninfer
     {
         return Err("image input enforcement requires native multimodal counting".into());
     }

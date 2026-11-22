@@ -145,6 +145,19 @@ impl Service {
     pub fn recover(&self) -> Result<(), String> {
         let placement =
             digest(&serde_json::to_vec(&self.config.devices).map_err(|e| e.to_string())?);
+        self.authority.read(|state| {
+            if state
+                .data
+                .placement_hash
+                .as_ref()
+                .is_some_and(|hash| hash != &placement)
+            {
+                return Err("physical_map_requires_migration".into());
+            }
+            Ok(())
+        })?;
+        // Resolve an abandoned, verified-idle Strata call before quarantining other work.
+        crate::stalled_inference::reconcile(self)?;
         self.authority.update(|s| {
             if s.data
                 .placement_hash

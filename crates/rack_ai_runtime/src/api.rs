@@ -297,6 +297,9 @@ fn profile_summary(p: &crate::config::Profile) -> Value {
             "tools": {"execution": "client_owned"}
         });
     }
+    if p.input_token_preflight {
+        value["input_preflight"] = preflight_description(p, None);
+    }
     if p.launch.is_some() {
         value["runtime_features"] = runtime_features(p);
     }

@@ -152,6 +152,7 @@ impl ReservationControl<'_> {
 
 pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Result<(), String> {
     let wake = !matches!(&input.2, Action::Renew { .. });
+    let cancel = matches!(&input.2, Action::Cancel);
     let result = service.authority.update(|s| {
         let (owner, id, action) = input;
         let d = match owned(s, owner, id) {
@@ -200,6 +201,9 @@ pub fn reservation_control(service: &Service, input: (&str, &str, Action)) -> Re
         crate::workspace_scope::cancel_closed(s);
         Ok(())
     });
+    if result.is_ok() && cancel {
+        crate::residency::evict_cancelled_reservation(service, (input.0, input.1))?;
+    }
     if result.is_ok() && wake {
         service.request_history_maintenance();
         if let Err(error) = crate::interaction_cleanup::close(service, (input.0, input.1)) {

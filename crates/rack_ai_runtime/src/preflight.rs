@@ -120,17 +120,11 @@ struct MemoryProbe<'a> {
 }
 impl MemoryProbe<'_> {
     fn memory(&self, p: &Profile, free: bool) -> Result<(), String> {
-        let info = std::fs::read_to_string("/proc/meminfo").map_err(|e| e.to_string())?;
-        let available = info
-            .lines()
-            .find(|l| l.starts_with("MemAvailable:"))
-            .and_then(|l| l.split_whitespace().nth(1))
-            .ok_or("host_memory_unknown")?
-            .parse::<u64>()
-            .map_err(|_| "host_memory_unknown")?
-            / 1024;
-        if available < p.host_mib {
-            return Err("insufficient_host_memory".into());
+        // Incumbents still own their RAM during the early integrity/capacity
+        // preflight. Enforce physical availability at the activation boundary,
+        // after VictimDrain has stopped them and transferred their claims.
+        if free {
+            self.host_memory(p)?;
         }
         for (resource, required) in &p.device_mib {
             let uuid = &self.config.devices[resource].uuid;
@@ -154,4 +148,24 @@ impl MemoryProbe<'_> {
         }
         Ok(())
     }
+
+    fn host_memory(&self, p: &Profile) -> Result<(), String> {
+        let info = std::fs::read_to_string("/proc/meminfo").map_err(|e| e.to_string())?;
+        let available = info
+            .lines()
+            .find(|l| l.starts_with("MemAvailable:"))
+            .and_then(|l| l.split_whitespace().nth(1))
+            .ok_or("host_memory_unknown")?
+            .parse::<u64>()
+            .map_err(|_| "host_memory_unknown")?
+            / 1024;
+        if available < p.host_mib {
+            return Err("insufficient_host_memory".into());
+        }
+        Ok(())
+    }
 }
+
+#[cfg(test)]
+#[path = "preflight_tests.rs"]
+mod tests;

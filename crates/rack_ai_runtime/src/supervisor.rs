@@ -260,7 +260,11 @@ fn recovery_due(s: &Document, d: &Demand) -> bool {
         d.reason.as_deref(),
         Some("start_outcome_unknown" | "interrupted_start_requires_owned_process_reconciliation")
     );
-    if !start_recovery && d.transition_deadline > now() {
+    if !start_recovery
+        && !d.released
+        && d.reservation_closed.is_none()
+        && d.transition_deadline > now()
+    {
         return false;
     }
     let restart_uncertain = s.data.invocations.values().any(|i| {

@@ -11,6 +11,176 @@ use std::{fs, sync::Arc};
 struct Fixture {
     service: Service,
 }
+
+fn cached_record(d: &Demand) -> WarmResidency {
+    WarmResidency {
+        id: d.backend_activation().into(),
+        profile_hash: d.profile_hash.clone(),
+        profile: d.profile.clone(),
+        backend: d.profile.backend.clone(),
+        driver: d.profile.driver.clone(),
+        model: d.profile.model.clone(),
+        resources: d.profile.resources.clone(),
+        endpoint: d.profile.endpoint.clone(),
+        process: Process {
+            pid: u32::MAX,
+            boot: "fixture-absent-boot".into(),
+            start: "0".into(),
+            activation: d.backend_activation().into(),
+            unit: None,
+            container: None,
+            invocation: None,
+        },
+        cached_at: now(),
+        last_ready_at: now(),
+        state: WarmResidencyState::Resident,
+    }
+}
+
+#[test]
+fn cancellation_evicts_existing_owned_warm_residency() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let record = cached_record(&d);
+    let mut unrelated = record.clone();
+    unrelated.id = "unrelated-activation".into();
+    unrelated.process.activation = unrelated.id.clone();
+    f.service
+        .authority
+        .update(|s| {
+            s.data
+                .warm_residencies
+                .insert(record.id.clone(), record.clone());
+            s.data
+                .warm_residencies
+                .insert(unrelated.id.clone(), unrelated.clone());
+            let saved = s.data.demands.get_mut(&d.id).unwrap();
+            saved.state = DemandState::Released;
+            saved.released = true;
+            saved.process = None;
+            saved.effect_started = false;
+            Ok(())
+        })
+        .unwrap();
+    crate::control::reservation_control(&f.service, (&d.owner, &d.id, Action::Cancel)).unwrap();
+    f.retire(&d);
+    assert_eq!(f.inspect(&d).state, DemandState::Cancelled);
+    f.service
+        .authority
+        .read(|s| {
+            assert!(!s.data.warm_residencies.contains_key(&record.id));
+            assert!(s.data.warm_residencies.contains_key(&unrelated.id));
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn cancellation_preserves_warm_residency_selected_by_another_reservation() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let record = cached_record(&d);
+    f.service
+        .authority
+        .update(|s| {
+            let mut adopter = s.data.demands[&d.id].clone();
+            adopter.id = "another-reservation".into();
+            adopter.owner = "athba".into();
+            adopter.state = DemandState::Preparing;
+            adopter.backend_activation = Some(record.id.clone());
+            s.data.demands.insert(adopter.id.clone(), adopter);
+            s.data
+                .warm_residencies
+                .insert(record.id.clone(), record.clone());
+            Ok(())
+        })
+        .unwrap();
+    crate::control::reservation_control(&f.service, (&d.owner, &d.id, Action::Cancel)).unwrap();
+    f.retire(&d);
+    f.service
+        .authority
+        .read(|s| {
+            assert_eq!(
+                s.data.warm_residencies[&record.id].state,
+                WarmResidencyState::Resident
+            );
+            assert_eq!(
+                s.data.demands["another-reservation"].state,
+                DemandState::Preparing
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn failed_cancelled_warm_cleanup_retains_recovery_identity() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let mut record = cached_record(&d);
+    record.process.activation = "wrong-activation".into();
+    f.service
+        .authority
+        .update(|s| {
+            s.data
+                .warm_residencies
+                .insert(record.id.clone(), record.clone());
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::control::reservation_control(&f.service, (&d.owner, &d.id, Action::Cancel)).is_err()
+    );
+    f.service
+        .authority
+        .read(|s| {
+            assert_eq!(
+                s.data.warm_residencies[&record.id].state,
+                WarmResidencyState::Evicting
+            );
+            assert_eq!(s.data.demands[&d.id].state, DemandState::Releasing);
+            Ok(())
+        })
+        .unwrap();
+}
+#[test]
+fn cancellation_evicts_archived_owned_warm_residency_without_rewriting_history() {
+    let f = Fixture::new();
+    let d = f.acquire(("cb", "local-primary", Priority::Low));
+    let record = cached_record(&d);
+    f.service
+        .authority
+        .update(|s| {
+            s.data
+                .warm_residencies
+                .insert(record.id.clone(), record.clone());
+            let saved = s.data.demands.get_mut(&d.id).unwrap();
+            saved.state = DemandState::Released;
+            saved.released = true;
+            saved.reservation_closed = Some(DemandState::Released);
+            saved.process = None;
+            saved.effect_started = false;
+            s.claims.retain(|_, owner| owner != &d.id);
+            crate::history_archive::maintain(&f.service.config.authority_root, s, now())?;
+            assert!(!s.data.demands.contains_key(&d.id));
+            Ok(())
+        })
+        .unwrap();
+    assert!(
+        crate::control::reservation_control(&f.service, ("athba", &d.id, Action::Cancel)).is_err()
+    );
+    crate::control::reservation_control(&f.service, (&d.owner, &d.id, Action::Cancel)).unwrap();
+    f.service
+        .authority
+        .read(|s| {
+            assert!(!s.data.warm_residencies.contains_key(&record.id));
+            assert!(!s.data.demands.contains_key(&d.id));
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(f.inspect(&d).state, DemandState::Released);
+}
+
 impl Fixture {
     fn new() -> Self {
         let mut config: Config =

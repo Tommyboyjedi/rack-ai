@@ -1,0 +1,12 @@
+{
+  "runtime_url": "http://127.0.0.1:8095/runtime/v1",
+  "token_path": "/srv/rack-ai/deployments/idle-runtime/secrets/hermes",
+  "state_path": "/srv/rack-ai/deployments/shared-bridge/state/state.json",
+  "public_base_url": "https://gpurack.duckdns.org",
+  "listen_host": "127.0.0.1",
+  "listen_port": 18098,
+  "priority": "medium",
+  "ttl_seconds": 1800,
+  "default_service": "mini-brain",
+  "switch_timeout_seconds": 3600
+}

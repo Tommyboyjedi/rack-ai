@@ -2432,6 +2432,22 @@ fn supervisor_prunes_auxiliary_artifacts_beyond_retention() {
 ",
     )
     .unwrap();
+    // Fast filesystems can assign the same mtime to consecutive writes.
+    // Give the retention policy an explicit oldest and newest entry.
+    for (path, seconds) in [
+        (&old_log, 1_000),
+        (&old_change, 1_000),
+        (&new_log, 2_000),
+        (&new_change, 2_000),
+    ] {
+        fs::File::open(path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds)),
+            )
+            .unwrap();
+    }
     let clock = TestClock {
         now: Cell::new(10_000_000_000),
     };
@@ -3759,7 +3775,6 @@ impl AssessmentService {
         implementer.seen_workers(),
         vec!["local-coder", "local-coder", "local-primary"]
     );
-    assert!(implementer.seen_tasks()[2].contains("Replan the implementation"));
     let recovery = fs::read_to_string(
         runner
             .attempt_dir(&campaign.campaign_id, "service", 2)

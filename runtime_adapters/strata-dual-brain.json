@@ -46,7 +46,8 @@
   "port": 8098,
   "env": {
     "STRATA_HC_Q8": "1",
-    "STRATA_ROUTE_TAIL_SKIP": "0"
+    "STRATA_ROUTE_TAIL_SKIP": "0",
+    "STRATA_UNBUFFERED_LOAD": "1"
   },
   "gpu": [],
   "gpus_asked": true,

@@ -193,6 +193,68 @@ pub fn cache_after_release(service: &Service, d: &Demand) -> Result<bool, String
     })
 }
 
+/// Archived reservations retain owner-scoped provenance for cache cleanup.
+pub fn evict_cancelled_reservation(service: &Service, input: (&str, &str)) -> Result<(), String> {
+    let (owner, id) = input;
+    let requested = service.inspect(owner, id)?;
+    let root = match requested.reservation_id.as_deref() {
+        Some(root_id) if root_id != requested.id => service.inspect(owner, root_id)?,
+        _ => requested,
+    };
+    if root.owner != owner {
+        return Err("not_found".into());
+    }
+    let ids = if root.services.is_empty() {
+        vec![root.id.clone()]
+    } else {
+        root.services.values().cloned().collect()
+    };
+    for id in ids {
+        let member = service.inspect(owner, &id)?;
+        if member.owner != owner
+            || (member.id != root.id && member.reservation_id.as_deref() != Some(&root.id))
+        {
+            return Err("reservation_membership_mismatch".into());
+        }
+        evict_cancelled_activation(service, &member)?;
+    }
+    Ok(())
+}
+
+/// Fence adoption under the authority lock before stopping the verified process.
+fn evict_cancelled_activation(service: &Service, d: &Demand) -> Result<(), String> {
+    let record = service.authority.update(|s| {
+        let activation = d.backend_activation();
+        // A new reservation may already have selected this cache for adoption.
+        if s.data.demands.values().any(|candidate| {
+            candidate.id != d.id
+                && candidate.backend_activation() == activation
+                && (crate::service::active(candidate)
+                    || candidate.process.is_some()
+                    || candidate.effect_started
+                    || s.claims.values().any(|id| id == &candidate.id))
+        }) {
+            return Ok(None);
+        }
+        let Some(record) = s.data.warm_residencies.get_mut(activation) else {
+            return Ok(None);
+        };
+        if record.profile_hash != d.profile_hash {
+            return Err("warm_residency_profile_mismatch".into());
+        }
+        record.state = WarmResidencyState::Evicting;
+        Ok(Some(record.clone()))
+    })?;
+    if let Some(record) = record {
+        evict_record(&service.config, &record)?;
+        service.authority.update(|s| {
+            remove_if_unchanged(s, &record);
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 pub fn reconcile_on_start(service: &Service) -> Result<(), String> {
     let records = service.authority.read(|s| {
         Ok(s.data
