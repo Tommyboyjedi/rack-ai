@@ -12,7 +12,7 @@
 +            if sys.stdin.isatty():
 +                trace = uuid.uuid4().hex
 +        if trace:
-+            client_kwargs["base_url"] = "http://127.0.0.1:18103/v1"
++            client_kwargs["base_url"] = "http://127.0.0.1:18112/v1"
 +            headers = dict(client_kwargs.get("default_headers") or {})
 +            headers["x-rackai-interactive-turn"] = trace
 +            client_kwargs["default_headers"] = headers
@@ -55,7 +55,7 @@
 +        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as client:
 +            while True:
 +                try:
-+                    async with client.get("http://127.0.0.1:18103/queue-status/" + trace) as response:
++                    async with client.get("http://127.0.0.1:18112/queue-status/" + trace) as response:
 +                        if response.status == 200:
 +                            state = (await response.json()).get("state")
 +                            if state in messages and state != last:

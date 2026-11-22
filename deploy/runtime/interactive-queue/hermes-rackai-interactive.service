@@ -6,7 +6,7 @@ Requires=gpurack-rackai-tunnel.service
 [Service]
 Type=simple
 EnvironmentFile=%h/.local/share/rackai-interactive-queue/current/interactive.env
-ExecStart=/usr/bin/python3 %h/.local/share/rackai-interactive-queue/current/interactive-queue/proxy.py --listen 127.0.0.1:18103
+ExecStart=/usr/bin/python3 %h/.local/share/rackai-interactive-queue/current/interactive-queue/proxy.py --listen 127.0.0.1:18112
 Restart=on-failure
 RestartSec=5
 

@@ -22,7 +22,7 @@ tasks omit that marker. Hermes API clients can mark an interactive chat with
 `X-RackAI-Interactive-Chat: 1`; a local Hermes CLI in a terminal also receives
 priority. Open WebUI renders Hermes queue events as a status on the message.
 
-Install the RackAI runtime first, start the dedicated sidecar proxy on port 18103, then install the
+Install the RackAI runtime first, start the dedicated sidecar proxy on port 18112, then install the
 Hermes and Open WebUI integration. Leave the ordinary provider on port 18102
 so scheduled jobs can finish on their existing connections. Verify one waiting
 interactive turn ahead of queued background work and one older background turn
