@@ -62,7 +62,9 @@ pub fn run_bounded(spec: CommandSpec<'_>) -> Result<String, String> {
     let status = child.wait().map_err(|e| e.to_string())?;
     read.map_err(|e| e.to_string())?;
     if !status.success() {
-        let stderr_msg = String::from_utf8_lossy(&stderr_bytes).trim_end().to_string();
+        let stderr_msg = String::from_utf8_lossy(&stderr_bytes)
+            .trim_end()
+            .to_string();
         let stderr_msg = if stderr_msg.is_empty() {
             format!("bounded {program} failed ({status})")
         } else {

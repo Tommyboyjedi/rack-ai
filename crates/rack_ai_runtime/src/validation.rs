@@ -173,8 +173,7 @@ impl ProfileValidation<'_> {
         if p.driver != Driver::Fixture && p.backend != Backend::Comfyui {
             crate::network::private_binding(p)?;
         }
-        if p.driver == Driver::Docker
-            && !matches!(p.backend, Backend::Vllm | Backend::Ninfer)
+        if p.driver == Driver::Docker && !matches!(p.backend, Backend::Vllm | Backend::Ninfer)
             || p.driver == Driver::Docker
                 && p.backend == Backend::Vllm
                 && p.container_image
@@ -184,15 +183,13 @@ impl ProfileValidation<'_> {
                 && p.backend == Backend::Ninfer
                 && p.container_image.as_ref().is_none()
             || p.driver == Driver::Docker
-                && p.container_mounts
-                    .iter()
-                    .any(|(source, target)| {
-                        !source.is_absolute()
-                            || !std::path::Path::new(target).is_absolute()
-                            || target == "/"
-                            || target.contains(',')
-                            || source.to_string_lossy().contains(',')
-                    })
+                && p.container_mounts.iter().any(|(source, target)| {
+                    !source.is_absolute()
+                        || !std::path::Path::new(target).is_absolute()
+                        || target == "/"
+                        || target.contains(',')
+                        || source.to_string_lossy().contains(',')
+                })
         {
             return Err("invalid pinned container profile".into());
         }
