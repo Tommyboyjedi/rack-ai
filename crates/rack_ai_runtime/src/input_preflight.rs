@@ -65,11 +65,11 @@ pub(crate) fn payload(demand: &Demand, mut body: Value) -> Result<Payload, Strin
     {
         object.insert("max_tokens".into(), json!(demand.profile.max_output_tokens));
     }
-    let payload = Payload {
+    let payload = crate::service_request::normalize(crate::service_request::NormalizeInput {
+        profile: &demand.profile,
         protocol: Protocol::ChatCompletions,
         body,
-        client_model: None,
-    };
+    })?;
     if payload.validate(demand)? == 0 {
         return Err("inference_limits".into());
     }

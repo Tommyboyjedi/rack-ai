@@ -2549,7 +2549,8 @@
         "image/jpeg",
         "image/gif",
         "image/bmp"
-      ]
+      ],
+      "reasoning_default": "disabled"
     },
     {
       "tag": "mini-brain",
@@ -2780,7 +2781,8 @@
         "image/jpeg",
         "image/gif",
         "image/bmp"
-      ]
+      ],
+      "reasoning_default": "disabled"
     }
   ],
   "limits": {

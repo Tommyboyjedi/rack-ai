@@ -2996,6 +2996,65 @@
                   "input_preflight": {
                     "$ref": "#/$defs/inputPreflightDescription"
                   },
+                  "inference_service": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "contract": {
+                        "const": "rack-ai/inference-service/v1"
+                      },
+                      "model_alias": {
+                        "const": "rackai-service"
+                      },
+                      "protocols": {
+                        "type": "array",
+                        "items": {
+                          "enum": [
+                            "chat_completions",
+                            "responses",
+                            "speech"
+                          ]
+                        },
+                        "minItems": 1,
+                        "uniqueItems": true
+                      },
+                      "streaming": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "supported": {
+                            "type": "boolean"
+                          },
+                          "delivery": {
+                            "const": "buffered_sse"
+                          }
+                        },
+                        "required": [
+                          "supported",
+                          "delivery"
+                        ]
+                      },
+                      "tools": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "properties": {
+                          "execution": {
+                            "const": "client_owned"
+                          }
+                        },
+                        "required": [
+                          "execution"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "contract",
+                      "model_alias",
+                      "protocols",
+                      "streaming",
+                      "tools"
+                    ]
+                  },
                   "runtime_features": {
                     "$ref": "#/$defs/runtimeFeatures"
                   }

@@ -14,6 +14,8 @@ struct Detail {
     category: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     state: Option<InvocationState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    invocation_id: Option<String>,
     reason: String,
     recoverable: bool,
 }
@@ -26,6 +28,7 @@ pub fn generic(error: String) -> axum::response::Response {
             phase: phase(&error),
             category: category(&error),
             state: None,
+            invocation_id: None,
             recoverable: recoverable(&error),
             reason: error,
         },
@@ -60,6 +63,7 @@ fn invocation_response(
             phase: phase(&reason),
             category: category(&reason),
             state: Some(invocation.state),
+            invocation_id: Some(invocation.id.clone()),
             recoverable: recoverable(&reason),
             reason,
         },

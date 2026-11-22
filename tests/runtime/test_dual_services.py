@@ -123,9 +123,14 @@ def request(rack, call):
 
 def payload(member, **changes):
     body = dict(model=member["model"], max_tokens=32, temperature=.7, top_p=.95,
-                top_k=40, min_p=0, reasoning_effort="high",
+                top_k=40, min_p=0,
                 messages=[dict(role="system", content="Use the requested harmless function."),
                           dict(role="user", content="What is the temperature in Dublin?")])
+    if "chat_template_kwargs" not in changes and "reasoning_effort" not in changes:
+        if member["model"].startswith("qwen3.8-flash-next-"):
+            body["reasoning_effort"] = "high"
+        else:
+            body["chat_template_kwargs"] = {"reasoning_effort": "high"}
     body.update(changes)
     return body
 
@@ -153,7 +158,7 @@ def alive(pid):
 class DualProfileRegistration(unittest.TestCase):
     def test_source_profiles_preserve_ceilings_backend_identity_and_uuid_order(self):
         example = json.loads((ROOT / "config/runtime/config.example.json").read_text())
-        expected = {"dual-brain": ("strata", "qwen3.8-flash-next-unsloth-ud-iq4_xs"),
+        expected = {"dual-brain": ("strata", "qwen3.8-flash-next-unsloth-ud-iq3_xxs"),
                     "dual-worker": ("llama_cpp", "nex-n2.5-mini")}
         for tag, identity in expected.items():
             with self.subTest(tag=tag):
@@ -273,7 +278,6 @@ class DualThinkingControls(unittest.TestCase):
                 response_format={"type": "json_schema", "json_schema": {"name": "native_no_thinking",
                     "strict": True, "schema": {"type": "object", "properties": {"answer": {"type": "string"}},
                         "required": ["answer"], "additionalProperties": False}}})
-            del body["reasoning_effort"]
             original = copy.deepcopy(body)
             status, counted = request(rack, (member, "/chat/completions/preflight", body))
             self.assertEqual(status, 200, counted)
@@ -385,8 +389,11 @@ class DualInferenceAdmission(unittest.TestCase):
                 rack.controls(tag, token_count=65537)
                 status, rejected = request(rack, (member, "/chat/completions", body, "cb", "over-input-" + tag))
                 self.assertEqual(status, 409, rejected)
-                self.assertTrue(rejected["error"].startswith("invocation_Failed:"), rejected)
-                invocation_id = rejected["error"].split(":", 1)[1]
+                self.assertEqual(rejected["error"], "invocation_failed", rejected)
+                detail = rejected["detail"]
+                self.assertEqual(detail["reason"], "input_admission_limits_exceeded")
+                self.assertFalse(detail["recoverable"])
+                invocation_id = detail["invocation_id"]
                 receipt = rack.call("cb", "result", invocation_id=invocation_id)
                 self.assertEqual(receipt["state"], "failed")
                 self.assertEqual(receipt["error"], "input_admission_limits_exceeded")
@@ -564,7 +571,6 @@ def image_body(member):
         response_format={"type": "json_object"}, chat_template_kwargs={"enable_thinking": False})
     if member["model"] == "nex-n2.5-mini":
         body["chat_template_kwargs"]["reasoning_effort"] = "none"
-        del body["reasoning_effort"]
     return body
 
 
@@ -642,7 +648,9 @@ class DualNativeImageFailures(unittest.TestCase):
                     self.assertEqual(status, 502, rejected)
                     status, failed = request(rack, (member, "/chat/completions", body))
                     self.assertEqual(status, 409, failed)
-                    self.assertTrue(failed["error"].startswith("invocation_Failed:"), failed)
+                    self.assertEqual(failed["error"], "invocation_failed", failed)
+                    self.assertEqual(failed["detail"]["state"], "failed", failed)
+                    self.assertTrue(failed["detail"]["reason"].startswith("input_admission_"), failed)
                 self.assertFalse(any(event["kind"] == "dispatch" and event.get("tag") == tag for event in records(rack)))
                 rack.controls(tag)
                 self.assertEqual(request(rack, (member, "/chat/completions", body))[0], 200)
