@@ -1,0 +1,103 @@
+--- a/agent/agent_runtime_helpers.py
++++ b/agent/agent_runtime_helpers.py
+@@ -1989,6 +1989,17 @@
+     # that specific path; this copy locks the contract so future transport/keepalive work can't reintroduce
+     # the same class of bug.
+     client_kwargs = dict(client_kwargs)
++    if str(client_kwargs.get("base_url", "")).rstrip("/") == "http://127.0.0.1:18102/v1":
++        trace = getattr(getattr(agent, "status_callback", None), "_rackai_turn", None)
++        if not trace and getattr(agent, "platform", None) == "cli":
++            import sys
++            import uuid
++            if sys.stdin.isatty():
++                trace = uuid.uuid4().hex
++        if trace:
++            headers = dict(client_kwargs.get("default_headers") or {})
++            headers["x-rackai-interactive-turn"] = trace
++            client_kwargs["default_headers"] = headers
+     if client_kwargs.get("base_url"):
+         client_kwargs["base_url"] = _to_openai_base_url(client_kwargs["base_url"])
+     try:
+--- a/gateway/platforms/api_server_openai_routes.py
++++ b/gateway/platforms/api_server_openai_routes.py
+@@ -784,7 +784,7 @@
+             self._release_run_owner_if_forgotten(completion_id)
+         return _approval_notify, _on_done
+ 
+-    def _spawn_stream_agent(self, stream_q, *, on_done=None, run_agent=None, **run_kwargs) -> tuple:
++    def _spawn_stream_agent(self, stream_q, *, on_done=None, run_agent=None, rackai_turn=None, **run_kwargs) -> tuple:
+         """Start ``_run_agent`` for an SSE writer -> ``(agent_task, agent_ref)``. ``agent_ref[0]``
+         lets the writer interrupt on disconnect; the EOS sentinel is enqueued from the task's done
+         callback so drain loops never race a polled ``agent_task.done()``. ``on_done(task)`` runs
+@@ -807,6 +807,7 @@
+             text = _redact_api_error_text(message if message is not None else kind or "").strip()
+             if text:
+                 stream_q.put_threadsafe(("__status__", {"kind": str(kind), "text": text}))
++        _on_status._rackai_turn = rackai_turn
+         agent_ref = [None]
+         agent_task = asyncio.ensure_future((run_agent or self._run_agent)(
+             stream_delta_callback=_on_delta, reasoning_callback=_on_reasoning, status_callback=_on_status,
+@@ -820,7 +821,31 @@
+             finally:
+                 stream_q.put_nowait(None)
+         agent_task.add_done_callback(_done)
++        if rackai_turn:
++            progress = asyncio.create_task(self._rackai_queue_progress(rackai_turn, stream_q))
++            agent_task.add_done_callback(lambda _: progress.cancel())
+         return agent_task, agent_ref
++
++    @staticmethod
++    async def _rackai_queue_progress(trace, stream_q):
++        import aiohttp
++        last = None
++        messages = {"queued": "Queued · model busy", "running": "Generating"}
++        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as client:
++            while True:
++                try:
++                    async with client.get("http://127.0.0.1:18102/queue-status/" + trace) as response:
++                        if response.status == 200:
++                            state = (await response.json()).get("state")
++                            if state in messages and state != last:
++                                last = state
++                                stream_q.put_threadsafe(("__status__", {
++                                    "kind": "rackai_queue", "text": messages[state]}))
++                            elif state == "finished":
++                                last = None
++                except (aiohttp.ClientError, TimeoutError, ValueError):
++                    pass
++                await asyncio.sleep(0.5)
+ 
+     async def _handle_chat_completions(self, request: web.Request) -> web.Response:
+         """POST /v1/chat/completions — OpenAI Chat Completions format."""
+@@ -921,6 +946,10 @@
+         # above still applies; it grants no internal ingress or control authority.
+         if provided_session_id and body.get("hermes_notification_category") == "diagnostic":
+             run_kwargs["notification_category"] = "diagnostic"
++        rackai_turn = None
++        if request.headers.get("x-rackai-interactive-chat") == "1":
++            import uuid
++            rackai_turn = uuid.uuid4().hex
+         if stream:
+             _stream_q = ThreadSafeAsyncQueue()
+             # tool_call_ids with an emitted "running": a "completed" without one (internal/
+@@ -954,7 +983,7 @@
+             agent_task, agent_ref = self._spawn_stream_agent(
+                 _stream_q, on_done=end_stream_run, tool_start_callback=_on_tool_start,
+                 tool_complete_callback=_on_tool_complete, approval_notify_callback=approval_notify,
+-                approval_session_key=completion_id, **run_kwargs)
++                approval_session_key=completion_id, rackai_turn=rackai_turn, **run_kwargs)
+             # #13437 identity contract: an explicit-header client keeps addressing the id it
+             # sent; the response echoes that stable id while reads/writes adopt the live tip,
+             # so a rotation mid-turn (after these headers are prepared) never changes what the
+@@ -966,6 +995,11 @@
+                 gateway_session_key=gateway_session_key)
+ 
+         async def _compute_completion():
++            if rackai_turn:
++                def queue_marker(*args):
++                    pass
++                queue_marker._rackai_turn = rackai_turn
++                run_kwargs["status_callback"] = queue_marker
+             return await self._run_agent(**run_kwargs)
+         outcome, err = await self._run_idempotent(
+             request, body, _compute_completion, log_label="chat completions",

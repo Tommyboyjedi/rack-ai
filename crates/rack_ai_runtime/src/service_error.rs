@@ -60,7 +60,11 @@ fn invocation_response(
         "invocation_failed".into(),
         Detail {
             service: tag,
-            phase: phase(&reason),
+            phase: if invocation.state == InvocationState::Expired && invocation.started.is_none() {
+                "queue"
+            } else {
+                phase(&reason)
+            },
             category: category(&reason),
             state: Some(invocation.state),
             invocation_id: Some(invocation.id.clone()),

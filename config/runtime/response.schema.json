@@ -2885,6 +2885,9 @@
               "type": "string",
               "pattern": "^[a-f0-9]{64}$"
             },
+            "priority": {
+              "const": "interactive"
+            },
             "queue_order": {
               "type": "integer",
               "minimum": 0

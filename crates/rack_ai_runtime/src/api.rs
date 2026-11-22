@@ -87,6 +87,10 @@ pub fn router(service: Arc<Service>) -> Router {
             post(crate::input_preflight::handle),
         )
         .route(
+            "/scoped/{id}/{generation}/v1/invocations/{invocation}",
+            get(crate::scoped_gateway::status),
+        )
+        .route(
             "/scoped/{id}/{generation}/v1/{*path}",
             post(crate::scoped_gateway::handle),
         )

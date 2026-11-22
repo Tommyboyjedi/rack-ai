@@ -1025,6 +1025,7 @@ mod tests {
             request_ref: None,
             state,
             queue_order: 7,
+            priority: InvocationPriority::Background,
             created: 10,
             waiting_deadline: 70,
             execution_deadline: Some(100),

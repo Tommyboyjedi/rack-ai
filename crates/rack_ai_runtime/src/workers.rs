@@ -7,7 +7,18 @@ use std::{
     fs::{File, OpenOptions},
     path::Path,
 };
+// An old background request joins the interactive lane before the usual
+// five-minute queue deadline. Within each lane, the older admission wins.
+const BACKGROUND_AGING_SECONDS: u64 = 60;
+
+fn order(i: &Invocation, at: u64) -> (bool, u64, &str) {
+    let fresh_background = i.priority == InvocationPriority::Background
+        && (i.created == 0 || at.saturating_sub(i.created) < BACKGROUND_AGING_SECONDS);
+    (fresh_background, i.queue_order, &i.id)
+}
+
 pub fn eligible(s: &Document, i: &Invocation) -> bool {
+    let at = now();
     (!crate::work_payload::is_workspace(i)
         || !s.data.invocations.values().any(|other| {
             other.request.reservation_id == i.request.reservation_id
@@ -18,14 +29,14 @@ pub fn eligible(s: &Document, i: &Invocation) -> bool {
                 )
         }))
         && i.state == InvocationState::Queued
-        // FIFO is local to a currently owned logical service. No reservation
-        // priority is consulted at dispatch time.
+        // Request ordering is local to a reservation and never changes ownership.
         && !s.data.invocations.values().any(|other| {
             other.request.reservation_id == i.request.reservation_id
                 && other.state == InvocationState::Queued
-                && (other.queue_order, &other.id) < (i.queue_order, &i.id)
+                && other.waiting_deadline > at
+                && order(other, at) < order(i, at)
         })
-        && i.waiting_deadline > now()
+        && i.waiting_deadline > at
         && crate::workspace_scope::permits(s, &i.request)
         && s.data
             .demands

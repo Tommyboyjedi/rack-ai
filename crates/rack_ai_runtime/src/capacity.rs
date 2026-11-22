@@ -385,6 +385,7 @@ mod tests {
             request_ref: None,
             state,
             queue_order: 1,
+            priority: InvocationPriority::Background,
             created: 1,
             waiting_deadline: now() + 60,
             execution_deadline: None,

@@ -221,6 +221,40 @@ class DualProfileRegistration(unittest.TestCase):
 
 
 class DualChatTransport(unittest.TestCase):
+    def test_async_receipt_can_be_polled_without_resubmitting_prompt(self):
+        with fixture() as (_, rack):
+            tag = "dual-brain"
+            owner = wait_reservation(rack, reserve(rack, tag))
+            member = owner["services"][tag]
+            base = "http://" + rack.address + member["gateway_path"]
+            request = urllib.request.Request(
+                base + "/chat/completions", data=json.dumps(payload(member)).encode(),
+                headers={"Content-Type": "application/json", "Idempotency-Key": "async-test",
+                         "Prefer": "respond-async"})
+            with urllib.request.urlopen(request, timeout=4) as response:
+                self.assertEqual(response.status, 202)
+                receipt = json.load(response)
+                self.assertIn(receipt["state"], ("queued", "running"))
+            status_url = base + "/invocations/" + receipt["invocation_id"]
+            parts = status_url.split("/")
+            parts[5] = "wrong-capability"
+            with self.assertRaises(urllib.error.HTTPError) as blocked:
+                urllib.request.urlopen("/".join(parts), timeout=4)
+            self.assertEqual(blocked.exception.code, 409)
+            for _ in range(60):
+                with urllib.request.urlopen(status_url, timeout=4) as response:
+                    result = json.load(response)
+                    if response.status == 200:
+                        self.assertTrue(result["choices"])
+                        break
+                    self.assertIn(result["state"], ("queued", "running"))
+                time.sleep(.05)
+            else:
+                self.fail("Async completion did not finish")
+            self.assertEqual(sum(event["kind"] == "dispatch" and event.get("tag") == tag
+                                 for event in records(rack)), 1)
+            release(rack, owner)
+
     def test_tool_round_trip_preserves_messages_ids_arguments_reasoning_and_usage(self):
         with fixture() as (_, rack):
             for tag in TAGS:

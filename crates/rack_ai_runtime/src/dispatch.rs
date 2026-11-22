@@ -499,6 +499,49 @@ mod tests {
     }
 
     #[test]
+    fn interactive_passes_waiting_background_but_aging_preserves_progress() {
+        let fixture = Fixture::new();
+        let demand = fixture.acquire_ready();
+        let submit = crate::inference::Submission {
+            service: &fixture.service,
+        };
+        let background = submit
+            .submit(&demand.owner, request(&demand, "background"))
+            .unwrap();
+        let chat = submit
+            .submit_with_priority(
+                &demand.owner,
+                request(&demand, "chat"),
+                InvocationPriority::Interactive,
+            )
+            .unwrap();
+        fixture
+            .service
+            .authority
+            .update(|state| {
+                let eligible = |state: &Document, id: &str| {
+                    crate::workers::eligible(state, &state.data.invocations[id])
+                };
+                assert!(eligible(state, &chat.id));
+                assert!(!eligible(state, &background.id));
+                state
+                    .data
+                    .invocations
+                    .get_mut(&background.id)
+                    .unwrap()
+                    .state = InvocationState::Running;
+                assert!(!eligible(state, &chat.id));
+                let row = state.data.invocations.get_mut(&background.id).unwrap();
+                row.state = InvocationState::Queued;
+                row.created = now() - 61;
+                assert!(eligible(state, &background.id));
+                assert!(!eligible(state, &chat.id));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
     fn abandoned_dispatch_does_not_hold_the_next_queued_call() {
         let fixture = Fixture::new();
         let mut demand = fixture.acquire_ready();

@@ -157,6 +157,19 @@ pub struct Inference {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_scope: Option<String>,
 }
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum InvocationPriority {
+    #[default]
+    Background,
+    Interactive,
+}
+impl InvocationPriority {
+    fn is_background(&self) -> bool {
+        *self == Self::Background
+    }
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum InvocationState {
@@ -204,10 +217,12 @@ pub struct Invocation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_ref: Option<StoredPayloadRef>,
     pub state: InvocationState,
-    /// Monotonic local queue position. Dispatch is FIFO within one owned
-    /// logical service and never uses global reservation priority.
+    /// Monotonic admission sequence. Breaks ties within one local priority
+    /// lane and never changes reservation ownership.
     #[serde(default)]
     pub queue_order: u64,
+    #[serde(default, skip_serializing_if = "InvocationPriority::is_background")]
+    pub(crate) priority: InvocationPriority,
     /// Receiver-observed queue admission time. Legacy records use 0 and report
     /// this measurement as unavailable in public execution metadata.
     #[serde(default)]

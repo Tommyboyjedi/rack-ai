@@ -677,6 +677,7 @@ mod tests {
                 request_ref: None,
                 state: InvocationState::Uncertain,
                 queue_order: 1,
+                priority: InvocationPriority::Background,
                 created: now() - 360,
                 waiting_deadline: now() + 60,
                 execution_deadline: Some(now() - 1),
@@ -792,6 +793,7 @@ mod tests {
                                 InvocationState::Cancelled
                             },
                             queue_order: 2,
+                            priority: InvocationPriority::Background,
                             created: now() - 2,
                             waiting_deadline: now() + 60,
                             execution_deadline: Some(now() + 60),
@@ -939,6 +941,7 @@ mod tests {
                 request_ref: None,
                 state,
                 queue_order: 2,
+                priority: InvocationPriority::Background,
                 created: 1,
                 waiting_deadline: now() + 60,
                 execution_deadline: if state == InvocationState::Queued {

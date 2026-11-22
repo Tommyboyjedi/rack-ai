@@ -1,0 +1,28 @@
+--- a/open_webui/routers/openai.py
++++ b/open_webui/routers/openai.py
+@@ -1504,6 +1504,9 @@
+             payload['logit_bias'] = JSONCodec.loads(logit_bias)
+ 
+     headers, cookies = await get_headers_and_cookies(request, url, key, api_config, metadata, user=user)
++    if url.rstrip("/") == "http://172.30.80.1:8642/v1":
++        if metadata and metadata.get("chat_id") and not metadata.get("task"):
++            headers["x-rackai-interactive-chat"] = "1"
+ 
+     is_responses = api_config.get('api_type') == 'responses'
+ 
+--- a/open_webui/utils/middleware.py
++++ b/open_webui/utils/middleware.py
+@@ -4970,6 +4970,13 @@
+ 
+                         try:
+                             data = JSONCodec.loads(data)
++                            if isinstance(data, dict) and data.get("kind") == "rackai_queue":
++                                text = data.get("text")
++                                if text in ("Queued · model busy", "Generating") and event_emitter:
++                                    await event_emitter({"type": "status", "data": {
++                                        "description": text, "done": text == "Generating",
++                                    }})
++                                    continue
+ 
+                             if filter_functions:
+                                 data, _ = await process_filter_functions(

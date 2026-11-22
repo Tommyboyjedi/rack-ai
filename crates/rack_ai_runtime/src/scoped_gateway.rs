@@ -51,6 +51,17 @@ pub async fn handle(
             _ => return failure("invalid_execution_timeout".into()),
         },
     };
+    let report_progress = headers.get("prefer").is_some_and(|value| {
+        value.to_str().is_ok_and(|value| {
+            value
+                .split(',')
+                .any(|pref| pref.trim().eq_ignore_ascii_case("respond-async"))
+        })
+    });
+    if report_progress && (key.is_none() || namespace.is_some()) {
+        return failure("async_requires_idempotency_key".into());
+    }
+    let priority = interactive_priority(&headers);
     let copy = service.clone();
     let submitted = tokio::task::spawn_blocking(move || {
         submit(
@@ -63,6 +74,7 @@ pub async fn handle(
                 key,
                 namespace,
                 timeout,
+                priority,
             },
         )
     })
@@ -87,29 +99,11 @@ pub async fn handle(
             Ok(Err(e)) => return failure(e),
             Err(_) => return failure("receiver_failure".into()),
         };
-        if result.state == InvocationState::Completed {
-            let Some(value) = result.result else {
-                return failure("missing_protocol_result".into());
-            };
-            let response = &value["rack_protocol_response"];
-            let content_type = response["content_type"]
-                .as_str()
-                .unwrap_or("application/json")
-                .to_string();
-            return (
-                [("content-type", content_type)],
-                response["body"].as_str().unwrap_or("").to_string(),
-            )
-                .into_response();
+        if report_progress {
+            return current_response(&service, &result);
         }
-        if matches!(
-            result.state,
-            InvocationState::Failed
-                | InvocationState::Uncertain
-                | InvocationState::Cancelled
-                | InvocationState::Expired
-        ) {
-            return crate::service_error::invocation(&service, &result);
+        if let Some(response) = terminal_response(&service, &result) {
+            return response;
         }
         if std::time::Instant::now() >= deadline {
             return crate::service_error::wait_expired(&service, &result);
@@ -117,6 +111,108 @@ pub async fn handle(
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }
+fn current_response(service: &Service, result: &Invocation) -> axum::response::Response {
+    terminal_response(service, result).unwrap_or_else(|| progress_response(result))
+}
+
+fn terminal_response(service: &Service, result: &Invocation) -> Option<axum::response::Response> {
+    if result.state == InvocationState::Completed {
+        let Some(value) = &result.result else {
+            return Some(failure("missing_protocol_result".into()));
+        };
+        let response = &value["rack_protocol_response"];
+        let content_type = response["content_type"]
+            .as_str()
+            .unwrap_or("application/json")
+            .to_string();
+        return Some(
+            (
+                [("content-type", content_type)],
+                response["body"].as_str().unwrap_or("").to_string(),
+            )
+                .into_response(),
+        );
+    }
+    if matches!(
+        result.state,
+        InvocationState::Failed
+            | InvocationState::Uncertain
+            | InvocationState::Cancelled
+            | InvocationState::Expired
+    ) {
+        return Some(crate::service_error::invocation(service, result));
+    }
+    None
+}
+
+fn progress_response(result: &Invocation) -> axum::response::Response {
+    (
+        StatusCode::ACCEPTED,
+        [
+            ("retry-after", "1"),
+            ("preference-applied", "respond-async"),
+        ],
+        Json(json!({
+            "schema": VERSION,
+            "invocation_id": result.id,
+            "state": result.state,
+            "queue_deadline": result.waiting_deadline,
+            "execution_deadline": result.execution_deadline,
+        })),
+    )
+        .into_response()
+}
+
+pub async fn status(
+    State(service): State<Arc<Service>>,
+    Path((reservation, capability, invocation)): Path<(String, String, String)>,
+) -> axum::response::Response {
+    let copy = Arc::clone(&service);
+    let result = tokio::task::spawn_blocking(move || {
+        use subtle::ConstantTimeEq;
+        let owner = copy.authority.read(|s| {
+            s.data
+                .demands
+                .get(&reservation)
+                .filter(|d| bool::from(d.access_key.as_bytes().ct_eq(capability.as_bytes())))
+                .map(|d| d.owner.clone())
+                .ok_or_else(|| "invalid_scoped_capability".to_string())
+        })?;
+        let result = copy.result(&owner, &invocation)?;
+        if result.request.reservation_id != reservation || result.request.workspace_scope.is_some()
+        {
+            return Err("invalid_scoped_capability".into());
+        }
+        Ok(result)
+    })
+    .await;
+    match result {
+        Ok(Ok(result)) => current_response(&service, &result),
+        Ok(Err(error)) => failure(error),
+        Err(_) => failure("receiver_failure".into()),
+    }
+}
+
+fn interactive_priority(headers: &HeaderMap) -> InvocationPriority {
+    let Ok(secret) = std::env::var("RACKAI_INTERACTIVE_QUEUE_KEY") else {
+        return InvocationPriority::Background;
+    };
+    priority_for(headers, &secret)
+}
+
+fn priority_for(headers: &HeaderMap, secret: &str) -> InvocationPriority {
+    use subtle::ConstantTimeEq;
+    if !secret.is_empty()
+        && headers
+            .get("rackai-interactive-queue-key")
+            .is_some_and(|header| bool::from(secret.as_bytes().ct_eq(header.as_bytes())))
+    {
+        InvocationPriority::Interactive
+    } else {
+        InvocationPriority::Background
+    }
+}
+
 struct GatewayCall {
     id: String,
     generation: String,
@@ -125,6 +221,7 @@ struct GatewayCall {
     key: Option<String>,
     namespace: Option<String>,
     timeout: Option<u64>,
+    priority: InvocationPriority,
 }
 fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
     let d = service.authority.read(|s| {
@@ -192,7 +289,7 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
         .namespace
         .as_ref()
         .map(|namespace| crate::workspace_scope::key(&d.id, namespace));
-    (crate::inference::Submission { service }).submit(
+    (crate::inference::Submission { service }).submit_with_priority(
         &d.owner,
         Inference {
             work: None,
@@ -208,8 +305,37 @@ fn submit(service: &Service, call: GatewayCall) -> Result<Invocation, String> {
             workspace_scope,
             payload: Some(payload),
         },
+        call.priority,
     )
 }
 pub(crate) fn failure(error: String) -> axum::response::Response {
     crate::service_error::generic(error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_the_trusted_ingress_can_mark_requests_interactive() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(
+            priority_for(&headers, "fixture-key"),
+            InvocationPriority::Background
+        );
+        headers.insert("rackai-interactive-queue-key", "wrong".parse().unwrap());
+        assert_eq!(
+            priority_for(&headers, "fixture-key"),
+            InvocationPriority::Background
+        );
+        headers.insert(
+            "rackai-interactive-queue-key",
+            "fixture-key".parse().unwrap(),
+        );
+        assert_eq!(priority_for(&headers, ""), InvocationPriority::Background);
+        assert_eq!(
+            priority_for(&headers, "fixture-key"),
+            InvocationPriority::Interactive
+        );
+    }
 }

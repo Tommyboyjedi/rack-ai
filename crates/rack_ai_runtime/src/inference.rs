@@ -7,6 +7,15 @@ pub struct Submission<'a> {
 }
 impl Submission<'_> {
     pub fn submit(&self, owner: &str, request: Inference) -> Result<Invocation, String> {
+        self.submit_with_priority(owner, request, InvocationPriority::Background)
+    }
+
+    pub(crate) fn submit_with_priority(
+        &self,
+        owner: &str,
+        request: Inference,
+        priority: InvocationPriority,
+    ) -> Result<Invocation, String> {
         let root = self.service.config.authority_root.clone();
         let invocation = self.service.authority.update(|s| {
             let archived_identity_lookup_needed = owned(s, owner, &request.reservation_id)
@@ -53,7 +62,7 @@ impl Submission<'_> {
                     }
                     retry.generation = i.request.generation.clone();
                 }
-                return if request_matches(i, &retry)? {
+                return if i.priority == priority && request_matches(i, &retry)? {
                     Ok(i.clone())
                 } else {
                     Err("identity_conflict".into())
@@ -66,7 +75,7 @@ impl Submission<'_> {
                     &request.reservation_id,
                     &request.submission_id,
                 )? {
-                    return if request_matches(&i, &request)? {
+                    return if i.priority == priority && request_matches(&i, &request)? {
                         Ok(i)
                     } else {
                         Err("identity_conflict".into())
@@ -168,6 +177,7 @@ impl Submission<'_> {
                 request_ref: None,
                 state: InvocationState::Queued,
                 queue_order,
+                priority,
                 created: admitted_at,
                 waiting_deadline: admitted_at + wait,
                 execution_deadline: None,
