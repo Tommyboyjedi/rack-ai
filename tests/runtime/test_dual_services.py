@@ -165,7 +165,9 @@ class DualProfileRegistration(unittest.TestCase):
                 profile = json.loads((ROOT / f"config/runtime/profiles/{tag}.json").read_text())
                 self.assertEqual(next(p for p in example["profiles"] if p["tag"] == tag), profile)
                 self.assertEqual((profile["backend"], profile["model"]), identity)
-                self.assertFalse(profile["qualified"])
+                self.assertEqual(profile["qualified"], tag == "dual-brain")
+                if profile["qualified"]:
+                    self.assertTrue(profile["evidence"])
                 self.assertEqual(profile["resources"], RESOURCES)
                 self.assertEqual((profile["context_tokens"], profile["max_input_tokens"],
                     profile["max_output_tokens"]), (131072, 65536, 65536))
