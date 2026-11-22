@@ -1,6 +1,6 @@
 --- a/agent/agent_runtime_helpers.py
 +++ b/agent/agent_runtime_helpers.py
-@@ -1989,6 +1989,17 @@
+@@ -1989,6 +1989,18 @@
      # that specific path; this copy locks the contract so future transport/keepalive work can't reintroduce
      # the same class of bug.
      client_kwargs = dict(client_kwargs)
@@ -12,6 +12,7 @@
 +            if sys.stdin.isatty():
 +                trace = uuid.uuid4().hex
 +        if trace:
++            client_kwargs["base_url"] = "http://127.0.0.1:18103/v1"
 +            headers = dict(client_kwargs.get("default_headers") or {})
 +            headers["x-rackai-interactive-turn"] = trace
 +            client_kwargs["default_headers"] = headers
@@ -54,7 +55,7 @@
 +        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as client:
 +            while True:
 +                try:
-+                    async with client.get("http://127.0.0.1:18102/queue-status/" + trace) as response:
++                    async with client.get("http://127.0.0.1:18103/queue-status/" + trace) as response:
 +                        if response.status == 200:
 +                            state = (await response.json()).get("state")
 +                            if state in messages and state != last:
