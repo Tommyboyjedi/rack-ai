@@ -35,6 +35,7 @@ mod tests {
         Payload {
             protocol: Protocol::ChatCompletions,
             body,
+            client_model: None,
         }
     }
 

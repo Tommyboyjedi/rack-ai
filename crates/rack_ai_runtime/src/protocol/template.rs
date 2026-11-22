@@ -58,6 +58,7 @@ mod tests {
         Payload {
             protocol: Protocol::ChatCompletions,
             body: json!({"chat_template_kwargs": options}),
+            client_model: None,
         }
     }
 
@@ -140,6 +141,7 @@ mod tests {
         let payload = Payload {
             protocol: Protocol::ChatCompletions,
             body: json!({"model":"existing", "response_format":{"type":"json_object"}}),
+            client_model: None,
         };
         assert!(validate(&payload, &Backend::Vllm).is_ok());
         assert!(validate(&payload, &Backend::LlamaCpp).is_ok());

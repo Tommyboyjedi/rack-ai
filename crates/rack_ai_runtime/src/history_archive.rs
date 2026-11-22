@@ -1604,6 +1604,7 @@ mod tests {
             streaming: false,
             input_token_preflight: false,
             input_token_counter: None,
+            reasoning_default: None,
             enforce_input_limits: false,
             max_images_per_request: 0,
             max_image_bytes: 0,

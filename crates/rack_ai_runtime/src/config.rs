@@ -24,6 +24,11 @@ pub enum Driver {
 pub enum InputTokenCounter {
     NativeMultimodal,
 }
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReasoningDefault {
+    Disabled,
+}
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 pub enum ImageMimeType {
     #[serde(rename = "image/png")]
@@ -67,6 +72,8 @@ pub struct Profile {
     pub input_token_preflight: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_token_counter: Option<InputTokenCounter>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_default: Option<ReasoningDefault>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub enforce_input_limits: bool,
     #[serde(default, skip_serializing_if = "is_zero")]

@@ -18,6 +18,7 @@
     "chat_completions"
   ],
   "streaming": true,
+  "reasoning_default": "disabled",
   "resources": [
     "gpu-4080-super",
     "gpu-4060ti"

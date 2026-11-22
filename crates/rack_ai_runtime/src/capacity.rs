@@ -354,6 +354,7 @@ mod tests {
                     "max_tokens": 1,
                     "stream": false
                 }),
+                client_model: None,
             }),
             max_tokens: 1,
             timeout_seconds: 30,

@@ -111,6 +111,7 @@ fn submit(
     let payload = Payload {
         protocol: Protocol::Speech,
         body,
+        client_model: None,
     };
     crate::speech::validate(&payload, &d)?;
     let voice = payload.body["voice"].as_str().ok_or("invalid_voice_id")?;

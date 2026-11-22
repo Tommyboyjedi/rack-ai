@@ -18,6 +18,7 @@
     "chat_completions"
   ],
   "streaming": true,
+  "reasoning_default": "disabled",
   "input_token_preflight": true,
   "resources": [
     "gpu-4060ti",
