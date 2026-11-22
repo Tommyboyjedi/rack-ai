@@ -70,18 +70,17 @@
  
      async def _handle_chat_completions(self, request: web.Request) -> web.Response:
          """POST /v1/chat/completions — OpenAI Chat Completions format."""
-@@ -921,6 +946,10 @@
+@@ -921,6 +946,9 @@
          # above still applies; it grants no internal ingress or control authority.
          if provided_session_id and body.get("hermes_notification_category") == "diagnostic":
              run_kwargs["notification_category"] = "diagnostic"
 +        rackai_turn = None
 +        if request.headers.get("x-rackai-interactive-chat") == "1":
-+            import uuid
 +            rackai_turn = uuid.uuid4().hex
          if stream:
              _stream_q = ThreadSafeAsyncQueue()
              # tool_call_ids with an emitted "running": a "completed" without one (internal/
-@@ -954,7 +983,7 @@
+@@ -954,7 +982,7 @@
              agent_task, agent_ref = self._spawn_stream_agent(
                  _stream_q, on_done=end_stream_run, tool_start_callback=_on_tool_start,
                  tool_complete_callback=_on_tool_complete, approval_notify_callback=approval_notify,
@@ -90,7 +89,7 @@
              # #13437 identity contract: an explicit-header client keeps addressing the id it
              # sent; the response echoes that stable id while reads/writes adopt the live tip,
              # so a rotation mid-turn (after these headers are prepared) never changes what the
-@@ -966,6 +995,11 @@
+@@ -966,6 +994,11 @@
                  gateway_session_key=gateway_session_key)
  
          async def _compute_completion():
