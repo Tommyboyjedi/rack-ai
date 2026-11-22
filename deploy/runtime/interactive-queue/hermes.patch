@@ -107,6 +107,18 @@
              request, body, _compute_completion, log_label="chat completions",
 --- a/gateway/session_api_turn.py
 +++ b/gateway/session_api_turn.py
+@@ -57,5 +57,10 @@
+         if (set(data) - {'history', 'settings', 'turn_author', 'media', 'run_owner_scope', 'browser_control',
+-                         'relay_metadata', 'resume_unanswered'}
++                         'relay_metadata', 'resume_unanswered', 'rackai_turn'}
++                or ('rackai_turn' in data and not (
++                    isinstance(data['rackai_turn'], str)
++                    and len(data['rackai_turn']) == 32
++                    and all(c in '0123456789abcdef' for c in data['rackai_turn'])
++                ))
+                 or data.get('resume_unanswered', True) is not True
+                 or not {'history', 'settings'} <= set(data)
+                 or not isinstance(data.get('relay_metadata', {}), dict)
 @@ -228,6 +228,9 @@
          # The request's Relay metadata rides the admission to the turn it describes (main passed it
          # to ``run_conversation``); it is client JSON, so it is part of the exact-retry identity.
