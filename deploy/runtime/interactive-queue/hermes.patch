@@ -160,3 +160,21 @@
          cache_lock = getattr(runner, "_agent_cache_lock", None)
          cache = getattr(runner, "_agent_cache", None)
          peek_sid, dead = self._cached_sid_is_dead(cache_lock, cache)
+--- a/agent/error_classifier.py
++++ b/agent/error_classifier.py
+@@ -996,5 +996,15 @@
+     status = c.status_code
+     if status is None:
+         return None
++    if status == 409 and c.body.get("schema") == "rack-ai/runtime/v1":
++        detail = c.body.get("detail")
++        if (
++            c.body.get("error") == "invocation_failed"
++            and isinstance(detail, dict)
++            and detail.get("category") == "request_limits"
++            and detail.get("phase") == "admission"
++            and detail.get("reason") == "input_admission_limits_exceeded"
++        ):
++            return _V_CONTEXT_OVERFLOW
+     default = _V_FORMAT_ERROR if 400 <= status < 500 else _V_SERVER_ERROR if 500 <= status < 600 else None
+     return _STATUS_HANDLERS[status](c) if status in _STATUS_HANDLERS else default
