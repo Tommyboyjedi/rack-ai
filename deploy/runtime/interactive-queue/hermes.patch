@@ -1,11 +1,15 @@
 --- a/agent/agent_runtime_helpers.py
 +++ b/agent/agent_runtime_helpers.py
-@@ -1989,6 +1989,18 @@
+@@ -1989,6 +1989,22 @@
      # that specific path; this copy locks the contract so future transport/keepalive work can't reintroduce
      # the same class of bug.
      client_kwargs = dict(client_kwargs)
 +    if str(client_kwargs.get("base_url", "")).rstrip("/") == "http://127.0.0.1:18102/v1":
 +        trace = getattr(getattr(agent, "status_callback", None), "_rackai_turn", None)
++        if not trace and getattr(agent, "platform", None) == "api_server":
++            from gateway.session_api_turn import api_execution
++            api_turn = api_execution.get()
++            trace = api_turn.get("rackai_turn") if api_turn else None
 +        if not trace and getattr(agent, "platform", None) == "cli":
 +            import sys
 +            import uuid
@@ -101,3 +105,46 @@
              return await self._run_agent(**run_kwargs)
          outcome, err = await self._run_idempotent(
              request, body, _compute_completion, log_label="chat completions",
+--- a/gateway/session_api_turn.py
++++ b/gateway/session_api_turn.py
+@@ -228,6 +228,9 @@
+         # The request's Relay metadata rides the admission to the turn it describes (main passed it
+         # to ``run_conversation``); it is client JSON, so it is part of the exact-retry identity.
+         payload['api_turn_v1']['relay_metadata'] = kwargs['relay_metadata']
++    trace = getattr(kwargs.get('status_callback'), '_rackai_turn', None)
++    if isinstance(trace, str) and len(trace) == 32 and all(c in '0123456789abcdef' for c in trace):
++        payload['api_turn_v1']['rackai_turn'] = trace
+     request_id = kwargs.get('request_id') or kwargs.get('active_run_id') or uuid.uuid4().hex
+     if not isinstance(kwargs['user_message'], list):
+         return (yield from _admit_api_payload(authority, adapter, sid, request_id, payload, settings, declared_key, kwargs))
+@@ -482,6 +485,7 @@
+     return {'adapter': adapter, 'settings': settings, 'history': data['history'] if data else None,
+             'content': content, 'turn_author': data.get('turn_author') if data else None,
+             'relay_metadata': data.get('relay_metadata') if data else None,
++            'rackai_turn': data.get('rackai_turn') if data else None,
+             'resume_unanswered': bool(data and data.get('resume_unanswered')),
+             'browser_control': _rebind_browser_control(adapter, data)}
+ 
+--- a/gateway/session_execution.py
++++ b/gateway/session_execution.py
+@@ -18,7 +18,7 @@
+ from gateway.config import Platform
+ from gateway.media_repair import repair_explicit_computer_use_media_paths
+ from gateway.platforms.base import BasePlatformAdapter
+-from gateway.session_api_turn import api_runtime_locked
++from gateway.session_api_turn import api_execution, api_runtime_locked
+ from gateway.turn_context import TurnContext
+ from hermes_cli.config import cfg_get
+ from utils import is_truthy_value
+@@ -201,6 +201,11 @@
+             user_id_alt=getattr(ctx.source, "user_id_alt", None),
+             skip_context_files=skip_context_files,
+         )
++        api_turn = api_execution.get()
++        trace = api_turn.get("rackai_turn") if api_turn else None
++        if trace:
++            # Each interactive turn gets its own trace and cannot reuse a background client.
++            sig = f"{sig}:rackai:{trace}"
+         cache_lock = getattr(runner, "_agent_cache_lock", None)
+         cache = getattr(runner, "_agent_cache", None)
+         peek_sid, dead = self._cached_sid_is_dead(cache_lock, cache)
