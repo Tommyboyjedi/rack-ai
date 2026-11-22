@@ -4,14 +4,61 @@
 <nav aria-label="Account" style="display:flex;align-items:center;font-size:.9rem"><a href="/account">Change password</a><form method="post" action="/logout"><button>Log out</button></form></nav><p id="state" role="status">Connecting…</p><p id="error" role="alert"></p>
 <button id="start" disabled>Start ComfyUI</button><a id="open" hidden target="_blank" rel="noopener">Open ComfyUI</a><button id="finish" disabled>Finish session</button><button id="session-recover" hidden>Recover session</button>
 <p>Finish closes admission and lets accepted work drain before releasing the GPU. Closing this page leaves your session running. Abandoned sessions are released after the configured GPU inactivity limit (30 minutes by default); running renders finish first.</p>
+<section id="resources" hidden aria-labelledby="resources-title">
+<h2 id="resources-title">Resource recovery</h2>
+<p>Reset stuck resources after a failure. Active sessions, running work and warm models are preserved. Recovery does not rerun jobs or change resource limits.</p>
+<button id="resource-refresh">Refresh resources</button><button id="resource-recover">Reset stuck resources</button>
+<p id="recovery-message" role="status"></p><ul id="resource-list"></ul>
+</section>
+<section id="energy" hidden aria-labelledby="energy-title">
+<h2 id="energy-title">Energy usage</h2>
+<p>GPU consumption is measured device telemetry. The whole-rack total is an <strong>uncalibrated estimate</strong>, not a socket measurement. CPU figures come from package energy counters.</p>
+<label for="energy-period">Stored history: </label><select id="energy-period"><option value="day">24 hours</option><option value="week">7 days</option><option value="month">30 days</option><option value="year">365 days</option></select><button id="energy-refresh">Refresh energy</button>
+<p id="energy-status" role="status">Loading energy history…</p>
+<div style="overflow-x:auto"><table style="width:100%;font-size:.85rem;text-align:left"><thead><tr><th>Series</th><th>Basis</th><th>Latest sample</th><th>Recorded energy</th><th>Coverage</th></tr></thead><tbody id="energy-rows"></tbody></table></div>
+<p id="energy-gpu-total"></p><p>History chart: average power in watts. Solid lines show component readings; the dashed line is the rack estimate. Missing intervals are gaps.</p>
+<svg id="energy-chart" viewBox="0 0 790 285" role="img" aria-label="Stored power history for GPUs, CPU and estimated rack total" style="width:100%;height:auto"></svg><ul id="energy-legend" style="font-size:.85rem"></ul>
+<p id="energy-assumptions"></p><p>Coverage is the recorded time in the selected range. Collection runs without reservations and history survives restarts. Resolution: minute data for 30 days, hourly data for 400 days, daily data for 5 years.</p>
+</section>
+<script src="/energy.js" defer></script>
 <script>
 const sessionRecover=document.querySelector('#session-recover');
-const api='/api/media/v1';let session=null,busy=false;
+const api='/api/media/v1';let session=null,busy=false,resourcesLoaded=false;
 const state=document.querySelector('#state'),error=document.querySelector('#error'),start=document.querySelector('#start'),finish=document.querySelector('#finish'),open=document.querySelector('#open');
 async function call(path,body){const r=await fetch(api+path,{method:body?'POST':'GET',headers:body?{'Content-Type':'application/json'}:{},body:body?JSON.stringify(body):undefined});if(r.status===401){location.href='/login';throw Error('Sign in required');}const data=await r.json();if(!r.ok)throw Error(data.error?.message||'Request failed');return data;}
-async function refresh(){try{const status=await call('/status');sessionRecover.hidden=!(status.operator&&status.state==='recovery_required');sessionRecover.disabled=busy;session=status.session_id;let detail=session?await call('/sessions/'+session):null;const phase=detail?.state||status.state;state.textContent=phase==='draining'?'finishing':phase.replaceAll('_',' ');error.textContent=status.message==='idle_timeout'?'Session released after GPU inactivity. Start a new session to continue.':status.message||'';start.disabled=busy||!!session||status.state==='recovery_required';finish.disabled=busy||!session||detail?.release_requested;open.hidden=!detail?.access_url;if(detail?.access_url)open.href=detail.access_url;else open.removeAttribute('href');if(!session&&!busy&&status.state==='stopped')sessionStorage.removeItem('rack-start-key');}catch(e){error.textContent=e.message;}}
+async function refresh(){try{const status=await call('/status');sessionRecover.hidden=!(status.operator&&status.state==='recovery_required');sessionRecover.disabled=busy;document.querySelector('#resources').hidden=!(status.operator&&status.resource_recovery_supported);if(status.operator&&status.resource_recovery_supported&&!resourcesLoaded){resourcesLoaded=true;resourceAction(false);}session=status.session_id;let detail=session?await call('/sessions/'+session):null;const phase=detail?.state||status.state;state.textContent=phase==='draining'?'finishing':phase.replaceAll('_',' ');error.textContent=status.message==='idle_timeout'?'Session released after GPU inactivity. Start a new session to continue.':status.message||'';start.disabled=busy||!!session||status.state==='recovery_required';finish.disabled=busy||!session||detail?.release_requested;open.hidden=!detail?.access_url;if(detail?.access_url)open.href=detail.access_url;else open.removeAttribute('href');if(!session&&!busy&&status.state==='stopped')sessionStorage.removeItem('rack-start-key');}catch(e){error.textContent=e.message;}}
 start.onclick=async()=>{busy=true;start.disabled=true;try{let key=sessionStorage.getItem('rack-start-key');if(!key){key=crypto.randomUUID();sessionStorage.setItem('rack-start-key',key);}const s=await call('/sessions',{schema:'rack-ai/media/v1',idempotency_key:key});session=s.id;}catch(e){error.textContent=e.message;}finally{busy=false;refresh();}};
 sessionRecover.onclick=async()=>{if(busy||!confirm('Recover the failed ComfyUI session? Recovery clears input/output files after verifying the backend has stopped, then reopens an unfinished session. Interrupted renders remain interrupted.'))return;busy=true;sessionRecover.disabled=true;try{await call('/recover',{schema:'rack-ai/media/v1',confirm:'recover_comfyui'});}catch(e){error.textContent=e.message;}finally{busy=false;refresh();}};
 finish.onclick=async()=>{busy=true;finish.disabled=true;try{await call('/sessions/'+session+'/release',{});}catch(e){error.textContent=e.message;}finally{busy=false;refresh();}};
+const resourceList=document.querySelector('#resource-list'),resourceMessage=document.querySelector('#recovery-message'),recover=document.querySelector('#resource-recover'),resourceRefresh=document.querySelector('#resource-refresh');
+let resourceBusy=false;
+const recoveryLabels={
+ available:'No reservation',
+ in_use_preserved:'In use — preserved',
+ active_work_preserved:'Running work — preserved',
+ unresolved_work_preserved:'Unresolved work — preserved; needs investigation or owner release',
+ warm_preserved:'Warm model — preserved',
+ cleanup_pending:'Cleanup needs a retry',
+ cleanup_requested:'Cleanup requested — refresh to check progress',
+ reset_available:'Failed service can be reset',
+ reset_complete:'Failed service reset — ready for a new session',
+ media_session_preserved:'Existing session — preserved',
+ blocked_unproven_owner:'Ownership needs operator investigation',
+ blocked_media_binding:'Configuration needs operator investigation',
+ blocked_physical_verification:'Cleanup could not be verified',
+ blocked_live_or_unproven_process:'Process still present or cleanup unverified'
+};
+async function resourceAction(apply){
+ if(resourceBusy)return;
+ if(apply&&!confirm('Reset stuck resources? Active work will be preserved. Jobs will not be rerun.'))return;
+ resourceBusy=true;recover.disabled=resourceRefresh.disabled=true;resourceMessage.textContent=apply?'Checking and recovering stuck resources…':'Checking resources…';
+ try{
+  const report=await call(apply?'/resources/recover':'/resources',apply?{schema:'rack-ai/resource-recovery/v1',confirm:'recover_stuck_resources'}:undefined);
+  resourceList.replaceChildren();
+  for(const item of report.resources){const row=document.createElement('li');const label=item.status==='warm_preserved'&&item.preserved_service?'Warm model ('+item.preserved_service+') — preserved':(recoveryLabels[item.status]||'Needs operator investigation');row.textContent=item.resource+' ('+item.services.join(', ')+'): '+label;resourceList.append(row);}
+  resourceMessage.textContent=apply?'Recovery checks completed. Cleanup requests may take a moment; refresh to check progress.':'Resource status updated.';
+ }catch(e){resourceMessage.textContent=e.message;}finally{resourceBusy=false;recover.disabled=resourceRefresh.disabled=false;refresh();}
+}
+recover.onclick=()=>resourceAction(true);resourceRefresh.onclick=()=>resourceAction(false);
 refresh();setInterval(refresh,2000);
 </script></html>

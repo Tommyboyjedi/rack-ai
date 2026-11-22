@@ -13,6 +13,9 @@ pub struct NativeStaticGrant {
 #[derive(Clone)]
 pub struct WebState {
     pub config: Arc<Config>,
+    pub resource_command: Option<crate::resource_command::ResourceCommand>,
+    pub resource_control: Arc<Mutex<()>>,
+    pub energy: Option<crate::energy_api::EnergySource>,
     pub store: Store,
     pub client: reqwest::Client,
     pub human: crate::human_store::HumanStore,
@@ -29,6 +32,9 @@ impl WebState {
         let human = crate::human_store::HumanStore::new(&config)?;
         Ok(Self {
             human,
+            energy: crate::energy_api::EnergySource::load(&config.state_root)?,
+            resource_command: crate::resource_command::ResourceCommand::load(&config.state_root)?,
+            resource_control: Arc::new(Mutex::new(())),
             password_gate: Arc::new(tokio::sync::Semaphore::new(1)),
             login_throttle: Arc::new(std::sync::Mutex::new(
                 crate::login_throttle::LoginThrottle::default(),

@@ -141,3 +141,20 @@ pub fn systemd_arguments(p: &Profile) -> Vec<String> {
     );
     args
 }
+
+#[cfg(test)]
+mod operator_metadata_tests {
+    use super::*;
+    #[test]
+    fn deployed_verifier_metadata_stays_typed_and_requires_absolute_path() {
+        let mut launch = Launch {
+            file_pin_verifier: Some("/usr/bin/gnusha256sum".into()),
+            ..Launch::default()
+        };
+        assert!(validate_launch(&launch).is_ok());
+        let encoded = serde_json::to_string(&launch).unwrap();
+        assert!(encoded.contains("file_pin_verifier"));
+        launch.file_pin_verifier = Some("relative-verifier".into());
+        assert!(validate_launch(&launch).is_err());
+    }
+}

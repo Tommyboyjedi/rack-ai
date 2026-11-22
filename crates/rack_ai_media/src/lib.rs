@@ -68,4 +68,9 @@ mod job_activity;
 
 mod config_policy;
 
+pub mod energy_api;
+pub mod resource_api;
+pub mod resource_command;
 pub mod session_recovery;
+
+pub mod orphan_recovery;

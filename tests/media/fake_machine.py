@@ -29,9 +29,11 @@ if program == "systemctl":
         print("Restart=no")
         print("KillMode=control-group")
         active = state["active"]
-        pid = state["pid"] if active else 0
+        pid = state.get("reported_pid", state["pid"] if active else 0)
         cgroup = Path(f"/proc/{state['pid']}/cgroup").read_text().split("::", 1)[1].strip() if active else ""
-        print(f"Id={state.get('unit', 'rack-ai-comfyui-fixture.service')}\nJob={state.get('job', '')}\nInvocationID={state['invocation'] if active else ''}\nMainPID={pid}\nControlGroup={cgroup}\nActiveState={'active' if active else 'inactive'}")
+        print(f"Id={state.get('unit', 'rack-ai-comfyui-fixture.service')}\nJob={state.get('job', '')}\nInvocationID={state.get('failed_invocation','') if state.get('unit_failed') else state['invocation'] if active else ''}\nMainPID={pid}\nControlGroup={cgroup}\nActiveState={'failed' if state.get('unit_failed') else 'active' if active else 'inactive'}")
+    elif "reset-failed" in args:
+        state.update(unit_failed=False, failed_invocation="")
     elif "start" in args:
         if not state.get("start_ignored"):
             state.update(active=True, invocation=uuid.uuid4().hex)
@@ -77,7 +79,7 @@ elif program == "docker":
     print(json.dumps([{"DeviceIDs": [protected[0] if "coder" in args else protected[1]]}]))
 else:
     sys.exit(3)
-if program == "systemctl" and any(a in args for a in ("start", "stop")):
+if program == "systemctl" and any(a in args for a in ("start", "stop", "reset-failed")):
     state.setdefault("mutations", []).append(args)
     temporary = root / "machine.next"
     temporary.write_text(json.dumps(state))

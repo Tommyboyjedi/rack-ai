@@ -240,7 +240,7 @@ pub struct Invocation {
     pub result: Option<serde_json::Value>,
     pub error: Option<String>,
 }
-#[derive(Default, Deserialize, Serialize)]
+#[derive(Clone, Default, Deserialize, Serialize)]
 pub struct State {
     #[serde(default)]
     pub placement_hash: Option<String>,
