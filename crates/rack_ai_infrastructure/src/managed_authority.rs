@@ -2,6 +2,7 @@
 use crate::resource_reservations::{ResourceReservations, bounded_lock};
 use rack_ai_application::durable_file::atomic_write;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+const COMPLETION_LOCK_RETRIES: usize = 2;
 pub const MAX_AUTHORITY_BYTES: u64 = 32 * 1024 * 1024;
 use std::{collections::BTreeMap, fs, path::Path};
 #[derive(Clone, Default, Deserialize, Serialize)]
@@ -65,7 +66,33 @@ impl<T: Default + DeserializeOwned + Serialize> ManagedAuthority<T> {
         &self,
         action: impl FnOnce(&mut AuthorityDocument<T>) -> Result<R, String>,
     ) -> Result<R, String> {
-        let _lock = bounded_lock(&self.resources.root().join("authority.lock"))?;
+        self.update_with_lock_retries(0, action)
+    }
+
+    /// Retry only lock acquisition, before the completion closure can have effects.
+    pub fn commit_completion<R>(
+        &self,
+        action: impl FnOnce(&mut AuthorityDocument<T>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        self.update_with_lock_retries(COMPLETION_LOCK_RETRIES, action)
+    }
+
+    fn update_with_lock_retries<R>(
+        &self,
+        mut retries: usize,
+        action: impl FnOnce(&mut AuthorityDocument<T>) -> Result<R, String>,
+    ) -> Result<R, String> {
+        let lock_path = self.resources.root().join("authority.lock");
+        let _lock = loop {
+            match bounded_lock(&lock_path) {
+                Err(error)
+                    if retries > 0 && crate::resource_reservations::lock_contended(&error) =>
+                {
+                    retries -= 1;
+                }
+                result => break result?,
+            }
+        };
         let path = self.resources.root().join("managed.json");
         let (mut state, before) = self.load()?;
         let result = action(&mut state)?;

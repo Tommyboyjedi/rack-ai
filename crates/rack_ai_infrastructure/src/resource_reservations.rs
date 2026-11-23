@@ -40,6 +40,14 @@ pub fn new_identity() -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }
+pub(crate) fn lock_contended(error: &str) -> bool {
+    error
+        == format!(
+            "resource lock unavailable: {}",
+            std::fs::TryLockError::WouldBlock
+        )
+}
+
 pub fn bounded_lock(path: &Path) -> Result<File, String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;

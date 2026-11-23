@@ -156,7 +156,7 @@ impl Service {
             }
             Ok(())
         })?;
-        // Resolve an abandoned, verified-idle Strata call before quarantining other work.
+        // Resolve an abandoned, verified-idle inference call before quarantining other work.
         crate::stalled_inference::reconcile(self)?;
         self.authority.update(|s| {
             if s.data

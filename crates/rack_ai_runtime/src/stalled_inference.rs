@@ -9,7 +9,18 @@ pub(crate) const MISSING_RESULT: &str = "invocation_outcome_unknown_backend_idle
 const UNPROVEN_DRAIN: &str = "invocation_worker_gone_backend_drain_unproven";
 
 pub(crate) fn reconcile(service: &Service) -> Result<(), String> {
-    reconcile_with(service, crate::strata_ready::idle)
+    reconcile_with(service, backend_idle)
+}
+
+pub(crate) fn backend_idle(
+    config: &crate::config::Config,
+    demand: &Demand,
+) -> Result<bool, String> {
+    match demand.profile.backend {
+        Backend::Strata => crate::strata_ready::idle(config, demand),
+        Backend::Ninfer => (crate::backend::BackendAccess { config }).ninfer_idle(demand),
+        _ => Ok(false),
+    }
 }
 
 pub(crate) fn reconcile_with(
@@ -52,7 +63,7 @@ fn eligible(state: &Document, invocation: &Invocation, demand: &Demand) -> bool 
     invocation.state == InvocationState::Running
         && !crate::work_payload::is_workspace(invocation)
         && invocation.activation.as_ref() == Some(&demand.generation)
-        && demand.profile.backend == Backend::Strata
+        && matches!(demand.profile.backend, Backend::Strata | Backend::Ninfer)
         && demand.state == DemandState::Ready
         && active(demand)
         && owns(state, demand)

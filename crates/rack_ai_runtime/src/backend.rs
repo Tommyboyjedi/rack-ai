@@ -2,11 +2,38 @@ use crate::{config::Backend, process, types::*};
 use reqwest::blocking::Client;
 use serde_json::{Value, json};
 use std::{io::Read, time::Duration};
+const MAX_METRICS_BYTES: u64 = 128 * 1024;
 const MAX_RESPONSE: u64 = 4 * 1024 * 1024;
 pub struct BackendAccess<'a> {
     pub config: &'a crate::config::Config,
 }
 impl BackendAccess<'_> {
+    pub(crate) fn ninfer_idle(&self, d: &Demand) -> Result<bool, String> {
+        let _guard = rack_ai_infrastructure::endpoint_fence::managed_read_guard(
+            &self.config.authority_root,
+            &d.profile.endpoint,
+        )?;
+        self.ready(d)?;
+        let process = d.process.as_ref().ok_or("activation_process_missing")?;
+        let response = client(2)?
+            .get(format!(
+                "{}/metrics",
+                d.profile.endpoint.trim_end_matches('/')
+            ))
+            .send()
+            .map_err(|_| "ninfer_metrics_transport")?;
+        if !response.status().is_success() {
+            return Err("ninfer_metrics_http".into());
+        }
+        let mut metrics = String::new();
+        response
+            .take(MAX_METRICS_BYTES + 1)
+            .read_to_string(&mut metrics)
+            .map_err(|_| "ninfer_metrics_read")?;
+        process::endpoint_owned(process, &d.profile)?;
+        Ok(metrics.len() as u64 <= MAX_METRICS_BYTES && ninfer_metrics_idle(&metrics))
+    }
+
     pub fn ready(&self, d: &Demand) -> Result<(), String> {
         if d.profile.backend == Backend::Chatterbox {
             return crate::speech_backend::ready(d);
@@ -180,4 +207,47 @@ fn decode(
         return Err("backend_response_oversized".into());
     }
     serde_json::from_slice(&bytes).map_err(|_| "backend_protocol_uncertain".into())
+}
+
+fn ninfer_metrics_idle(metrics: &str) -> bool {
+    [
+        "llamacpp:requests_processing",
+        "llamacpp:requests_deferred",
+        "ninfer:requests_admitted",
+    ]
+    .into_iter()
+    .all(|name| {
+        let mut samples = metrics.lines().filter_map(|line| {
+            let mut fields = line.split_ascii_whitespace();
+            (fields.next()? == name).then_some(fields)
+        });
+        let zero = samples.next().is_some_and(|mut fields| {
+            fields.next().and_then(|value| value.parse::<f64>().ok()) == Some(0.0)
+                && fields.next().is_none()
+        });
+        zero && samples.next().is_none()
+    })
+}
+
+#[cfg(test)]
+mod idle_tests {
+    use super::ninfer_metrics_idle;
+
+    #[test]
+    fn ninfer_idle_requires_explicit_unique_zero_gauges() {
+        let idle = "llamacpp:requests_processing 0\nllamacpp:requests_deferred 0\nninfer:requests_admitted 0\n";
+        assert!(ninfer_metrics_idle(idle));
+        assert!(!ninfer_metrics_idle(
+            &idle.replace("deferred 0", "deferred 1")
+        ));
+        assert!(!ninfer_metrics_idle(
+            &idle.replace("admitted 0", "admitted NaN")
+        ));
+        assert!(!ninfer_metrics_idle(
+            &idle.replace("ninfer:requests_admitted 0", "")
+        ));
+        assert!(!ninfer_metrics_idle(&format!(
+            "{idle}llamacpp:requests_processing 1\n"
+        )));
+    }
 }

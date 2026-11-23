@@ -135,7 +135,7 @@ impl Completion<'_> {
     ) -> Result<(), String> {
         let (invocation, demand) = context;
         let id = &invocation.id;
-        let saved = self.service.authority.update(|s| {
+        let saved = self.service.authority.commit_completion(|s| {
             crate::workspace_scope::cancel_closed(s);
             let unknown_child = crate::work_payload::is_workspace(&invocation)
                 && s.data.invocations.values().any(|child| {
@@ -543,6 +543,15 @@ mod tests {
 
     #[test]
     fn abandoned_dispatch_does_not_hold_the_next_queued_call() {
+        for backend in [
+            crate::config::Backend::Strata,
+            crate::config::Backend::Ninfer,
+        ] {
+            check_abandoned_dispatch(backend);
+        }
+    }
+
+    fn check_abandoned_dispatch(backend: crate::config::Backend) {
         let fixture = Fixture::new();
         let mut demand = fixture.acquire_ready();
         let first = crate::inference::Submission {
@@ -555,7 +564,7 @@ mod tests {
         }
         .submit(&demand.owner, request(&demand, "next-chat"))
         .unwrap();
-        demand.profile.backend = crate::config::Backend::Strata;
+        demand.profile.backend = backend;
         fixture
             .service
             .authority
